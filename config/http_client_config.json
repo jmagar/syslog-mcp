@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "syslog-mcp": {
+      "command": "uv",
+      "args": ["run", "python", "-m", "syslog_mcp.server", "--transport", "http", "--host", "localhost", "--port", "8000"],
+      "transport": {
+        "type": "streamable-http",
+        "url": "http://localhost:8000"
+      }
+    }
+  }
+}

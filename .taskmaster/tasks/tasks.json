@@ -1,0 +1,798 @@
+{
+  "master": {
+    "tasks": [
+      {
+        "id": 1,
+        "title": "Initialize Project Structure and Dependencies",
+        "description": "Set up the project foundation with proper Python environment, dependencies, and basic FastMCP server structure.",
+        "details": "Create virtual environment, install dependencies (fastmcp>=2.3.0, elasticsearch>=8.0.0, pydantic>=2.0.0, asyncio), set up project structure with src/syslog_mcp/ directory, create pyproject.toml with build configuration, initialize .env.example for environment variables (ELASTICSEARCH_URL, ELASTICSEARCH_API_KEY, AUTH_TOKEN), set up basic logging configuration using Python logging module with structured formatting for better observability.",
+        "testStrategy": "Verify all dependencies install correctly, test basic FastMCP server initialization with 'from fastmcp import FastMCP; mcp = FastMCP(\"Syslog-MCP\")', confirm project structure follows Python package standards, validate environment variable loading from .env file.",
+        "priority": "high",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Set up Python virtual environment and package management",
+            "description": "Create isolated Python environment using uv and configure package management with proper Python version targeting",
+            "dependencies": [],
+            "details": "Use uv to create virtual environment with Python 3.8+ requirement. Initialize uv project structure with 'uv init', configure pyproject.toml with project metadata, dependencies, and build system. Set up development dependencies group for testing and linting tools. Ensure uv.lock file is properly generated and committed for reproducible builds.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 2,
+            "title": "Install and configure FastMCP and core dependencies",
+            "description": "Install FastMCP 2.11.1+ along with Elasticsearch client and Pydantic for the MCP server foundation",
+            "dependencies": [
+              "1.1"
+            ],
+            "details": "Add fastmcp>=2.11.1, elasticsearch>=8.0.0, pydantic>=2.0.0 to pyproject.toml dependencies. Install asyncio-compatible versions and verify compatibility matrix. Configure optional dependencies for development (pytest, pytest-asyncio, black, ruff). Use 'uv add' command to ensure proper dependency resolution and lock file updates.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 3,
+            "title": "Create standardized Python project directory structure",
+            "description": "Establish src-layout project structure following Python packaging best practices with proper module organization",
+            "dependencies": [
+              "1.1"
+            ],
+            "details": "Create src/syslog_mcp/ directory structure with __init__.py, main.py, models/, services/, and utils/ subdirectories. Set up tests/ directory with proper test structure mirroring src layout. Add docs/ directory for documentation. Create empty __init__.py files for proper Python package discovery. Ensure project follows PEP 518 standards.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 4,
+            "title": "Generate configuration files and environment templates",
+            "description": "Create project configuration files including environment variables, linting configuration, and deployment settings",
+            "dependencies": [
+              "1.2",
+              "1.3"
+            ],
+            "details": "Create .env.example with ELASTICSEARCH_URL, ELASTICSEARCH_API_KEY, AUTH_TOKEN, LOG_LEVEL variables with documentation. Set up pyproject.toml with build configuration, entry points, and tool configurations (ruff, black, pytest). Create .gitignore for Python projects. Add ruff.toml for linting rules and black configuration for code formatting.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 5,
+            "title": "Implement structured logging configuration system",
+            "description": "Set up Python logging with structured formatting, configurable levels, and FastMCP integration for observability",
+            "dependencies": [
+              "1.3",
+              "1.4"
+            ],
+            "details": "Create logging configuration in src/syslog_mcp/utils/logging.py using Python logging module. Implement structured JSON logging format with timestamp, level, message, and context fields. Add log level configuration from environment variables. Set up rotating file handlers and console output. Integrate with FastMCP server logging for request/response tracking. Include correlation ID support for request tracing.",
+            "status": "done",
+            "testStrategy": ""
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "title": "Implement Elasticsearch Connection and Health Check",
+        "description": "Establish async connection to Elasticsearch cluster with proper error handling and health monitoring.",
+        "details": "Create ElasticsearchClient class using elasticsearch-py AsyncElasticsearch client, implement connection with configurable hosts, API key authentication, SSL verification, and timeout settings. Add health check method using es.cluster.health() API, implement connection retry logic with exponential backoff, create connection pool management for optimal performance. Use async context manager pattern for proper resource cleanup. Include comprehensive error handling for network issues, authentication failures, and cluster unavailability.",
+        "testStrategy": "Unit tests for connection establishment, health check functionality, authentication validation, timeout handling, and error scenarios. Integration tests with local Elasticsearch instance or Elasticsearch test containers. Verify connection pooling and resource cleanup.",
+        "priority": "high",
+        "dependencies": [
+          1
+        ],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement AsyncElasticsearchClient Connection Manager",
+            "description": "Create core connection management class with async pattern and configuration handling",
+            "dependencies": [],
+            "details": "Implement ElasticsearchClient class using elasticsearch-py AsyncElasticsearch client. Configure connection with hosts, API key authentication, SSL verification, timeout settings. Use async context manager pattern (__aenter__, __aexit__) for proper resource management. Handle connection configuration from environment variables or config files.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 2,
+            "title": "Implement Authentication and Security Layer",
+            "description": "Handle API key authentication, SSL verification, and secure connection establishment",
+            "dependencies": [
+              "2.1"
+            ],
+            "details": "Implement API key authentication mechanism with proper credential validation. Configure SSL/TLS verification with certificate handling. Add support for multiple authentication methods (API key, basic auth). Implement secure credential storage and retrieval patterns. Handle authentication failures gracefully.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 3,
+            "title": "Create Health Check and Monitoring System",
+            "description": "Implement cluster health monitoring with comprehensive status reporting",
+            "dependencies": [
+              "2.1"
+            ],
+            "details": "Create health check method using es.cluster.health() API. Monitor cluster status (green/yellow/red), node availability, and shard allocation. Implement periodic health checks with configurable intervals. Add cluster statistics monitoring (indices count, document count, storage size). Create health score calculation based on multiple metrics.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 4,
+            "title": "Implement Retry Logic with Exponential Backoff",
+            "description": "Create resilient retry mechanism for handling connection failures and transient errors",
+            "dependencies": [
+              "2.1",
+              "2.2"
+            ],
+            "details": "Implement exponential backoff retry logic with jitter to prevent thundering herd. Configure max retry attempts, initial delay, and backoff multiplier. Handle specific Elasticsearch exceptions (ConnectionError, TimeoutError, AuthenticationException). Implement circuit breaker pattern to avoid overwhelming failed services. Add retry metrics and logging.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 5,
+            "title": "Create Connection Pooling and Resource Management",
+            "description": "Implement efficient connection pooling with proper lifecycle management",
+            "dependencies": [
+              "2.1"
+            ],
+            "details": "Configure AsyncElasticsearch connection pool with optimal settings (pool_maxsize, pool_connections). Implement connection lifecycle management with proper cleanup. Add connection reuse patterns and timeout handling. Monitor pool health and connection statistics. Implement graceful shutdown procedures for connection cleanup.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 6,
+            "title": "Implement Comprehensive Error Handling Framework",
+            "description": "Create production-ready error handling with custom exceptions and recovery patterns",
+            "dependencies": [
+              "2.1",
+              "2.2",
+              "2.3",
+              "2.4"
+            ],
+            "details": "Create custom exception classes (ElasticsearchConnectionError, QueryValidationError, AuthenticationError, TimeoutError). Implement error classification and severity levels. Add structured error logging with context information. Create error recovery mechanisms for different failure scenarios. Implement graceful degradation patterns when Elasticsearch is unavailable.",
+            "status": "done",
+            "testStrategy": ""
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "title": "Create Core Data Models and Schema Validation",
+        "description": "Define Pydantic models for log entries, search queries, device information, and API responses with validation.",
+        "details": "Create Pydantic models: LogEntry (timestamp, device, level, message, metadata), DeviceInfo (name, last_seen, error_count, health_score), SearchQuery (filters, time_range, pagination, aggregations), SearchResult (hits, total, aggregations), AnalysisResult (patterns, insights, recommendations). Use proper field validation, datetime handling with timezone awareness, enum types for log levels (DEBUG, INFO, WARN, ERROR, CRITICAL), and optional fields with defaults. Implement custom validators for IP addresses, timestamps, and log level normalization.",
+        "testStrategy": "Unit tests for each model covering field validation, type coercion, edge cases, and serialization/deserialization. Test datetime parsing with various formats and timezones. Validate enum handling and custom validators.",
+        "priority": "medium",
+        "dependencies": [
+          1
+        ],
+        "status": "in-progress",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Create Log Entry Models",
+            "description": "Design Pydantic models for log entries with comprehensive field validation and timezone-aware datetime handling",
+            "dependencies": [],
+            "details": "Create LogEntry model with fields: timestamp (datetime with timezone awareness), device (str with validation), level (enum for DEBUG/INFO/WARN/ERROR/CRITICAL), message (str with length limits), metadata (optional dict). Implement custom validators for timestamp parsing from various formats, device name validation (alphanumeric + hyphens), and metadata structure validation. Add serialization methods for JSON output and Elasticsearch indexing.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 2,
+            "title": "Create Device Models",
+            "description": "Implement device information models with health scoring and status tracking capabilities",
+            "dependencies": [
+              "3.1"
+            ],
+            "details": "Create DeviceInfo model with fields: name (str, required), last_seen (datetime), error_count (int), total_logs (int), health_score (float 0-1). Implement DeviceStatus enum (HEALTHY/WARNING/CRITICAL/OFFLINE) and DeviceList model for collections. Add computed properties for health scoring based on error rates and activity patterns. Include validation for device naming conventions and timestamp consistency.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 3,
+            "title": "Create Query and Search Models",
+            "description": "Design models for search queries, filters, and pagination with proper validation",
+            "dependencies": [],
+            "details": "Create SearchQuery model with fields: query (optional str), device_filter (optional str), level_filter (optional LogLevel enum), time_range (TimeRange model with start/end), pagination (PaginationParams with limit/offset). Implement TimeRange model with custom validators for date parsing and range validation. Add QueryBuilder helper class for Elasticsearch query construction and filter combination logic.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 4,
+            "title": "Create Result Models",
+            "description": "Implement comprehensive result models for search responses and analysis output",
+            "dependencies": [
+              "3.1",
+              "3.2"
+            ],
+            "details": "Create SearchResult model with fields: hits (List[LogEntry]), total (int), took_ms (int), aggregations (optional dict). Implement AnalysisResult model with patterns (dict), insights (List[str]), recommendations (List[str]). Add AggregationResult model for statistical data with proper typing for various aggregation types (terms, date_histogram, metrics). Include result metadata and performance timing information.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 5,
+            "title": "Implement Custom Validators",
+            "description": "Create specialized Pydantic validators for log parsing, datetime handling, and data integrity",
+            "dependencies": [
+              "3.1",
+              "3.3"
+            ],
+            "details": "Implement custom validators: parse_log_timestamp for multiple datetime formats with timezone detection, validate_device_name for naming conventions, validate_log_level for case-insensitive enum parsing, validate_time_range for logical date ranges. Create validator for metadata JSON structure limits and sanitization. Add root validators for cross-field validation and data consistency checks.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 6,
+            "title": "Implement Serialization Handling",
+            "description": "Add comprehensive serialization support for API responses and data interchange",
+            "dependencies": [
+              "3.4",
+              "3.5"
+            ],
+            "details": "Configure Pydantic serialization settings with proper JSON encoders for datetime objects, custom field aliases for API compatibility, and exclude patterns for sensitive data. Implement model_dump methods with filtering options and format-specific serialization (JSON, dict, Elasticsearch document). Add deserialization helpers for parsing raw log data and handling malformed input gracefully with validation error reporting.",
+            "status": "done",
+            "testStrategy": ""
+          }
+        ]
+      },
+      {
+        "id": 4,
+        "title": "Implement Basic Log Search Tool",
+        "description": "Create the core search_logs MCP tool for querying Elasticsearch with filters and pagination.",
+        "details": "Create search_logs tool using @mcp.tool decorator, accepting parameters: query (optional text search), device (device filter), level (log level filter), time_range (start/end datetime), limit (result count, default 100, max 1000), offset (pagination). Build Elasticsearch query using bool/must/filter structure, implement time range filtering with @timestamp field, add device and level term filters. Use async Elasticsearch search API with proper error handling and timeout management. Return structured results with metadata (total hits, took time, timed_out flag).",
+        "testStrategy": "Unit tests for query building logic, parameter validation, and error handling. Integration tests with sample log data in Elasticsearch. Test pagination, filtering combinations, and large result sets. Verify performance with various query patterns.",
+        "priority": "high",
+        "dependencies": [
+          2,
+          3
+        ],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Create MCP tool setup with proper @mcp.tool decorator",
+            "description": "Set up the search_logs MCP tool using FastMCP decorators and define the tool interface",
+            "dependencies": [],
+            "details": "Use @mcp.tool decorator to create search_logs function, define tool description and parameters schema using Pydantic models or type hints. Set up proper async function signature and basic structure for the search tool.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 2,
+            "title": "Implement query parameter handling and validation",
+            "description": "Build comprehensive parameter validation for all search inputs with proper type checking",
+            "dependencies": [
+              "4.1"
+            ],
+            "details": "Validate query parameters: query (optional string), device (string filter), level (log level enum), time_range (datetime validation), limit (1-1000 range), offset (pagination). Use Pydantic models for validation, implement custom validators for datetime ranges and enum constraints.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 3,
+            "title": "Build Elasticsearch query construction with bool/must/filter",
+            "description": "Create dynamic Elasticsearch query builder supporting multiple filter combinations",
+            "dependencies": [
+              "4.2"
+            ],
+            "details": "Implement bool query structure with must/filter clauses. Add text search with match/multi_match queries, term filters for device and level fields, range filter for @timestamp field. Build query dictionary dynamically based on provided parameters.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 4,
+            "title": "Execute search with async patterns and error handling",
+            "description": "Perform async Elasticsearch search with comprehensive error handling and timeout management",
+            "dependencies": [
+              "4.3"
+            ],
+            "details": "Use async Elasticsearch client to execute search query with proper timeout settings. Implement error handling for connection failures, timeout errors, index not found, and query syntax errors. Add circuit breaker pattern for resilience and proper logging of search operations.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 5,
+            "title": "Format and paginate results for MCP response",
+            "description": "Process Elasticsearch response and format for MCP tool output with pagination support",
+            "dependencies": [
+              "4.4"
+            ],
+            "details": "Extract hits from Elasticsearch response, format log entries with consistent structure (timestamp, device, level, message, source fields). Implement pagination metadata (total hits, current offset, has_more indicator). Return properly formatted JSON response compatible with MCP standards.",
+            "status": "done",
+            "testStrategy": ""
+          }
+        ]
+      },
+      {
+        "id": 5,
+        "title": "Create Device Discovery and Status Resources",
+        "description": "Implement MCP resources for listing devices and providing device-specific information.",
+        "details": "Create device_list static resource using @mcp.resource decorator, implement device aggregation query using terms aggregation on device field with sub-aggregations for last_seen (max timestamp), error_count (filtered count where level >= ERROR), total_logs (doc_count). Create dynamic device templates using @mcp.resource_template for logs://{device}/recent and logs://{device}/errors patterns. Implement caching layer using TTL-based in-memory cache (5-minute default) to optimize frequently accessed device data. Add device health scoring algorithm based on error ratio and activity patterns.",
+        "testStrategy": "Unit tests for aggregation query building and device health calculation. Integration tests verifying device discovery accuracy and resource template functionality. Test caching behavior and TTL expiration. Validate health scoring algorithm with various log patterns.",
+        "priority": "medium",
+        "dependencies": [
+          2,
+          3
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Create Static Device List Resource",
+            "description": "Implement the static MCP resource for device discovery using @mcp.resource decorator",
+            "dependencies": [],
+            "details": "Create device_list static resource that provides a list of all discovered devices. Use @mcp.resource decorator with proper resource URI pattern. Implement basic device enumeration from Elasticsearch indices. Include device metadata like first_seen and last_activity timestamps. Ensure proper error handling and resource registration.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 2,
+            "title": "Implement Dynamic Resource Templates",
+            "description": "Create device-specific resource templates for logs and error access patterns",
+            "dependencies": [
+              "5.1"
+            ],
+            "details": "Implement @mcp.resource_template decorators for dynamic patterns: logs://{device}/recent and logs://{device}/errors. Create template parameter validation and device existence checks. Implement resource resolution logic that maps template parameters to actual Elasticsearch queries. Include proper URI parameter extraction and validation.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 3,
+            "title": "Build Elasticsearch Aggregation Query Engine",
+            "description": "Implement the core aggregation queries for device statistics and health data",
+            "dependencies": [],
+            "details": "Create aggregation query builder using Elasticsearch terms aggregation on device field. Implement sub-aggregations for: last_seen (max timestamp), error_count (filtered count where level >= ERROR), total_logs (doc_count). Build flexible query structure that can be extended for additional metrics. Include query optimization and field mapping validation.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 4,
+            "title": "Implement TTL-Based Caching Layer",
+            "description": "Create in-memory caching system with TTL expiration for device data optimization",
+            "dependencies": [
+              "5.3"
+            ],
+            "details": "Implement TTL-based in-memory cache with 5-minute default expiration. Create cache key generation for device queries and aggregation results. Implement cache invalidation strategies and memory management. Add cache hit/miss metrics and configurable TTL settings. Ensure thread-safety for concurrent access patterns.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 5,
+            "title": "Develop Device Health Scoring Algorithm",
+            "description": "Create algorithm for calculating device health scores based on log patterns and error rates",
+            "dependencies": [
+              "5.3",
+              "5.4"
+            ],
+            "details": "Implement health scoring algorithm that combines error_count, log frequency, and time since last_seen. Create weighted scoring system: error rate impact (40%), activity recency (30%), log volume patterns (30%). Implement score normalization (0-100 scale) and health status categories (healthy, warning, critical). Include configurable thresholds and scoring parameters.",
+            "status": "pending",
+            "testStrategy": ""
+          }
+        ]
+      },
+      {
+        "id": 6,
+        "title": "Implement Advanced Search with Aggregations",
+        "description": "Enhance search capabilities with statistical aggregations and complex filtering options.",
+        "details": "Extend search_logs tool with aggregation support: log level distribution (terms aggregation), time-based patterns (date_histogram), device activity metrics (terms with sub-aggregations), error trend analysis (moving averages). Implement complex query building with bool queries supporting multiple AND/OR conditions, wildcard searches on message field, and regex pattern matching. Add support for saved searches and query templates. Use Elasticsearch's composite aggregation for large cardinality fields with pagination. Optimize query performance with appropriate index patterns and field mappings.",
+        "testStrategy": "Unit tests for complex query generation and aggregation logic. Performance tests with large datasets to verify query optimization. Integration tests validating aggregation accuracy against known data patterns. Test edge cases with empty results and malformed queries.",
+        "priority": "medium",
+        "dependencies": [
+          4
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement Statistical Aggregations",
+            "description": "Add support for basic statistical aggregations including terms, stats, and percentiles aggregations",
+            "dependencies": [],
+            "details": "Implement terms aggregation for log level distribution, stats aggregation for numeric fields, percentiles aggregation for response time analysis. Create aggregation builder with proper bucket sizing and sorting options. Handle nested aggregations for multi-dimensional analysis.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 2,
+            "title": "Implement Time-based Pattern Aggregations",
+            "description": "Create date histogram and time-based aggregations for temporal analysis",
+            "dependencies": [
+              "6.1"
+            ],
+            "details": "Implement date_histogram aggregation with configurable intervals (hour, day, week, month). Add time zone handling and calendar intervals. Create moving averages and trend analysis. Support time-based filtering and bucketing for log activity patterns.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 3,
+            "title": "Build Complex Query System",
+            "description": "Develop advanced query building with bool queries, wildcards, and regex support",
+            "dependencies": [
+              "6.1"
+            ],
+            "details": "Create query builder supporting complex bool queries with multiple AND/OR conditions. Implement wildcard and regex pattern matching for message fields. Add query validation and optimization. Support nested queries and field boosting for relevance scoring.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 4,
+            "title": "Implement Saved Searches and Templates",
+            "description": "Add functionality for saving, managing, and reusing search queries and templates",
+            "dependencies": [
+              "6.3"
+            ],
+            "details": "Create saved search storage mechanism with query serialization. Implement query templates with parameter substitution. Add search history and favorites functionality. Create REST endpoints for managing saved searches with proper validation.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 5,
+            "title": "Develop Composite Aggregations",
+            "description": "Implement composite aggregations for high cardinality datasets and pagination",
+            "dependencies": [
+              "6.1",
+              "6.2"
+            ],
+            "details": "Use Elasticsearch composite aggregation for large cardinality data. Implement pagination for aggregation results using after_key. Handle multi-term composite aggregations for device-level-time combinations. Add proper memory management and result streaming.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 6,
+            "title": "Implement Query Optimization",
+            "description": "Add query optimization techniques for improved performance and reduced resource usage",
+            "dependencies": [
+              "6.3",
+              "6.5"
+            ],
+            "details": "Implement query caching strategies using Elasticsearch query cache. Add index optimization recommendations based on query patterns. Create query performance profiling and slow query detection. Implement query rewriting for better performance.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 7,
+            "title": "Add Performance Tuning and Monitoring",
+            "description": "Create performance monitoring and tuning capabilities for aggregation queries",
+            "dependencies": [
+              "6.6"
+            ],
+            "details": "Implement query execution time monitoring and alerting. Add memory usage tracking for large aggregations. Create performance dashboards and metrics collection. Implement automatic query timeout and circuit breaker patterns for resource protection.",
+            "status": "pending",
+            "testStrategy": ""
+          }
+        ]
+      },
+      {
+        "id": 7,
+        "title": "Add AI-Powered Log Analysis with Context Integration",
+        "description": "Implement AI analysis tools using FastMCP context sampling for intelligent log pattern recognition.",
+        "details": "Create analyze_logs tool using ctx.sample() for LLM integration, implement log pattern detection by sampling representative log entries and sending to client LLM for analysis. Add root cause analysis by correlating error patterns across devices and time periods. Create troubleshooting suggestion tool that combines log context with AI insights. Implement progress reporting using ctx.progress() for long-running analysis operations. Use intelligent sampling to select diverse log entries while keeping within context limits (typically 8K tokens). Create structured prompts for consistent AI analysis output including identified patterns, severity assessment, and recommended actions.",
+        "testStrategy": "Unit tests for log sampling algorithms and prompt generation. Integration tests with mock LLM responses to verify analysis logic. Test progress reporting and context management. Validate output consistency and usefulness with real log scenarios.",
+        "priority": "medium",
+        "dependencies": [
+          4,
+          6
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement Context Sampling Implementation",
+            "description": "Create intelligent log sampling mechanism using ctx.sample() for efficient LLM context management",
+            "dependencies": [],
+            "details": "Implement context sampling algorithms to select representative log entries from large datasets. Use ctx.sample() to intelligently choose diverse log samples that capture different patterns, error types, and temporal distributions. Create sampling strategies for different analysis scenarios: error-focused sampling, time-distributed sampling, and device-distributed sampling. Implement sample size optimization based on LLM context limits while maintaining analysis quality.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 2,
+            "title": "Design AI Prompt Engineering Framework",
+            "description": "Create structured prompts and interaction patterns for consistent AI-powered log analysis",
+            "dependencies": [
+              "7.1"
+            ],
+            "details": "Design prompt templates for different analysis types: pattern recognition, anomaly detection, and root cause analysis. Create structured input formatting for log samples to ensure consistent LLM interpretation. Implement prompt optimization for different log formats (syslog, application logs, error logs). Design response parsing logic to extract structured insights from LLM outputs. Create prompt versioning and A/B testing framework for continuous improvement.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 3,
+            "title": "Implement Pattern Detection Algorithms",
+            "description": "Create algorithms for detecting recurring patterns, anomalies, and trends in log data",
+            "dependencies": [
+              "7.1"
+            ],
+            "details": "Implement pattern detection using both traditional algorithms and AI assistance. Create frequency-based pattern detection for common error sequences and log patterns. Implement temporal pattern analysis to identify cyclical issues and trend changes. Design anomaly detection algorithms that flag unusual log patterns or sudden changes in log volume/content. Create pattern clustering to group similar issues and reduce noise in analysis results.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 4,
+            "title": "Build Root Cause Analysis Logic",
+            "description": "Implement correlation analysis across devices, time periods, and log sources for root cause identification",
+            "dependencies": [
+              "7.2",
+              "7.3"
+            ],
+            "details": "Create correlation analysis engine that examines relationships between errors across different devices and time periods. Implement causality detection algorithms that identify potential root causes from cascading failure patterns. Design cross-device correlation analysis to detect infrastructure-wide issues. Create temporal correlation analysis to identify trigger events that precede error patterns. Implement confidence scoring for root cause suggestions based on correlation strength and pattern frequency.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 5,
+            "title": "Implement Progress Reporting System",
+            "description": "Create progress tracking and reporting using ctx.progress() for long-running AI analysis operations",
+            "dependencies": [],
+            "details": "Implement progress reporting system using ctx.progress() for multi-step analysis operations. Create progress tracking for different analysis phases: data sampling, pattern detection, AI analysis, and result compilation. Design progress indicators that provide meaningful feedback about analysis completion percentage and estimated time remaining. Implement cancellation support for long-running operations. Create progress persistence for analysis tasks that might take several minutes to complete.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 6,
+            "title": "Design Result Structuring and Output Format",
+            "description": "Create structured output formats for analysis results with actionable insights and recommendations",
+            "dependencies": [
+              "7.4",
+              "7.5"
+            ],
+            "details": "Design structured output format for analysis results including detected patterns, root cause hypotheses, confidence scores, and actionable recommendations. Create result categorization system (critical issues, warnings, informational patterns). Implement result deduplication and ranking based on severity and confidence. Design export formats for different use cases (JSON for programmatic access, markdown for human reading, alerts for monitoring systems). Create result caching and historical comparison features.",
+            "status": "pending",
+            "testStrategy": ""
+          }
+        ]
+      },
+      {
+        "id": 8,
+        "title": "Implement Error Handling and Logging Infrastructure",
+        "description": "Create comprehensive error handling, logging, and monitoring system for production reliability.",
+        "details": "Implement structured logging using Python logging with JSON formatter, create custom exception classes (ElasticsearchConnectionError, QueryValidationError, AuthenticationError), add error recovery mechanisms with circuit breaker pattern for Elasticsearch failures. Create comprehensive error responses with proper HTTP status codes and user-friendly messages. Implement request/response logging middleware for debugging, add performance metrics collection (query duration, error rates, cache hit ratios). Use asyncio error handling best practices with proper exception propagation and cleanup.",
+        "testStrategy": "Unit tests for all exception classes and error scenarios. Integration tests simulating various failure modes (network issues, ES downtime, invalid queries). Test circuit breaker functionality and error recovery. Validate logging output format and performance impact.",
+        "priority": "high",
+        "dependencies": [
+          2
+        ],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement structured logging setup with JSON formatter",
+            "description": "Set up Python logging with structured JSON output for production monitoring",
+            "dependencies": [],
+            "details": "Configure Python logging module with custom JSON formatter using JsonFormatter or python-json-logger. Set up different log levels (DEBUG, INFO, WARNING, ERROR, CRITICAL) with appropriate handlers for console and file output. Include structured fields like timestamp, level, service_name, request_id, user_id, duration, and custom metadata. Configure async-safe logging to prevent blocking the event loop. Set up log rotation and proper file handling for production environments.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 2,
+            "title": "Create custom exception hierarchy for domain-specific errors",
+            "description": "Define custom exception classes for different error scenarios in the MCP server",
+            "dependencies": [],
+            "details": "Create base SyslogMCPError exception class inheriting from Exception. Define specific exceptions: ElasticsearchConnectionError (connection failures), QueryValidationError (invalid search parameters), AuthenticationError (API key issues), TimeoutError (request timeouts), ConfigurationError (invalid settings). Each exception should include error codes, user-friendly messages, and relevant context data. Implement proper exception chaining and ensure all exceptions are JSON serializable for API responses.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 3,
+            "title": "Implement circuit breaker pattern for Elasticsearch resilience",
+            "description": "Add circuit breaker to handle Elasticsearch failures gracefully",
+            "dependencies": [
+              "8.2"
+            ],
+            "details": "Implement circuit breaker using pybreaker or custom implementation to prevent cascading failures when Elasticsearch is down. Configure failure threshold (e.g., 5 consecutive failures), recovery timeout (e.g., 60 seconds), and half-open state testing. Add metrics tracking for circuit breaker state changes and failure rates. Integrate with ElasticsearchClient to wrap all ES operations. Provide fallback responses when circuit is open, informing users of service degradation.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 4,
+            "title": "Design error recovery mechanisms with retry policies",
+            "description": "Implement intelligent retry logic for transient failures",
+            "dependencies": [
+              "8.2"
+            ],
+            "details": "Create RetryManager class with exponential backoff strategy for retrying failed operations. Configure different retry policies for different error types: network errors (aggressive retry), authentication errors (no retry), timeout errors (moderate retry). Implement jitter to prevent thundering herd problems. Add maximum retry limits and total timeout bounds. Use tenacity library or custom async retry decorator. Include logging for all retry attempts and final outcomes.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 5,
+            "title": "Build performance metrics collection system",
+            "description": "Implement comprehensive metrics tracking for monitoring system health",
+            "dependencies": [],
+            "details": "Create MetricsCollector class to track key performance indicators: query execution times, error rates by type, request volume, cache hit rates, circuit breaker state changes, active connections. Use time-based windows for rate calculations and percentile tracking. Implement async metrics aggregation to avoid blocking main operations. Provide metrics endpoint for Prometheus/monitoring integration. Store metrics in-memory with configurable retention periods and automatic cleanup.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 6,
+            "title": "Create error handling middleware for request/response lifecycle",
+            "description": "Implement middleware to handle errors consistently across all MCP operations",
+            "dependencies": [
+              "8.1",
+              "8.2"
+            ],
+            "details": "Create ErrorHandlingMiddleware class that wraps all MCP tool executions. Implement try-catch blocks for different exception types with appropriate HTTP status codes and error responses. Add request correlation IDs for tracing errors across operations. Include request/response logging with sanitization of sensitive data. Implement rate limiting for error responses to prevent abuse. Create standardized error response format with error codes, messages, and optional debugging information.",
+            "status": "done",
+            "testStrategy": ""
+          }
+        ]
+      },
+      {
+        "id": 9,
+        "title": "Create FastMCP Server with HTTP Transport Configuration",
+        "description": "Set up the FastMCP server with HTTP transport, middleware stack, and production-ready configuration.",
+        "details": "Initialize FastMCP server with HTTP transport using mcp.run(transport='http', host='127.0.0.1', port=8000), implement CORS middleware for web client support, add request timing middleware for performance monitoring, configure authentication middleware for optional bearer token validation. Set up graceful shutdown handling for async resources, implement health check endpoint using @mcp.custom_route decorator. Configure uvicorn server with proper worker settings, request timeout limits, and connection pooling. Add OpenAPI documentation generation and serve at /docs endpoint.",
+        "testStrategy": "Integration tests for HTTP transport functionality, authentication middleware testing, health check endpoint validation. Test CORS headers and preflight requests. Verify graceful shutdown behavior and resource cleanup. Load testing for concurrent request handling.",
+        "priority": "high",
+        "dependencies": [
+          1,
+          8
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Configure HTTP Transport Setup",
+            "description": "Set up FastMCP server with HTTP transport configuration",
+            "dependencies": [],
+            "details": "Initialize FastMCP server using mcp.run(transport='http', host='127.0.0.1', port=8000). Configure uvicorn server with proper worker settings, request timeout limits, connection limits, and keep-alive settings. Set up environment-based configuration for host, port, and other HTTP settings.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 2,
+            "title": "Implement Middleware Stack",
+            "description": "Create configurable middleware stack for request processing",
+            "dependencies": [
+              "9.1"
+            ],
+            "details": "Implement CORS middleware for web client support with configurable origins, headers, and methods. Add request timing middleware for performance monitoring. Create request logging middleware with configurable log levels. Implement rate limiting middleware with per-client limits. Ensure each middleware is independently configurable through environment variables or config files.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 3,
+            "title": "Configure Authentication System",
+            "description": "Set up authentication middleware for optional bearer token validation",
+            "dependencies": [
+              "9.2"
+            ],
+            "details": "Implement authentication middleware supporting optional bearer token validation. Create token validation logic with configurable secret keys or JWT verification. Add support for bypassing authentication on specific endpoints. Implement proper error handling for invalid or expired tokens with appropriate HTTP status codes.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 4,
+            "title": "Create Health Check Endpoints",
+            "description": "Implement health check and status endpoints",
+            "dependencies": [
+              "9.1"
+            ],
+            "details": "Create health check endpoint using @mcp.custom_route decorator at /health path. Implement comprehensive health checks including Elasticsearch connection status, server memory usage, and request processing metrics. Add status endpoint at /status for detailed server information. Ensure endpoints return proper JSON responses with appropriate HTTP status codes.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 5,
+            "title": "Implement Graceful Shutdown Handling",
+            "description": "Set up proper shutdown procedures for async resources",
+            "dependencies": [
+              "9.3",
+              "9.4"
+            ],
+            "details": "Implement graceful shutdown handling for async resources including Elasticsearch connections, background tasks, and HTTP server. Set up signal handlers for SIGTERM and SIGINT. Ensure proper cleanup of connection pools, pending requests, and temporary resources. Add configurable shutdown timeout to allow in-flight requests to complete.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 6,
+            "title": "Generate OpenAPI Documentation",
+            "description": "Create comprehensive API documentation with OpenAPI/Swagger",
+            "dependencies": [
+              "9.5"
+            ],
+            "details": "Generate OpenAPI 3.0 specification for all MCP tools, resources, and custom endpoints. Include detailed parameter descriptions, response schemas, authentication requirements, and example requests/responses. Set up automatic documentation generation using FastMCP's built-in OpenAPI support. Create Swagger UI endpoint for interactive API exploration.",
+            "status": "pending",
+            "testStrategy": ""
+          }
+        ]
+      },
+      {
+        "id": 10,
+        "title": "Add Production Features and Deployment Configuration",
+        "description": "Implement caching, rate limiting, configuration management, and deployment preparation for production use.",
+        "details": "Implement response caching using async-lru-cache for frequently accessed data (device lists, aggregations), add rate limiting using sliding window algorithm to prevent API abuse. Create configuration management system using Pydantic Settings with environment variable support, validation, and documentation. Add Docker configuration with multi-stage build, security scanning, and minimal runtime image. Implement monitoring endpoints for Prometheus metrics (request counts, response times, error rates, cache statistics). Create startup health checks and readiness probes for Kubernetes deployment. Add request correlation IDs for distributed tracing support.",
+        "testStrategy": "Unit tests for caching logic and rate limiting algorithms. Integration tests for configuration loading and validation. Docker build and runtime testing. Performance testing under load with caching enabled. Validation of metrics collection and health check endpoints.",
+        "priority": "medium",
+        "dependencies": [
+          9
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement Response Caching with async-lru-cache",
+            "description": "Set up caching for frequently accessed data like device lists and log aggregations",
+            "dependencies": [],
+            "details": "Implement async-lru-cache for caching device lists, log aggregations, and search results. Configure cache TTL based on data type (devices: 5min, aggregations: 1min). Add cache invalidation logic and cache hit/miss metrics. Handle cache serialization for complex objects.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 2,
+            "title": "Implement Rate Limiting with Sliding Window Algorithm",
+            "description": "Add API rate limiting to prevent abuse and ensure fair resource usage",
+            "dependencies": [],
+            "details": "Implement sliding window rate limiting algorithm with configurable limits per endpoint and client. Use Redis or in-memory store for rate limit tracking. Add rate limit headers in responses (X-RateLimit-Limit, X-RateLimit-Remaining). Configure different limits for different operations.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 3,
+            "title": "Create Configuration Management System",
+            "description": "Build comprehensive configuration system using Pydantic Settings with environment variable support",
+            "dependencies": [],
+            "details": "Create Settings class using Pydantic with validation for all configuration options (Elasticsearch hosts, authentication, timeouts, cache settings, rate limits). Support environment variables with .env file fallback. Add configuration validation and helpful error messages. Document all configuration options.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 4,
+            "title": "Docker Containerization with Multi-stage Build",
+            "description": "Create production-ready Docker configuration with security scanning and minimal runtime image",
+            "dependencies": [
+              "10.3"
+            ],
+            "details": "Create multi-stage Dockerfile with separate build and runtime stages. Use minimal base image (python:slim). Add security scanning with docker scan. Configure proper user permissions and non-root execution. Add health check endpoint and container labels for monitoring.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 5,
+            "title": "Implement Monitoring and Metrics Endpoints",
+            "description": "Add Prometheus metrics endpoints for monitoring request counts, response times, and system health",
+            "dependencies": [
+              "10.1",
+              "10.2"
+            ],
+            "details": "Add /metrics endpoint with Prometheus format metrics: request duration histograms, request counts by endpoint/status, cache hit/miss ratios, rate limit violations, Elasticsearch connection status. Use prometheus_client library for metric collection and exposition.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 6,
+            "title": "Create Health Check Endpoints",
+            "description": "Implement comprehensive health check system for service monitoring",
+            "dependencies": [
+              "10.3"
+            ],
+            "details": "Create /health and /readiness endpoints checking Elasticsearch connectivity, cache system status, configuration validity. Return detailed health status with component-level checks. Support different verbosity levels and timeout configurations for health checks.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 7,
+            "title": "Deployment Automation and CI/CD",
+            "description": "Create deployment scripts and CI/CD pipeline configuration for automated production deployment",
+            "dependencies": [
+              "10.4",
+              "10.6"
+            ],
+            "details": "Create deployment scripts with environment-specific configurations. Add GitHub Actions or similar CI/CD pipeline for automated testing, building, and deployment. Include rollback procedures and deployment verification steps. Add deployment documentation and runbooks.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 8,
+            "title": "Security Hardening and Production Safeguards",
+            "description": "Implement security measures including input validation, authentication, and secure defaults",
+            "dependencies": [
+              "10.2",
+              "10.3"
+            ],
+            "details": "Add input validation and sanitization for all endpoints. Implement API key authentication if required. Configure secure defaults for all settings. Add security headers (CORS, CSP, etc.). Audit dependencies for vulnerabilities. Add secrets management for sensitive configuration.",
+            "status": "pending",
+            "testStrategy": ""
+          }
+        ]
+      }
+    ],
+    "metadata": {
+      "created": "2025-08-06T11:22:09.342Z",
+      "updated": "2025-08-06T20:54:24.184Z",
+      "description": "Tasks for master context"
+    }
+  }
+}
