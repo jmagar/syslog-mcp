@@ -9,9 +9,16 @@ import argparse
 from typing import Optional
 
 from fastmcp import FastMCP
+from dotenv import load_dotenv
 
 from .utils.logging import configure_logging, get_logger
 from .tools import register_search_tools, register_device_analysis_tools
+from .prompts.security_analysis import register_security_analysis_prompts
+from .prompts.system_administration import register_system_administration_prompts
+from .prompts.forensics import register_forensics_prompts
+
+# Load environment variables from .env file
+load_dotenv()
 
 
 def create_server() -> FastMCP:
@@ -23,6 +30,11 @@ def create_server() -> FastMCP:
     
     # Register device analysis tools
     register_device_analysis_tools(mcp)
+    
+    # Register prompts
+    register_security_analysis_prompts(mcp)
+    register_system_administration_prompts(mcp)
+    register_forensics_prompts(mcp)
 
     return mcp
 
