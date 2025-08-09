@@ -5,7 +5,6 @@ This module provides thin orchestration between MCP tools and the
 security analysis components (data access + analysis + presentation).
 """
 
-from typing import Any, Dict, List, Optional
 
 from ..data_access.security_queries import (
     query_failed_auth_attempts,
@@ -15,8 +14,7 @@ from ..data_access.security_queries import (
 from ..analysis.security_analyzer import (
     analyze_failed_authentication_data,
     analyze_suspicious_activity_data,
-    analyze_ip_reputation_data,
-    analyze_authentication_timeline_data
+    analyze_ip_reputation_data
 )
 from ..presentation.summary_formatters import (
     format_failed_auth_summary,
@@ -31,7 +29,7 @@ logger = get_logger(__name__)
 
 async def get_failed_auth_summary(
     client,
-    device: Optional[str] = None,
+    device: str | None = None,
     hours: int = 24,
     top_ips: int = 10
 ) -> str:
@@ -42,14 +40,16 @@ async def get_failed_auth_summary(
         es_response = await query_failed_auth_attempts(
             es_client=client,
             device=device,
-            hours=hours
+            hours=hours,
+            top_ips=top_ips
         )
         
         # Analysis Layer - pure business logic
         analysis_data = analyze_failed_authentication_data(
             es_response=es_response,
             device_name=device,
-            hours=hours
+            hours=hours,
+            top_ips=top_ips
         )
         
         # Presentation Layer - pure formatting
@@ -62,7 +62,7 @@ async def get_failed_auth_summary(
 
 async def get_suspicious_activity(
     client,
-    device: Optional[str] = None,
+    device: str | None = None,
     hours: int = 24,
     sensitivity: str = "medium"
 ) -> str:
@@ -95,7 +95,7 @@ async def get_suspicious_activity(
 
 async def get_auth_timeline(
     client,
-    device: Optional[str] = None,
+    device: str | None = None,
     hours: int = 24,
     interval: str = "1h"
 ) -> str:
@@ -115,6 +115,7 @@ async def get_auth_timeline(
         from ..analysis.timeline_analyzer import analyze_authentication_timeline_data
         analysis_data = analyze_authentication_timeline_data(
             es_response=es_response,
+            device=device,
             hours=hours,
             interval=interval
         )
@@ -129,7 +130,7 @@ async def get_auth_timeline(
 
 async def get_ip_reputation(
     client,
-    ip_address: Optional[str] = None,
+    ip_address: str | None = None,
     hours: int = 24,
     min_attempts: int = 5,
     top_ips: int = 20

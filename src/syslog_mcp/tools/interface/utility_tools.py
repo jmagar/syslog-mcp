@@ -31,6 +31,8 @@ from ..presentation.summary_formatters import (
 )
 from .security_tools import get_failed_auth_summary, get_suspicious_activity
 from .device_tools import get_device_summary, get_error_analysis
+from ...services.alert_monitor import check_alerts_once
+from ...services.gotify_client import test_gotify_configuration, send_alert_notification
 from ...utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -89,7 +91,6 @@ async def generate_daily_report(
         
         try:
             # Get device summary
-            from .device_tools import get_device_summary
             device_result = await get_device_summary(client, "all", 24)
             # Parse the result to extract metrics (simplified for now)
             device_summary = {"total_events": 0, "active_devices": []}
@@ -222,8 +223,6 @@ async def create_new_alert_rule(
 async def check_alerts_now(client) -> str:
     """Check all alert rules now and send notifications if triggered."""
     try:
-        from ...services.alert_monitor import check_alerts_once
-        
         # Run alert check
         results = await check_alerts_once()
         
@@ -253,8 +252,6 @@ async def check_alerts_now(client) -> str:
 async def test_gotify_connection(client) -> str:
     """Test Gotify server connection and configuration."""
     try:
-        from ...services.gotify_client import test_gotify_configuration, send_alert_notification
-        
         # Test configuration and connection
         is_configured = await test_gotify_configuration()
         

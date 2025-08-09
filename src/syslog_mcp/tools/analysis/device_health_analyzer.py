@@ -148,8 +148,10 @@ def _determine_device_status(
             
             if time_since_last > timedelta(hours=2):
                 return "warning"  # No recent activity
-        except:
-            pass
+        except ValueError as e:
+            logger.warning(f"Failed to parse timestamp '{last_seen}': {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error processing timestamp '{last_seen}': {e}")
     
     # Calculate error rates
     error_rate = (error_count / total_logs) * 100 if total_logs > 0 else 0
@@ -252,7 +254,7 @@ def _calculate_device_health_score(
     
     # Recent activity impact
     recent_activity = sum(period["log_count"] for period in activity_timeline[-3:]) if len(activity_timeline) >= 3 else 0
-    expected_recent = (total_logs / hours) * 3  # Expected logs in last 3 hours
+    expected_recent = (total_logs / hours) * 3 if hours > 0 else 0  # Expected logs in last 3 hours
     
     if recent_activity < expected_recent * 0.5:
         activity_penalty = 10

@@ -5,24 +5,28 @@ A comprehensive Model Context Protocol (MCP) server for advanced syslog analysis
 ## 🚀 Features
 
 ### Core Analysis Tools
+
 - **Device Health Monitoring** - Comprehensive device status and activity analysis
 - **Security Analysis** - Failed authentication detection, suspicious activity monitoring, IP reputation analysis
 - **System Error Analysis** - Error pattern detection and troubleshooting recommendations
 - **Authentication Timeline** - Track authentication events and patterns over time
 
 ### Advanced Search & Correlation
+
 - **Multi-field Search** - Advanced search with time ranges, device filters, and log levels
 - **Full-text Search** - Intelligent search with highlighting and relevance scoring
 - **Correlation Analysis** - Discover relationships between log events across multiple fields
 - **Pattern Detection** - Identify recurring patterns and anomalies
 
 ### Productivity Features
+
 - **Saved Searches** - Save and reuse frequent search queries
 - **Daily Reports** - Automated comprehensive system health reports
 - **Log Export** - Export filtered logs in multiple formats (JSON, CSV)
 - **Alert Rules** - Create monitoring rules with thresholds and severity levels
 
 ### Data Management
+
 - **Real-time Analysis** - Fast async Elasticsearch integration
 - **Smart Aggregations** - Device, program, and time-based groupings
 - **Performance Optimization** - Efficient query execution and caching
@@ -31,7 +35,7 @@ A comprehensive Model Context Protocol (MCP) server for advanced syslog analysis
 
 Built with **ultra-focused modular architecture**:
 
-```
+```text
 ├── Data Access Layer     # Pure Elasticsearch queries (~300 lines each)
 │   ├── security_queries.py    # Authentication & security data
 │   ├── device_queries.py      # Device health & activity data  
@@ -57,6 +61,7 @@ Built with **ultra-focused modular architecture**:
 ```
 
 **Benefits:**
+
 - **Single Responsibility** - Each module has one focused purpose
 - **Easy Testing** - Pure functions with clear inputs/outputs
 - **Simple Debugging** - Issues isolated to specific layers
@@ -66,28 +71,33 @@ Built with **ultra-focused modular architecture**:
 ## 📋 Available MCP Tools (18 Total)
 
 ### 🛡️ Security Analysis (4 tools)
+
 - `failed_auth_summary_tool` - Analyze failed authentication attempts
 - `suspicious_activity_tool` - Detect suspicious system activities  
 - `ip_reputation_tool` - Analyze IP addresses and attack patterns
 - `auth_timeline_tool` - Track authentication events over time
 
 ### 📱 Device Monitoring (2 tools)
+
 - `get_device_summary_tool` - Comprehensive device health analysis
 - `error_analysis_tool` - System error pattern analysis
 
-### 🔍 Search & Analysis (4 tools)  
+### 🔍 Search & Analysis (4 tools)
+
 - `search_logs` - General log search with filtering
 - `search_by_timerange_tool` - Time-based log searches
 - `full_text_search_tool` - Advanced full-text search with highlighting
 - `search_correlate_tool` - **NEW** - Multi-field event correlation analysis
 
 ### 📊 Productivity Tools (4 tools)
+
 - `saved_searches_tool` - **NEW** - View all saved search queries
 - `add_saved_search_tool` - **NEW** - Save frequently used searches
 - `generate_daily_report_tool` - **NEW** - Automated daily system reports
 - `export_logs_tool` - **NEW** - Export logs with analysis summaries
 
 ### 🔔 Monitoring & Alerts (4 tools)
+
 - `create_alert_rule_tool` - **NEW** - Create monitoring alert rules
 - `alert_rules_tool` - **NEW** - View configured alert rules
 - `check_alerts_tool` - **NEW** - Check all alerts now and send notifications
@@ -96,6 +106,7 @@ Built with **ultra-focused modular architecture**:
 ## 🛠️ Setup
 
 ### Prerequisites
+
 - Python 3.11+
 - uv (Python package manager)
 - Elasticsearch cluster with syslog data
@@ -103,17 +114,20 @@ Built with **ultra-focused modular architecture**:
 ### Installation
 
 1. **Install dependencies:**
+
 ```bash
 uv sync
 ```
 
-2. **Configure Elasticsearch connection:**
+1. **Configure Elasticsearch connection:**
+
 ```bash
 cp .env.example .env
 # Edit .env with your Elasticsearch settings
 ```
 
-3. **Run the MCP server:**
+1. **Run the MCP server:**
+
 ```bash
 uv run python main.py
 ```
@@ -121,6 +135,7 @@ uv run python main.py
 ## ⚙️ Configuration
 
 ### Environment Variables (`.env`)
+
 ```bash
 # Elasticsearch Configuration
 ELASTICSEARCH_HOST=your-elasticsearch-host:9200
@@ -135,9 +150,14 @@ ELASTICSEARCH_TIMEOUT=30
 
 # Optional: Security
 ELASTICSEARCH_API_KEY=your-api-key
+
+# Gotify Configuration (Alert Notifications)
+GOTIFY_URL=https://gotify-server:443
+GOTIFY_TOKEN=your_gotify_app_token_here
 ```
 
 ### MCP Client Configuration (`.mcp.json`)
+
 ```json
 {
   "mcpServers": {
@@ -155,6 +175,7 @@ ELASTICSEARCH_API_KEY=your-api-key
 ## 📚 Usage Examples
 
 ### Basic Device Analysis
+
 ```python
 # Get comprehensive device health summary
 await get_device_summary_tool(device="web-server-01", hours=24)
@@ -164,6 +185,7 @@ await error_analysis_tool(device="web-server-01", hours=24, severity="error")
 ```
 
 ### Security Monitoring
+
 ```python
 # Check for failed authentication attempts
 await failed_auth_summary_tool(hours=24, top_ips=10)
@@ -176,6 +198,7 @@ await ip_reputation_tool(hours=24, min_attempts=5)
 ```
 
 ### Advanced Search & Correlation
+
 ```python
 # Correlate events across multiple fields
 await search_correlate_tool(
@@ -194,6 +217,7 @@ await full_text_search_tool(
 ```
 
 ### Productivity Features
+
 ```python
 # Save frequently used searches
 await add_saved_search_tool(
@@ -215,6 +239,7 @@ await export_logs_tool(
 ```
 
 ### Alert Management
+
 ```python
 # Create monitoring alert rules
 await create_alert_rule_tool(
@@ -240,7 +265,9 @@ await test_gotify_tool()
 The Syslog MCP server supports **real-time alert notifications** via [Gotify](https://gotify.net/), an open-source push notification service.
 
 #### Gotify Setup
+
 1. **Install Gotify server** (Docker recommended):
+
    ```bash
    docker run -d --name gotify-server \
      -p 80:80 \
@@ -248,14 +275,17 @@ The Syslog MCP server supports **real-time alert notifications** via [Gotify](ht
      gotify/server
    ```
 
-2. **Create application token** in Gotify admin interface
-3. **Configure environment variables**:
+1. **Create application token** in Gotify admin interface
+
+1. **Configure environment variables**:
+
    ```bash
    GOTIFY_URL=http://gotify-server:80
    GOTIFY_TOKEN=your_gotify_app_token_here
    ```
 
 #### Alert Features
+
 - **Automatic notifications** when thresholds are exceeded
 - **Severity-based priorities** (Low=3, Medium=5, High=8, Critical=10)
 - **Cooldown periods** prevent notification spam (30-minute default)
@@ -263,10 +293,11 @@ The Syslog MCP server supports **real-time alert notifications** via [Gotify](ht
 - **Manual testing** with `test_gotify_tool()`
 
 #### Alert Flow
+
 1. **Create alert rules** with `create_alert_rule_tool()`
-2. **Monitor continuously** (or manually with `check_alerts_tool()`)
-3. **Receive notifications** via Gotify when thresholds exceeded
-4. **Review alert history** and manage rules
+1. **Monitor continuously** (or manually with `check_alerts_tool()`)
+1. **Receive notifications** via Gotify when thresholds exceeded
+1. **Review alert history** and manage rules
 
 ## 🚀 Performance Features
 
@@ -280,7 +311,8 @@ The Syslog MCP server supports **real-time alert notifications** via [Gotify](ht
 ## 🔧 Development
 
 ### Project Structure
-```
+
+```text
 src/syslog_mcp/
 ├── services/              # Core services
 │   └── elasticsearch_client.py
@@ -297,6 +329,7 @@ src/syslog_mcp/
 ```
 
 ### Development Commands
+
 ```bash
 # Run with hot reload
 uv run python main.py
@@ -317,10 +350,10 @@ uv run ruff check --fix src/
 Follow the ultra-focused modular pattern:
 
 1. **Data Access** - Add pure Elasticsearch queries in `data_access/`
-2. **Analysis** - Add business logic in `analysis/`  
-3. **Presentation** - Add formatters in `presentation/`
-4. **Interface** - Add orchestration in `interface/`
-5. **Registry** - Register MCP tool in `device_analysis.py`
+1. **Analysis** - Add business logic in `analysis/`  
+1. **Presentation** - Add formatters in `presentation/`
+1. **Interface** - Add orchestration in `interface/`
+1. **Registry** - Register MCP tool in `device_analysis.py`
 
 ## 📊 Monitoring & Observability
 
@@ -340,12 +373,12 @@ Follow the ultra-focused modular pattern:
 ## 🤝 Contributing
 
 1. Fork the repository
-2. Create feature branch (`git checkout -b feature/amazing-feature`)
-3. Follow the ultra-focused modular architecture
-4. Add tests for new functionality
-5. Commit changes (`git commit -m 'Add amazing feature'`)
-6. Push to branch (`git push origin feature/amazing-feature`)
-7. Open Pull Request
+1. Create feature branch (`git checkout -b feature/amazing-feature`)
+1. Follow the ultra-focused modular architecture
+1. Add tests for new functionality
+1. Commit changes (`git commit -m 'Add amazing feature'`)
+1. Push to branch (`git push origin feature/amazing-feature`)
+1. Open Pull Request
 
 ## 📄 License
 

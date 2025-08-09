@@ -6,9 +6,10 @@ including failed authentication analysis and authentication timeline analysis.
 No data access or presentation logic - just analysis.
 """
 
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime
+from typing import Any
 import re
+import ipaddress
 from collections import defaultdict
 
 from ...utils.logging import get_logger
@@ -17,10 +18,11 @@ logger = get_logger(__name__)
 
 
 def analyze_failed_authentication_data(
-    es_response: Dict[str, Any],
-    device_name: Optional[str] = None,
-    hours: int = 24
-) -> Dict[str, Any]:
+    es_response: dict[str, Any],
+    device_name: str | None = None,
+    hours: int = 24,
+    top_ips: int = 10
+) -> dict[str, Any]:
     """Analyze failed authentication data from Elasticsearch response."""
     
     # Extract basic metrics
@@ -96,91 +98,8 @@ def analyze_failed_authentication_data(
     }
 
 
-def analyze_authentication_timeline_data(
-    es_response: Dict[str, Any],
-    device: Optional[str] = None,
-    hours: int = 24,
-    interval: str = "1h"
-) -> Dict[str, Any]:
-    """Analyze authentication timeline data from Elasticsearch response."""
-    
-    total_events = es_response["hits"]["total"]["value"]
-    aggs = es_response.get("aggregations", {})
-    
-    # Process main timeline - look for authentication events in the base query results
-    auth_timeline = []
-    success_count = 0
-    failure_count = 0
-    
-    # Extract sample authentication events from hits
-    auth_events = []
-    for hit in es_response["hits"]["hits"]:
-        source = hit["_source"]
-        message = source.get("message", "").lower()
-        
-        # Classify authentication event type
-        event_type = "other"
-        if any(term in message for term in ["failed password", "invalid user", "authentication failure"]):
-            event_type = "failure"
-            failure_count += 1
-        elif any(term in message for term in ["accepted", "session opened", "login successful"]):
-            event_type = "success"
-            success_count += 1
-        
-        auth_events.append({
-            "timestamp": source.get("timestamp"),
-            "device": source.get("device"),
-            "message": source.get("message"),
-            "program": source.get("program"),
-            "event_type": event_type,
-            "user": _extract_username_from_message(source.get("message", "")),
-            "source_ip": _extract_ip_from_message(source.get("message", ""))
-        })
-    
-    # Process timeline aggregation if available
-    if "auth_timeline" in aggs and "buckets" in aggs["auth_timeline"]:
-        for bucket in aggs["auth_timeline"]["buckets"]:
-            auth_timeline.append({
-                "timestamp": bucket["key_as_string"],
-                "total_events": bucket["doc_count"]
-            })
-    
-    # Calculate authentication patterns
-    auth_patterns = _analyze_auth_patterns(auth_events)
-    
-    # Identify peak periods
-    peak_periods = _identify_peak_auth_periods(auth_timeline)
-    
-    # Calculate success/failure rates
-    total_classified = success_count + failure_count
-    success_rate = (success_count / total_classified * 100) if total_classified > 0 else 0
-    failure_rate = (failure_count / total_classified * 100) if total_classified > 0 else 0
-    
-    # Assess security risk
-    security_assessment = _assess_auth_security_risk(
-        failure_rate, total_events, peak_periods, auth_patterns
-    )
-    
-    return {
-        "total_auth_events": total_events,
-        "success_count": success_count,
-        "failure_count": failure_count,
-        "success_rate": success_rate,
-        "failure_rate": failure_rate,
-        "auth_timeline": auth_timeline,
-        "auth_events": auth_events[:50],  # Limit sample events
-        "auth_patterns": auth_patterns,
-        "peak_periods": peak_periods,
-        "security_assessment": security_assessment,
-        "analysis_parameters": {
-            "device": device,
-            "hours": hours,
-            "interval": interval
-        }
-    }
 
-
-def _analyze_auth_patterns(auth_events: List[Dict]) -> Dict[str, Any]:
+def _analyze_auth_patterns(auth_events: list[dict]) -> dict[str, Any]:
     """Analyze patterns in authentication events."""
     
     user_patterns = defaultdict(lambda: {"success": 0, "failure": 0})
@@ -202,8 +121,11 @@ def _analyze_auth_patterns(auth_events: List[Dict]) -> Dict[str, Any]:
                 try:
                     hour = datetime.fromisoformat(timestamp.replace("Z", "+00:00")).hour
                     time_patterns[hour][event_type] += 1
-                except:
-                    pass
+                except ValueError as e:
+                    logger.debug(
+                        "Failed to parse timestamp for time pattern analysis",
+                        extra={"timestamp": timestamp, "error": str(e)}
+                    )
     
     # Find most targeted users
     targeted_users = sorted(
@@ -232,7 +154,7 @@ def _analyze_auth_patterns(auth_events: List[Dict]) -> Dict[str, Any]:
     }
 
 
-def _identify_peak_auth_periods(timeline: List[Dict]) -> List[Dict]:
+def _identify_peak_auth_periods(timeline: list[dict]) -> list[dict]:
     """Identify peak authentication periods from timeline data."""
     if not timeline:
         return []
@@ -258,9 +180,9 @@ def _identify_peak_auth_periods(timeline: List[Dict]) -> List[Dict]:
 def _assess_auth_security_risk(
     failure_rate: float,
     total_events: int,
-    peak_periods: List[Dict],
-    patterns: Dict[str, Any]
-) -> Dict[str, Any]:
+    peak_periods: list[dict],
+    patterns: dict[str, Any]
+) -> dict[str, Any]:
     """Assess overall authentication security risk."""
     
     risk_score = 0.0
@@ -314,11 +236,11 @@ def _extract_username_from_message(message: str) -> str:
     """Extract username from authentication log message."""
     # Common patterns for SSH authentication logs
     patterns = [
-        r"Failed password for (\w+) from",
-        r"Invalid user (\w+) from",
-        r"Accepted .+ for (\w+) from",
-        r"session opened for user (\w+)",
-        r"user (\w+):"
+        r"Failed password for ([\w.-]+) from",
+        r"Invalid user ([\w.-]+) from",
+        r"Accepted .+ for ([\w.-]+) from",
+        r"session opened for user ([\w.-]+)",
+        r"user ([\w.-]+):"
     ]
     
     for pattern in patterns:
@@ -333,10 +255,24 @@ def _extract_ip_from_message(message: str) -> str:
     """Extract IP address from log message."""
     ip_pattern = r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b"
     match = re.search(ip_pattern, message)
-    return match.group(1) if match else "unknown"
+    
+    if match:
+        potential_ip = match.group(1)
+        try:
+            # Validate that it's a valid IPv4 address
+            ipaddress.IPv4Address(potential_ip)
+            return potential_ip
+        except ipaddress.AddressValueError:
+            # Invalid IP address, log debug info and continue searching
+            logger.debug(
+                "Invalid IP address format found in log message",
+                extra={"potential_ip": potential_ip, "message": message}
+            )
+    
+    return "unknown"
 
 
-def _get_auth_security_recommendations(risk_level: str, issues: List[str]) -> List[str]:
+def _get_auth_security_recommendations(risk_level: str, issues: list[str]) -> list[str]:
     """Get authentication security recommendations."""
     base_recommendations = [
         "Monitor authentication logs regularly",

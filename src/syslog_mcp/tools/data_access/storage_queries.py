@@ -6,10 +6,9 @@ alert rules, and other configuration data. Uses file-based storage.
 """
 
 import json
-import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from ...utils.logging import get_logger
 
@@ -26,7 +25,7 @@ def ensure_storage_dir():
     STORAGE_DIR.mkdir(exist_ok=True)
 
 
-def load_saved_searches() -> Dict[str, Any]:
+def load_saved_searches() -> dict[str, Any]:
     """Load saved searches from file."""
     ensure_storage_dir()
     
@@ -41,7 +40,7 @@ def load_saved_searches() -> Dict[str, Any]:
         return {"searches": {}, "created_at": datetime.utcnow().isoformat()}
 
 
-def save_searches_data(data: Dict[str, Any]) -> bool:
+def save_searches_data(data: dict[str, Any]) -> bool:
     """Save searches data to file."""
     ensure_storage_dir()
     
@@ -60,8 +59,8 @@ def add_saved_search(
     query: str,
     description: Optional[str] = None,
     search_type: str = "general",
-    filters: Optional[Dict[str, Any]] = None
-) -> Dict[str, Any]:
+    filters: Optional[dict[str, Any]] = None
+) -> dict[str, Any]:
     """Add a new saved search."""
     
     data = load_saved_searches()
@@ -85,12 +84,12 @@ def add_saved_search(
         return {"success": False, "error": "Failed to save search"}
 
 
-def get_saved_searches() -> Dict[str, Any]:
+def get_saved_searches() -> dict[str, Any]:
     """Get all saved searches."""
     return load_saved_searches()
 
 
-def get_saved_search(name: str) -> Optional[Dict[str, Any]]:
+def get_saved_search(name: str) -> Optional[dict[str, Any]]:
     """Get a specific saved search by name."""
     data = load_saved_searches()
     return data["searches"].get(name)
@@ -126,7 +125,7 @@ def export_logs_query(
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
     format_type: str = "json"
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Generate export query parameters."""
     
     export_config = {
@@ -145,7 +144,7 @@ def export_logs_query(
     return export_config
 
 
-def load_alert_rules() -> Dict[str, Any]:
+def load_alert_rules() -> dict[str, Any]:
     """Load alert rules from file."""
     ensure_storage_dir()
     
@@ -160,7 +159,7 @@ def load_alert_rules() -> Dict[str, Any]:
         return {"rules": {}, "created_at": datetime.utcnow().isoformat()}
 
 
-def save_alert_rules_data(data: Dict[str, Any]) -> bool:
+def save_alert_rules_data(data: dict[str, Any]) -> bool:
     """Save alert rules data to file."""
     ensure_storage_dir()
     
@@ -181,7 +180,7 @@ def create_alert_rule(
     time_window: int,
     severity: str = "medium",
     description: Optional[str] = None
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Create a new alert rule."""
     
     data = load_alert_rules()

@@ -6,7 +6,7 @@ detailed forensics investigations and root cause analysis workflows.
 """
 
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import Field
 from fastmcp import FastMCP
 
 

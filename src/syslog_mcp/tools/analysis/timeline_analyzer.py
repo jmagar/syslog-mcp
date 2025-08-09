@@ -6,8 +6,8 @@ including authentication patterns, activity trends, and temporal insights.
 No data access or presentation logic - just analysis.
 """
 
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 from collections import defaultdict
 
 from ...utils.logging import get_logger
@@ -17,7 +17,8 @@ logger = get_logger(__name__)
 
 def analyze_authentication_timeline_data(
     es_response: Dict[str, Any],
-    hours: int,
+    device: Optional[str] = None,
+    hours: int = 24,
     interval: str = "1h"
 ) -> Dict[str, Any]:
     """Analyze authentication timeline data from Elasticsearch response."""
@@ -457,7 +458,8 @@ def _detect_daily_pattern(timeline_data: List[Dict]) -> Optional[Dict]:
             hour = dt.hour
             activity = period.get("total_attempts", period.get("log_count", 0))
             hourly_activity[hour].append(activity)
-        except:
+        except ValueError as e:
+            logger.debug(f"Failed to parse timestamp for daily pattern analysis: {period.get('timestamp', 'unknown')}, error: {e}")
             continue
     
     if len(hourly_activity) < 12:  # Need data for at least half the day
@@ -502,7 +504,8 @@ def _detect_temporal_anomalies(timeline_data: List[Dict]) -> List[Dict]:
                         "timestamp": timeline_data[i]["timestamp"],
                         "gap_minutes": round(actual_interval, 1)
                     })
-            except:
+            except ValueError as e:
+                logger.debug(f"Failed to parse timestamps for temporal anomaly detection: {timeline_data[i-1].get('timestamp', 'unknown')} -> {timeline_data[i].get('timestamp', 'unknown')}, error: {e}")
                 continue
     
     return anomalies
@@ -521,7 +524,8 @@ def _estimate_interval(timeline_sample: List[Dict]) -> float:
             curr_dt = datetime.fromisoformat(timeline_sample[i]["timestamp"].replace("Z", "+00:00"))
             interval = (curr_dt - prev_dt).total_seconds() / 60
             intervals.append(interval)
-        except:
+        except ValueError as e:
+            logger.debug(f"Failed to parse timestamps for interval estimation: {timeline_sample[i-1].get('timestamp', 'unknown')} -> {timeline_sample[i].get('timestamp', 'unknown')}, error: {e}")
             continue
     
     return sum(intervals) / len(intervals) if intervals else 60.0
@@ -566,7 +570,12 @@ def _calculate_trend(values: List[float]) -> Dict[str, Any]:
     xy_sum = sum(i * values[i] for i in range(n))
     x_squared_sum = sum(i ** 2 for i in range(n))
     
-    if n * x_squared_sum == x_sum ** 2:  # Avoid division by zero
+    # Calculate variance of x values explicitly
+    x_mean = x_sum / n
+    x_variance = (x_squared_sum / n) - (x_mean ** 2)
+    
+    # Check if variance is zero (no variation in x values)
+    if x_variance == 0:
         return {"direction": "STABLE", "strength": 0}
     
     slope = (n * xy_sum - x_sum * y_sum) / (n * x_squared_sum - x_sum ** 2)

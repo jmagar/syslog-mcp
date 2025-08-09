@@ -17,9 +17,6 @@ from .prompts.security_analysis import register_security_analysis_prompts
 from .prompts.system_administration import register_system_administration_prompts
 from .prompts.forensics import register_forensics_prompts
 
-# Load environment variables from .env file
-load_dotenv()
-
 
 def create_server() -> FastMCP:
     """Create and configure the FastMCP server."""
@@ -30,7 +27,7 @@ def create_server() -> FastMCP:
     
     # Register device analysis tools
     register_device_analysis_tools(mcp)
-    
+
     # Register prompts
     register_security_analysis_prompts(mcp)
     register_system_administration_prompts(mcp)
@@ -73,6 +70,9 @@ def main(host: Optional[str] = None, port: Optional[int] = None) -> None:
     """Main entry point for the MCP server."""
     # Configure structured logging
     configure_logging()
+    
+    # Load environment variables from .env file
+    load_dotenv()
 
     logger = get_logger(__name__)
     

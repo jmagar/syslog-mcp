@@ -6,7 +6,7 @@ including pattern detection and risk assessment.
 No data access or presentation logic - just analysis.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from ...utils.logging import get_logger
 
@@ -14,11 +14,11 @@ logger = get_logger(__name__)
 
 
 def analyze_suspicious_activity_data(
-    es_response: Dict[str, Any],
-    device: Optional[str] = None,
+    es_response: dict[str, Any],
+    device: str | None = None,
     hours: int = 24,
     sensitivity: str = "medium"
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Analyze suspicious activity data from Elasticsearch response."""
     
     total_events = es_response["hits"]["total"]["value"]
@@ -168,11 +168,11 @@ def _identify_suspicion_reason(message: str) -> str:
 
 def _calculate_overall_suspicion_risk(
     total_events: int,
-    patterns: List[Dict],
-    off_hours: Dict,
+    patterns: list[dict],
+    off_hours: dict,
     hours: int,
     sensitivity: str
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Calculate overall suspicion risk assessment."""
     
     risk_score = 0.0
@@ -224,9 +224,9 @@ def _calculate_overall_suspicion_risk(
 
 
 def _analyze_suspicious_patterns(
-    patterns: List[Dict],
-    timeline: List[Dict]
-) -> Dict[str, Any]:
+    patterns: list[dict],
+    timeline: list[dict]
+) -> dict[str, Any]:
     """Analyze suspicious activity patterns for insights."""
     
     if not patterns:
@@ -266,7 +266,7 @@ def _analyze_suspicious_patterns(
     }
 
 
-def _calculate_pattern_concentration(patterns: List[Dict]) -> Dict[str, Any]:
+def _calculate_pattern_concentration(patterns: list[dict]) -> dict[str, Any]:
     """Calculate how concentrated the suspicious activity is across patterns."""
     
     if not patterns:
@@ -291,7 +291,7 @@ def _calculate_pattern_concentration(patterns: List[Dict]) -> Dict[str, Any]:
     }
 
 
-def _identify_pattern_risk_indicators(patterns: List[Dict]) -> Dict[str, Any]:
+def _identify_pattern_risk_indicators(patterns: list[dict]) -> dict[str, Any]:
     """Identify key risk indicators from suspicious patterns."""
     
     indicators = {
@@ -308,11 +308,11 @@ def _identify_pattern_risk_indicators(patterns: List[Dict]) -> Dict[str, Any]:
         
         if "privilege escalation" in pattern_name:
             indicators["privilege_escalation_detected"] = True
-        elif "network" in pattern_name:
+        if "network" in pattern_name:
             indicators["network_tools_used"] = True
-        elif "file manipulation" in pattern_name:
+        if "file manipulation" in pattern_name:
             indicators["file_manipulation_detected"] = True
-        elif "system anomalies" in pattern_name:
+        if "system anomalies" in pattern_name:
             indicators["system_anomalies_present"] = True
         
         if count > 20:  # High frequency threshold
@@ -330,7 +330,7 @@ def _identify_pattern_risk_indicators(patterns: List[Dict]) -> Dict[str, Any]:
     }
 
 
-def _generate_indicator_risk_summary(indicators: Dict[str, bool]) -> str:
+def _generate_indicator_risk_summary(indicators: dict[str, bool]) -> str:
     """Generate risk summary based on active indicators."""
     
     active = [key.replace("_", " ").title() for key, value in indicators.items() if value]
@@ -357,7 +357,7 @@ def _get_risk_recommendation(risk_level: str) -> str:
     return recommendations.get(risk_level, "Continue monitoring")
 
 
-def _get_immediate_actions(risk_level: str, risk_factors: List[str]) -> List[str]:
+def _get_immediate_actions(risk_level: str, risk_factors: list[str]) -> list[str]:
     """Get immediate actions based on risk level and factors."""
     
     actions = []

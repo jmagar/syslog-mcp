@@ -6,10 +6,9 @@ including pattern detection and event relationship analysis.
 No data access or presentation logic - just analysis.
 """
 
-from datetime import datetime, timedelta
+import math
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
-from collections import defaultdict, Counter
-import statistics
 
 from ...utils.logging import get_logger
 
@@ -105,7 +104,7 @@ def analyze_search_correlate_data(
                 total_field_events = sum(item["event_count"] for item in field_data)
                 if total_field_events > 0:
                     entropy = -sum(
-                        (count/total_field_events) * (count/total_field_events).bit_length()
+                        (count/total_field_events) * math.log2(count/total_field_events)
                         for count in [item["event_count"] for item in field_data]
                         if count > 0
                     )

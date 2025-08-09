@@ -6,7 +6,7 @@ including threat assessment and geographic analysis.
 No data access or presentation logic - just analysis.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ...utils.logging import get_logger
 
@@ -14,12 +14,12 @@ logger = get_logger(__name__)
 
 
 def analyze_ip_reputation_data(
-    es_response: Dict[str, Any],
-    ip_address: Optional[str] = None,
+    es_response: dict[str, Any],
+    ip_address: str | None = None,
     hours: int = 24,
     min_attempts: int = 5,
     top_ips: int = 20
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Analyze IP reputation data from Elasticsearch response."""
     
     aggs = es_response.get("aggregations", {})
@@ -34,6 +34,14 @@ def analyze_ip_reputation_data(
             attempts = bucket["doc_count"]
             
             if ip == "unknown":
+                continue
+            
+            # Filter by specific IP if provided
+            if ip_address and ip != ip_address:
+                continue
+                
+            # Filter by minimum attempts threshold
+            if attempts < min_attempts:
                 continue
                 
             total_attempts += attempts
@@ -121,7 +129,7 @@ def analyze_ip_reputation_data(
     }
 
 
-def _calculate_ip_reputation_score(attempts: int, attack_patterns: List[Dict], hours: int) -> float:
+def _calculate_ip_reputation_score(attempts: int, attack_patterns: list[dict], hours: int) -> float:
     """Calculate reputation score for an IP address (0-100, higher = more dangerous)."""
     base_score = min(attempts / hours * 2, 50)  # Base score from frequency
     
@@ -152,7 +160,7 @@ def _get_threat_level(score: float) -> str:
         return "MINIMAL"
 
 
-def _analyze_ip_risk_factors(ip_data: Dict[str, Any]) -> Dict[str, Any]:
+def _analyze_ip_risk_factors(ip_data: dict[str, Any]) -> dict[str, Any]:
     """Analyze specific risk factors for an IP address."""
     
     risk_factors = []
@@ -200,7 +208,7 @@ def _analyze_ip_risk_factors(ip_data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _calculate_overall_ip_risk(indicators: Dict[str, bool], attempts: int) -> float:
+def _calculate_overall_ip_risk(indicators: dict[str, bool], attempts: int) -> float:
     """Calculate overall risk score based on indicators."""
     
     base_risk = min(attempts / 50, 5.0)  # Base risk from volume
@@ -219,7 +227,7 @@ def _calculate_overall_ip_risk(indicators: Dict[str, bool], attempts: int) -> fl
     return round(total_risk, 1)
 
 
-def _generate_threat_summary(ip_data_list: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _generate_threat_summary(ip_data_list: list[dict[str, Any]]) -> dict[str, Any]:
     """Generate overall threat summary from IP reputation data."""
     
     if not ip_data_list:
@@ -267,7 +275,7 @@ def _generate_threat_summary(ip_data_list: List[Dict[str, Any]]) -> Dict[str, An
     }
 
 
-def _get_threat_mitigation_recommendations(highest_threat: str, key_threats: List[Dict]) -> List[str]:
+def _get_threat_mitigation_recommendations(highest_threat: str, key_threats: list[dict]) -> list[str]:
     """Get recommendations for threat mitigation based on analysis."""
     
     recommendations = []

@@ -12,6 +12,15 @@ from typing import Any, Dict, List, Optional
 from ...services.elasticsearch_client import ElasticsearchClient
 from ...exceptions import ElasticsearchConnectionError, ElasticsearchQueryError
 from ...utils.logging import get_logger
+from ...config.script_templates import (
+    generate_ip_extraction_script,
+    generate_public_ip_extraction_script,
+    generate_geographic_distribution_script,
+    generate_user_extraction_script,
+    generate_auth_failure_categorization_script,
+    generate_suspicious_activity_categorization_script,
+    generate_attack_method_categorization_script
+)
 
 logger = get_logger(__name__)
 
@@ -20,6 +29,7 @@ async def query_failed_auth_attempts(
     es_client: ElasticsearchClient,
     device: Optional[str] = None,
     hours: int = 24,
+    top_ips: int = 10,
     limit: int = 1000
 ) -> Dict[str, Any]:
     """Query failed authentication attempts from Elasticsearch."""
@@ -73,43 +83,15 @@ async def query_failed_auth_attempts(
             "attacking_ips": {
                 "terms": {
                     "script": {
-                        "source": """
-                            String msg = doc['message.keyword'].value;
-                            if (msg.indexOf(' from ') != -1) {
-                                int fromIndex = msg.indexOf(' from ') + 6;
-                                int endIndex = msg.indexOf(' ', fromIndex);
-                                if (endIndex == -1) endIndex = msg.indexOf(' port', fromIndex);
-                                if (endIndex == -1) endIndex = msg.length();
-                                if (fromIndex < msg.length() && endIndex > fromIndex) {
-                                    return msg.substring(fromIndex, endIndex);
-                                }
-                            }
-                            return 'unknown';
-                        """
+                        "source": generate_ip_extraction_script()
                     },
-                    "size": 50
+                    "size": top_ips
                 }
             },
             "failed_users": {
                 "terms": {
                     "script": {
-                        "source": """
-                            String msg = doc['message.keyword'].value;
-                            if (msg.indexOf('Failed password for ') != -1) {
-                                int userStart = msg.indexOf('Failed password for ') + 20;
-                                int userEnd = msg.indexOf(' from', userStart);
-                                if (userEnd > userStart) {
-                                    return msg.substring(userStart, userEnd);
-                                }
-                            } else if (msg.indexOf('Invalid user ') != -1) {
-                                int userStart = msg.indexOf('Invalid user ') + 13;
-                                int userEnd = msg.indexOf(' from', userStart);
-                                if (userEnd > userStart) {
-                                    return msg.substring(userStart, userEnd);
-                                }
-                            }
-                            return 'unknown';
-                        """
+                        "source": generate_user_extraction_script()
                     },
                     "size": 30
                 }
@@ -123,17 +105,7 @@ async def query_failed_auth_attempts(
             "attack_methods": {
                 "terms": {
                     "script": {
-                        "source": """
-                            String msg = doc['message.keyword'].value;
-                            if (msg.indexOf('Failed password') != -1) {
-                                return 'Password Brute Force';
-                            } else if (msg.indexOf('Invalid user') != -1) {
-                                return 'Username Enumeration';
-                            } else if (msg.indexOf('authentication failure') != -1) {
-                                return 'Authentication Failure';
-                            }
-                            return 'Other';
-                        """
+                        "source": generate_auth_failure_categorization_script()
                     },
                     "size": 10
                 }
@@ -149,9 +121,9 @@ async def query_failed_auth_attempts(
     }
     
     logger.debug(f"Executing failed auth query: {search_query}")
-    response = await es_client._client.search(
+    response = await es_client.search_raw(
+        query=search_query,
         index="syslog-ng",
-        body=search_query,
         timeout="30s"
     )
     
@@ -240,35 +212,15 @@ async def query_suspicious_activity(
             "suspicious_patterns": {
                 "terms": {
                     "script": {
-                        "source": """
-                            String msg = doc['message.keyword'].value.toLowerCase();
-                            String prog = doc['program.keyword'].value;
-                            
-                            if (msg.indexOf('sudo') != -1 && msg.indexOf('command') != -1) {
-                                return 'Privilege Escalation';
-                            } else if (msg.indexOf('wget') != -1 || msg.indexOf('curl') != -1) {
-                                return 'Network Downloads';
-                            } else if (msg.indexOf('nc ') != -1 || msg.indexOf('netcat') != -1) {
-                                return 'Network Tools';
-                            } else if (msg.indexOf('/tmp/') != -1 || msg.indexOf('chmod') != -1) {
-                                return 'File Manipulation';
-                            } else if (prog.equals('systemd') || prog.equals('kernel')) {
-                                return 'System Anomalies';
-                            }
-                            return 'Other Suspicious Activity';
-                        """
+                        "source": generate_suspicious_activity_categorization_script()
                     },
                     "size": 10
                 }
             },
             "off_hours_activity": {
                 "filter": {
-                    "range": {
-                        "timestamp": {
-                            "format": "HH",
-                            "gte": "00",
-                            "lte": "06"
-                        }
+                    "script": {
+                        "source": "doc['timestamp'].value.getHour() >= 0 && doc['timestamp'].value.getHour() <= 6"
                     }
                 },
                 "aggs": {
@@ -297,9 +249,9 @@ async def query_suspicious_activity(
     }
     
     logger.debug(f"Executing suspicious activity query: {search_query}")
-    response = await es_client._client.search(
+    response = await es_client.search_raw(
+        query=search_query,
         index="syslog-ng",
-        body=search_query,
         timeout="30s"
     )
     
@@ -360,22 +312,7 @@ async def query_ip_reputation_data(
             "ip_analysis": {
                 "terms": {
                     "script": {
-                        "source": """
-                            String msg = doc['message.keyword'].value;
-                            if (msg.indexOf(' from ') != -1) {
-                                int fromIndex = msg.indexOf(' from ') + 6;
-                                int endIndex = msg.indexOf(' ', fromIndex);
-                                if (endIndex == -1) endIndex = msg.indexOf(' port', fromIndex);
-                                if (endIndex == -1) endIndex = msg.length();
-                                if (fromIndex < msg.length() && endIndex > fromIndex) {
-                                    String ip = msg.substring(fromIndex, endIndex);
-                                    if (ip.indexOf('.') != -1 && !ip.startsWith('10.') && !ip.startsWith('192.168.') && !ip.startsWith('172.')) {
-                                        return ip;
-                                    }
-                                }
-                            }
-                            return 'unknown';
-                        """
+                        "source": generate_public_ip_extraction_script()
                     },
                     "size": top_ips,
                     "min_doc_count": min_attempts
@@ -384,17 +321,7 @@ async def query_ip_reputation_data(
                     "attack_patterns": {
                         "terms": {
                             "script": {
-                                "source": """
-                                    String msg = doc['message.keyword'].value;
-                                    if (msg.indexOf('Failed password') != -1) {
-                                        return 'Brute Force';
-                                    } else if (msg.indexOf('Invalid user') != -1) {
-                                        return 'User Scanning';
-                                    } else if (msg.indexOf('connection') != -1) {
-                                        return 'Connection Probing';
-                                    }
-                                    return 'Other';
-                                """
+                                "source": generate_attack_method_categorization_script()
                             },
                             "size": 10
                         }
@@ -424,34 +351,7 @@ async def query_ip_reputation_data(
             "geographic_distribution": {
                 "terms": {
                     "script": {
-                        "source": """
-                            String msg = doc['message.keyword'].value;
-                            if (msg.indexOf(' from ') != -1) {
-                                int fromIndex = msg.indexOf(' from ') + 6;
-                                int endIndex = msg.indexOf(' ', fromIndex);
-                                if (endIndex == -1) endIndex = msg.indexOf(' port', fromIndex);
-                                if (endIndex == -1) endIndex = msg.length();
-                                if (fromIndex < msg.length() && endIndex > fromIndex) {
-                                    String ip = msg.substring(fromIndex, endIndex);
-                                    if (ip.indexOf('.') != -1) {
-                                        String firstPart = ip.substring(0, ip.indexOf('.'));
-                                        try {
-                                            int firstOctet = Integer.parseInt(firstPart);
-                                            if (firstOctet >= 1 && firstOctet <= 126) {
-                                                return 'North America/Europe';
-                                            } else if (firstOctet >= 128 && firstOctet <= 191) {
-                                                return 'Asia/Pacific';
-                                            } else {
-                                                return 'Other Regions';
-                                            }
-                                        } catch (Exception e) {
-                                            return 'Unknown';
-                                        }
-                                    }
-                                }
-                            }
-                            return 'Unknown';
-                        """
+                        "source": generate_geographic_distribution_script()
                     },
                     "size": 10
                 }
@@ -460,9 +360,9 @@ async def query_ip_reputation_data(
     }
     
     logger.debug(f"Executing IP reputation query: {search_query}")
-    response = await es_client._client.search(
+    response = await es_client.search_raw(
+        query=search_query,
         index="syslog-ng",
-        body=search_query,
         timeout="30s"
     )
     
@@ -554,9 +454,9 @@ async def query_authentication_timeline(
     }
     
     try:
-        response = await es_client._client.search(
+        response = await es_client.search_raw(
+            query=search_body,
             index="syslog-ng",
-            body=search_body,
             timeout="30s"
         )
         return response

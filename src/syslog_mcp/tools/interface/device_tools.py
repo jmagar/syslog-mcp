@@ -5,7 +5,7 @@ This module provides thin orchestration between MCP tools and the
 device analysis components (data access + analysis + presentation).
 """
 
-from typing import Any, Dict, List, Optional
+# No typing imports needed - using modern union syntax
 
 from ..data_access.device_queries import (
     query_device_health_summary,
@@ -56,9 +56,9 @@ async def get_device_summary(
 
 async def get_error_analysis(
     client,
-    device: Optional[str] = None,
+    device: str | None = None,
     hours: int = 24,
-    severity: Optional[str] = None,
+    severity: str | None = None,
     top_errors: int = 15
 ) -> str:
     """Get system error analysis - thin orchestration layer."""

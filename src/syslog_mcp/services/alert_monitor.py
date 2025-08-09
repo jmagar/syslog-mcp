@@ -4,10 +4,9 @@ Alert monitoring service that evaluates alert rules and sends notifications.
 
 import asyncio
 import json
-import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .elasticsearch_client import ElasticsearchClient
 from .gotify_client import send_alert_notification
@@ -34,7 +33,7 @@ class AlertMonitor:
         """Async context manager exit."""
         await self.es_client.disconnect()
     
-    def load_alert_rules(self) -> List[Dict[str, Any]]:
+    def load_alert_rules(self) -> list[dict[str, Any]]:
         """Load alert rules from storage."""
         rules_file = Path.home() / ".syslog-mcp" / "alert_rules.json"
         
@@ -42,34 +41,34 @@ class AlertMonitor:
             return []
         
         try:
-            with open(rules_file, 'r') as f:
+            with rules_file.open('r') as f:
                 data = json.load(f)
                 return data.get('rules', [])
-        except (json.JSONDecodeError, IOError) as e:
+        except (json.JSONDecodeError, OSError) as e:
             logger.error(f"Failed to load alert rules: {e}")
             return []
     
-    def load_alert_states(self) -> Dict[str, Any]:
+    def load_alert_states(self) -> dict[str, Any]:
         """Load alert states (last triggered times, etc.)."""
         if not self.alert_states_file.exists():
             return {}
         
         try:
-            with open(self.alert_states_file, 'r') as f:
+            with self.alert_states_file.open('r') as f:
                 return json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
+        except (json.JSONDecodeError, OSError) as e:
             logger.warning(f"Failed to load alert states: {e}")
             return {}
     
-    def save_alert_states(self, states: Dict[str, Any]) -> None:
+    def save_alert_states(self, states: dict[str, Any]) -> None:
         """Save alert states to file."""
         try:
-            with open(self.alert_states_file, 'w') as f:
+            with self.alert_states_file.open('w') as f:
                 json.dump(states, f, indent=2)
-        except IOError as e:
+        except OSError as e:
             logger.error(f"Failed to save alert states: {e}")
     
-    async def evaluate_alert_rule(self, rule: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def evaluate_alert_rule(self, rule: dict[str, Any]) -> dict[str, Any] | None:
         """
         Evaluate a single alert rule against current data.
         
@@ -86,7 +85,7 @@ class AlertMonitor:
             query_string = rule.get('query', '')
             
             # Calculate time range
-            end_time = datetime.now(timezone.utc)
+            end_time = datetime.now(datetime.UTC)
             start_time = end_time - timedelta(minutes=time_window_minutes)
             
             # Build Elasticsearch query
@@ -118,10 +117,9 @@ class AlertMonitor:
                     }
                 })
             
-            # Execute search
-            response = await self.es_client._client.search(
-                index="syslog-ng",
-                body=search_query,
+            # Execute search using public API
+            response = await self.es_client.search_raw(
+                query=search_query,
                 timeout="10s"
             )
             
@@ -129,19 +127,21 @@ class AlertMonitor:
             total_hits = response["hits"]["total"]["value"]
             
             logger.debug(
-                f"Alert rule '{rule['name']}' evaluation: {total_hits} hits, threshold: {threshold}",
-                extra={"rule_name": rule["name"], "hits": total_hits, "threshold": threshold}
+                f"Alert rule '{rule.get('name', 'unknown')}' evaluation: {total_hits} hits, threshold: {threshold}",
+                extra={"rule_name": rule.get("name", "unknown"), "hits": total_hits, "threshold": threshold}
             )
             
             # Check if threshold exceeded
             if total_hits >= threshold:
+                rule_name = rule.get("name", "unknown")
                 return {
-                    "rule_name": rule["name"],
-                    "rule_id": rule.get("id", rule["name"]),
+                    "rule_name": rule_name,
+                    "rule_id": rule.get("id", rule_name),
                     "query": query_string,
                     "threshold": threshold,
                     "actual_count": total_hits,
                     "time_window_minutes": time_window_minutes,
+                    "cooldown_minutes": rule.get("cooldown_minutes", 30),
                     "severity": rule.get("severity", "medium"),
                     "description": rule.get("description", ""),
                     "triggered_at": end_time.isoformat(),
@@ -157,8 +157,8 @@ class AlertMonitor:
     
     def should_send_alert(
         self,
-        alert_event: Dict[str, Any],
-        alert_states: Dict[str, Any]
+        alert_event: dict[str, Any],
+        alert_states: dict[str, Any]
     ) -> bool:
         """
         Determine if an alert should be sent based on cooldown and state.
@@ -178,11 +178,11 @@ class AlertMonitor:
                 alert_states[rule_id]["last_triggered"].replace('Z', '+00:00')
             )
             
-            # Default cooldown: 30 minutes
-            cooldown_minutes = 30
+            # Get cooldown from alert event (per-rule configurable)
+            cooldown_minutes = alert_event.get("cooldown_minutes", 30)
             cooldown_delta = timedelta(minutes=cooldown_minutes)
             
-            if datetime.now(timezone.utc) - last_triggered < cooldown_delta:
+            if datetime.now(datetime.UTC) - last_triggered < cooldown_delta:
                 logger.debug(
                     f"Alert rule '{rule_id}' in cooldown period",
                     extra={"rule_id": rule_id, "cooldown_minutes": cooldown_minutes}
@@ -191,7 +191,7 @@ class AlertMonitor:
         
         return True
     
-    async def send_alert(self, alert_event: Dict[str, Any]) -> bool:
+    async def send_alert(self, alert_event: dict[str, Any]) -> bool:
         """
         Send alert notification via Gotify.
         
@@ -253,7 +253,7 @@ class AlertMonitor:
         
         return success
     
-    async def check_all_alerts(self) -> Dict[str, Any]:
+    async def check_all_alerts(self) -> dict[str, Any]:
         """
         Check all alert rules and send notifications if needed.
         
@@ -321,7 +321,7 @@ class AlertMonitor:
         return results
 
 
-async def check_alerts_once() -> Dict[str, Any]:
+async def check_alerts_once() -> dict[str, Any]:
     """
     Convenience function to check alerts once.
     

@@ -119,9 +119,9 @@ async def query_device_health_summary(
     }
     
     logger.debug(f"Executing device health query for {device_name}: {device_query}")
-    response = await es_client._client.search(
+    response = await es_client.search_raw(
+        query=device_query,
         index="syslog-ng",
-        body=device_query,
         timeout="30s"
     )
     
@@ -276,9 +276,9 @@ async def query_error_analysis(
     }
     
     logger.debug(f"Executing error analysis query: {search_query}")
-    response = await es_client._client.search(
+    response = await es_client.search_raw(
+        query=search_query,
         index="syslog-ng",
-        body=search_query,
         timeout="30s"
     )
     
@@ -355,11 +355,6 @@ async def query_device_activity_timeline(
                     "size": 50
                 },
                 "aggs": {
-                    "activity_stats": {
-                        "stats": {
-                            "script": "1"  # Simple count
-                        }
-                    },
                     "last_activity": {
                         "top_hits": {
                             "sort": [{"timestamp": {"order": "desc"}}],
@@ -406,9 +401,9 @@ async def query_device_activity_timeline(
     }
     
     logger.debug(f"Executing activity timeline query: {search_query}")
-    response = await es_client._client.search(
+    response = await es_client.search_raw(
+        query=search_query,
         index="syslog-ng",
-        body=search_query,
         timeout="30s"
     )
     

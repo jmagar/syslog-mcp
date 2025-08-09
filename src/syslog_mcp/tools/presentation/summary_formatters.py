@@ -12,6 +12,12 @@ from ...utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+# Threat level threshold constants (0-100 scale)
+THREAT_CRITICAL = 80  # 80+ = Critical threat requiring immediate action
+THREAT_HIGH = 60      # 60-79 = High threat requiring prompt attention  
+THREAT_MEDIUM = 40    # 40-59 = Medium threat requiring monitoring
+THREAT_LOW = 0        # 0-39 = Low threat level
+
 
 def format_device_summary(analysis_data: Dict[str, Any]) -> str:
     """Format device analysis data into markdown summary."""
@@ -1093,11 +1099,11 @@ def format_alert_rules_summary(rules_data: Dict[str, Any]) -> str:
 def _get_threat_level(threat_score: float) -> str:
     """Convert numeric threat score to threat level."""
     
-    if threat_score >= 80:
+    if threat_score >= THREAT_CRITICAL:
         return "CRITICAL"
-    elif threat_score >= 60:
+    elif threat_score >= THREAT_HIGH:
         return "HIGH"
-    elif threat_score >= 40:
+    elif threat_score >= THREAT_MEDIUM:
         return "MEDIUM"
     else:
         return "LOW"

@@ -59,7 +59,7 @@ def _calculate_activity_statistics(timeline: List[Dict]) -> Dict[str, Any]:
     """Calculate basic activity statistics."""
     
     if not timeline:
-        return {"mean": 0, "max": 0, "min": 0, "total": 0}
+        return {"mean": 0, "max": 0, "min": 0, "total": 0, "periods": 0}
     
     counts = [period.get("log_count", 0) for period in timeline]
     
@@ -82,7 +82,7 @@ def _identify_activity_anomalies(timeline: List[Dict]) -> List[Dict]:
     mean = sum(counts) / len(counts)
     
     anomalies = []
-    for i, period in enumerate(timeline):
+    for period in timeline:
         count = period.get("log_count", 0)
         
         # Detect spikes (> 3x mean) or drops (< 0.1x mean, but not zero)
@@ -166,7 +166,8 @@ def _analyze_activity_error_correlation(
     error_counts = [error_timeline[i].get("error_count", 0) for i in range(min_length)]
     
     # Simple correlation analysis
-    high_activity_periods = sum(1 for count in activity_counts if count > sum(activity_counts) / len(activity_counts))
+    activity_average = sum(activity_counts) / len(activity_counts) if len(activity_counts) > 0 else 0
+    high_activity_periods = sum(1 for count in activity_counts if count > activity_average)
     high_error_periods = sum(1 for count in error_counts if count > 0)
     
     if high_activity_periods > 0:
@@ -392,6 +393,7 @@ def analyze_resource_utilization_patterns(
         utilization_efficiency = avg_activity / max_activity
         utilization_score = utilization_efficiency * 100
     else:
+        utilization_efficiency = 0
         utilization_score = 0
     
     # Analyze activity patterns
@@ -425,11 +427,11 @@ def analyze_resource_utilization_patterns(
         "utilization_grade": utilization_grade,
         "utilization_insight": utilization_insight,
         "pattern_analysis": pattern_analysis,
-        "recommendations": _get_utilization_recommendations(utilization_score, pattern_analysis)
+        "recommendations": _get_utilization_recommendations(utilization_score, pattern_analysis, len(counts))
     }
 
 
-def _get_utilization_recommendations(score: float, pattern_analysis: Dict) -> List[str]:
+def _get_utilization_recommendations(score: float, pattern_analysis: Dict, total_periods: int = 0) -> List[str]:
     """Get recommendations for improving resource utilization."""
     
     recommendations = []
@@ -439,7 +441,7 @@ def _get_utilization_recommendations(score: float, pattern_analysis: Dict) -> Li
         recommendations.append("Investigate causes of low utilization periods")
     
     peak_periods = pattern_analysis.get("peak_utilization_periods", 0)
-    if peak_periods > len(pattern_analysis.get("counts", [])) * 0.3:  # More than 30% peak periods
+    if peak_periods > 0 and total_periods > 0 and peak_periods > total_periods * 0.3:  # More than 30% peak periods
         recommendations.append("Consider load balancing to distribute peak activity")
     
     idle_periods = pattern_analysis.get("low_utilization_periods", 0)

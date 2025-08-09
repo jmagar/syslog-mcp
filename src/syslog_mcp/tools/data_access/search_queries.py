@@ -100,9 +100,9 @@ async def query_logs_by_timerange(
     }
     
     logger.debug(f"Executing timerange query from {start_time} to {end_time}: {search_query}")
-    response = await es_client._client.search(
+    response = await es_client.search_raw(
+        query=search_query,
         index="syslog-ng",
-        body=search_query,
         timeout="30s"
     )
     
@@ -288,9 +288,9 @@ async def query_full_text_search(
     }
     
     logger.debug(f"Executing full text search query '{search_query}': {es_query}")
-    response = await es_client._client.search(
+    response = await es_client.search_raw(
+        query=es_query,
         index="syslog-ng",
-        body=es_query,
         timeout="30s"
     )
     
@@ -372,7 +372,7 @@ async def query_general_log_search(
     # Add level filter if specified
     if level:
         # Support multiple levels separated by commas
-        levels = [l.strip().upper() for l in level.split(",")]
+        levels = [lvl.strip().upper() for lvl in level.split(",")]
         base_query["bool"]["filter"].append({
             "terms": {"level.keyword": levels}
         })
@@ -440,9 +440,9 @@ async def query_general_log_search(
         }
     
     logger.debug(f"Executing general search query: {search_query}")
-    response = await es_client._client.search(
+    response = await es_client.search_raw(
+        query=search_query,
         index="syslog-ng",
-        body=search_query,
         timeout="30s"
     )
     
@@ -553,9 +553,9 @@ async def query_search_correlate(
     }
     
     logger.debug(f"Executing correlation search query: {search_query}")
-    response = await es_client._client.search(
+    response = await es_client.search_raw(
+        query=search_query,
         index="syslog-ng",
-        body=search_query,
         timeout="30s"
     )
     

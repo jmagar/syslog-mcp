@@ -97,6 +97,9 @@ class ElasticsearchConfig(BaseSettings):
     connection_max_age: float = Field(default=300.0, alias="ELASTICSEARCH_CONNECTION_MAX_AGE") # 5 minutes
     enable_connection_pooling: bool = Field(default=True, alias="ELASTICSEARCH_ENABLE_POOLING")
     
+    # Index configuration  
+    default_index: str = Field(default="syslog-*", alias="ELASTICSEARCH_INDEX")
+    
     # Authentication priority and validation
     auth_priority: list[str] = Field(
         default=["api_key", "basic", "none"], 
@@ -1591,6 +1594,70 @@ class ElasticsearchClient:
             es_query["query"]["bool"]["must"].append({"match_all": {}})
         
         return es_query
+
+    async def search_raw(
+        self,
+        query: dict[str, Any],
+        index: str | None = None,
+        timeout: str = "30s"
+    ) -> dict[str, Any]:
+        """
+        Execute a raw Elasticsearch search query.
+        
+        Args:
+            query: Raw Elasticsearch query dict
+            index: Index to search (defaults to config.default_index)
+            timeout: Query timeout
+            
+        Returns:
+            Raw Elasticsearch response dict
+            
+        Raises:
+            ElasticsearchConnectionError: If not connected or request fails
+        """
+        if not self._client:
+            raise ElasticsearchConnectionError("Client not connected")
+            
+        search_index = index or self.config.default_index
+        
+        async def search_operation():
+            return await self._client.search(
+                index=search_index,
+                body=query,
+                timeout=timeout
+            )
+        
+        try:
+            response = await self._execute_with_resilience(
+                search_operation,
+                "raw_search",
+                use_circuit_breaker=True,
+                use_retry=True
+            )
+            return response
+        except Exception as e:
+            error_msg = f"Raw search query failed: {str(e)}"
+            self.logger.error(error_msg, extra={
+                "error": str(e),
+                "query": query,
+                "index": search_index
+            })
+            if "timeout" in str(e).lower():
+                from ..exceptions import ElasticsearchTimeoutError
+                raise ElasticsearchTimeoutError(
+                    error_msg,
+                    original_error=e,
+                    query=query,
+                    index=search_index
+                ) from e
+            else:
+                from ..exceptions import ElasticsearchQueryError
+                raise ElasticsearchQueryError(
+                    error_msg,
+                    original_error=e,
+                    query=query,
+                    index=search_index
+                ) from e
     
     def _parse_elasticsearch_hit(self, hit: dict[str, Any]) -> "LogEntry":
         """

@@ -2,9 +2,8 @@
 Gotify client for sending alert notifications.
 """
 
-import asyncio
 import os
-from typing import Any, Dict, Optional
+from typing import Optional
 import aiohttp
 from ..utils.logging import get_logger
 
