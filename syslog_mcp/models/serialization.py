@@ -226,7 +226,7 @@ class ModelSerializer:
         if additional_patterns:
             exclude_patterns.update(additional_patterns)
 
-        filtered = {}
+        filtered: dict[str, Any] = {}
         for key, value in data.items():
             key_lower = key.lower()
 
@@ -302,9 +302,9 @@ class ModelDeserializer:
             data = json.loads(json_str)
             return self.from_dict(model_class, data, strict=strict)
         except json.JSONDecodeError as e:
-            raise DeserializationError(f"Invalid JSON: {e}")
+            raise DeserializationError(f"Invalid JSON: {e}") from e
         except Exception as e:
-            raise DeserializationError(f"Failed to deserialize: {e}")
+            raise DeserializationError(f"Failed to deserialize: {e}") from e
 
     def from_elasticsearch_doc(
         self,

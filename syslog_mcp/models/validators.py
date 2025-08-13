@@ -129,8 +129,8 @@ def validate_ip_address_list(
                     # Try IPv6
                     ip_obj = IPv6Address(ip)
                     ip_str = str(ip_obj)
-                except AddressValueError:
-                    raise ValueError(f"Invalid IP address: {ip}")
+                except AddressValueError as e:
+                    raise ValueError(f"Invalid IP address: {ip}") from e
         else:
             raise ValueError(f"Invalid IP address type: {type(ip)}")
 

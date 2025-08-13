@@ -174,7 +174,7 @@ def analyze_export_data(
             try:
                 hour_key = datetime.fromisoformat(timestamp.replace("Z", "+00:00")).strftime("%Y-%m-%d %H:00")
                 time_distribution[hour_key] += 1
-            except:
+            except (ValueError, TypeError):
                 pass
 
     return {
@@ -211,7 +211,7 @@ def write_logs_to_json(raw_logs: list[dict[str, Any]], export_path: str) -> dict
             "logs": raw_logs
         }
 
-        with open(export_path, 'w', encoding='utf-8') as f:
+        with Path(export_path).open('w', encoding='utf-8') as f:
             json.dump(export_data, f, indent=2, ensure_ascii=False)
 
         # Get file size
@@ -251,7 +251,7 @@ def write_logs_to_csv(raw_logs: list[dict[str, Any]], export_path: str) -> dict[
         # Sort fieldnames for consistent column order
         fieldnames = sorted(fieldnames_set)
 
-        with open(export_path, 'w', newline='', encoding='utf-8') as f:
+        with Path(export_path).open('w', newline='', encoding='utf-8') as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
 

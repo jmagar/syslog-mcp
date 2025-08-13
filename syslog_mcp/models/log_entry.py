@@ -366,8 +366,8 @@ class LogEntry(BaseModel):
                 try:
                     # Try IPv6
                     return IPv6Address(v)
-                except AddressValueError:
-                    raise ValueError(f"Invalid IP address format: {v}")
+                except AddressValueError as e:
+                    raise ValueError(f"Invalid IP address format: {v}") from e
 
         raise ValueError(f"Invalid IP address type: {type(v)}")
 

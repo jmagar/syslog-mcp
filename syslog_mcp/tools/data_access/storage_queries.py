@@ -123,7 +123,7 @@ def load_alert_rules() -> dict[str, Any]:
         return {"rules": {}, "created_at": datetime.utcnow().isoformat()}
 
     try:
-        with open(ALERT_RULES_FILE) as f:
+        with Path(ALERT_RULES_FILE).open() as f:
             data = json.load(f)
             return data if isinstance(data, dict) else {"rules": {}, "created_at": datetime.utcnow().isoformat()}
     except Exception as e:
@@ -137,7 +137,7 @@ def save_alert_rules_data(data: dict[str, Any]) -> bool:
 
     try:
         data["updated_at"] = datetime.utcnow().isoformat()
-        with open(ALERT_RULES_FILE, 'w') as f:
+        with Path(ALERT_RULES_FILE).open('w') as f:
             json.dump(data, f, indent=2)
         return True
     except Exception as e:

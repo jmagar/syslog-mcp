@@ -7,10 +7,9 @@ health information, and error responses from MCP server tools.
 
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel, Field, computed_field
-from pydantic.types import confloat, conint
 
 from .device import DeviceInfo
 from .log_entry import LogEntry
@@ -306,7 +305,7 @@ class LogSearchResult(BaseModel):
         if self.total_hits == 0:
             return 100.0
 
-        returned = self.offset + int(self.result_count)
+        returned: int = self.offset + cast(int, self.result_count)
         return float(min((returned / self.total_hits) * 100.0, 100.0))
 
 

@@ -383,7 +383,7 @@ def format_auth_timeline_summary(analysis_data: dict[str, Any]) -> str:
             try:
                 dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
                 time_str = dt.strftime("%m-%d %H:%M")
-            except:
+            except (ValueError, TypeError, AttributeError):
                 time_str = timestamp[:16]
 
             markdown += f"{time_str:19} | {total:8} | {success:7} | {failed:6} | {success_rate:7.1f}%\n"
@@ -404,7 +404,7 @@ def format_auth_timeline_summary(analysis_data: dict[str, Any]) -> str:
             try:
                 dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
                 time_str = dt.strftime("%Y-%m-%d %H:%M")
-            except:
+            except (ValueError, TypeError, AttributeError):
                 time_str = timestamp
 
             markdown += f"{i}. **{time_str}** - {attempts:,} attempts ({failed:,} failed, {success_rate:.1f}% success, {intensity}x intensity)\n"
@@ -579,7 +579,7 @@ def format_error_analysis_summary(analysis_data: dict[str, Any]) -> str:
             try:
                 dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
                 time_str = dt.strftime("%Y-%m-%d %H:%M")
-            except:
+            except (ValueError, TypeError, AttributeError):
                 time_str = timestamp
 
             markdown += f"- **{time_str}** - {error_count:,} errors\n"
@@ -676,7 +676,7 @@ def format_search_results_summary(
             try:
                 dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
                 time_str = dt.strftime("%m-%d %H:%M")
-            except:
+            except (ValueError, TypeError, AttributeError):
                 time_str = timestamp[:16] if timestamp else "Unknown"
 
             if search_type == "timerange":

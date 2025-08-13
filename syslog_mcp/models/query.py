@@ -7,10 +7,9 @@ and search parameters used by the MCP server tools.
 
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any
+from typing import Annotated, Any
 
 from pydantic import BaseModel, Field, computed_field, field_validator
-from pydantic.types import confloat, conint
 
 from .device import DeviceType
 from .log_entry import LogLevel
@@ -230,7 +229,7 @@ class LogSearchQuery(BaseModel):
         description="Maximum number of results to return"
     )
 
-    offset: conint(ge=0) = Field(
+    offset: Annotated[int, Field(ge=0)] = Field(
         0,
         description="Number of results to skip"
     )
@@ -284,13 +283,11 @@ class LogSearchQuery(BaseModel):
         return v
 
     @computed_field
-    @property
     def has_time_filter(self) -> bool:
         """Check if query has any time-based filtering."""
         return self.time_range is not None
 
     @computed_field
-    @property
     def estimated_result_size(self) -> str:
         """Estimate result size category for resource planning."""
         if self.limit <= 100:
@@ -332,12 +329,12 @@ class DeviceSearchQuery(BaseModel):
     )
 
     # Health filtering
-    min_health_score: confloat(ge=0.0, le=1.0) = Field(
+    min_health_score: Annotated[float, Field(ge=0.0, le=1.0)] = Field(
         0.0,
         description="Minimum health score threshold"
     )
 
-    max_health_score: confloat(ge=0.0, le=1.0) = Field(
+    max_health_score: Annotated[float, Field(ge=0.0, le=1.0)] = Field(
         1.0,
         description="Maximum health score threshold"
     )
@@ -349,12 +346,12 @@ class DeviceSearchQuery(BaseModel):
     )
 
     # Activity filtering
-    active_within_hours: confloat(gt=0.0) | None = Field(
+    active_within_hours: Annotated[float, Field(gt=0.0)] | None = Field(
         None,
         description="Include only devices active within N hours"
     )
 
-    min_log_count: conint(ge=0) = Field(
+    min_log_count: Annotated[int, Field(ge=0)] = Field(
         0,
         description="Minimum total log count"
     )
@@ -366,12 +363,12 @@ class DeviceSearchQuery(BaseModel):
     )
 
     # Sorting and pagination
-    limit: conint(ge=1, le=1000) = Field(
+    limit: Annotated[int, Field(ge=1, le=1000)] = Field(
         50,
         description="Maximum number of devices to return"
     )
 
-    offset: conint(ge=0) = Field(
+    offset: Annotated[int, Field(ge=0)] = Field(
         0,
         description="Number of devices to skip"
     )
@@ -452,7 +449,7 @@ class SearchContext(BaseModel):
         description="Unique query identifier for tracking"
     )
 
-    cache_ttl: conint(ge=0, le=3600) = Field(
+    cache_ttl: Annotated[int, Field(ge=0, le=3600)] = Field(
         300,
         description="Cache time-to-live in seconds"
     )

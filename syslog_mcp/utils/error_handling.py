@@ -7,7 +7,7 @@ and graceful degradation patterns inspired by FastMCP middleware.
 
 import time
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from datetime import datetime
 from functools import wraps
 from typing import Any
@@ -195,7 +195,7 @@ class ErrorRecoveryManager:
 
     def __init__(self) -> None:
         self.recovery_attempts: dict[str, int] = {}
-        self.recovery_strategies: dict[ErrorCategory, Callable[..., dict[str, Any] | None]] = {
+        self.recovery_strategies: dict[ErrorCategory, Callable[..., Coroutine[Any, Any, dict[str, Any] | None]]] = {
             ErrorCategory.CONNECTION: self._recover_connection_error,
             ErrorCategory.TIMEOUT: self._recover_timeout_error,
             ErrorCategory.RATE_LIMIT: self._recover_rate_limit_error,
@@ -511,7 +511,7 @@ def error_handler(
                 }
 
                 structured_error = await middleware.handle_error(e, operation, context)
-                raise structured_error
+                raise structured_error from e
 
         return wrapper
     return decorator
@@ -537,7 +537,7 @@ def create_error_context(
     Returns:
         Standardized context dictionary
     """
-    context = {
+    context: dict[str, Any] = {
         "operation": operation,
         "timestamp": datetime.utcnow().isoformat(),
     }
@@ -545,7 +545,7 @@ def create_error_context(
     if index:
         context["index"] = index
     if query:
-        context["query"] = dict(query)
+        context["query"] = query
     if host:
         context["host"] = host
 

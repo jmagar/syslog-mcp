@@ -8,7 +8,7 @@ configuration handling, and proper resource cleanup patterns.
 import asyncio
 import random
 import time
-from collections.abc import AsyncGenerator, Callable, Coroutine
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, TypeVar, cast
@@ -33,14 +33,14 @@ from ..exceptions import (
     ElasticsearchSSLError,
     RetryableElasticsearchError,
 )
+from ..models.log_entry import LogEntry
+from ..models.query import LogSearchQuery
+from ..models.response import ExecutionMetrics, LogSearchResult
 from ..utils.error_handling import (
     ErrorMiddleware,
     GracefulDegradationManager,
 )
 from ..utils.logging import get_logger
-from ..models.log_entry import LogEntry
-from ..models.query import LogSearchQuery
-from ..models.response import LogSearchResult, ExecutionMetrics
 
 T = TypeVar('T')
 
@@ -554,7 +554,7 @@ class ElasticsearchClient:
                     failure_count=self._circuit_breaker.failure_count,
                     reset_timeout=self._circuit_breaker.reset_timeout,
                 )
-                raise structured_error
+                raise structured_error from None
         else:
             return await execute_operation()
 
@@ -1410,7 +1410,7 @@ class ElasticsearchClient:
             raise ElasticsearchConnectionError("Client not connected")
 
         # Import here to avoid circular import
-        from ..models.response import ExecutionMetrics, LogSearchResult, ResponseStatus
+        from ..models.response import LogSearchResult, ResponseStatus
 
         start_time = time.time()
 
@@ -1465,7 +1465,7 @@ class ElasticsearchClient:
             shards_successful = shards.get("successful", 1)
             shards_failed = shards.get("failed", 0)
             timed_out = response.get("timed_out", False)
-            
+
             metrics = ExecutionMetrics(
                 execution_time_ms=execution_time,
                 query_time_ms=took_ms,
@@ -1481,7 +1481,7 @@ class ElasticsearchClient:
             # Calculate next offset if there are more results
             next_offset = query.offset + len(logs) if (query.offset + len(logs)) < total_hits else None
             max_score = hits.get("max_score")
-            
+
             result = LogSearchResult(
                 status=ResponseStatus.SUCCESS,
                 total_hits=total_hits,

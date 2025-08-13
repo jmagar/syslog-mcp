@@ -10,10 +10,9 @@ import re
 from datetime import UTC, datetime
 from enum import Enum
 from ipaddress import AddressValueError, IPv4Address, IPv6Address
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
-from pydantic.types import confloat, conint, constr
 
 
 class DeviceStatus(str, Enum):
@@ -317,8 +316,8 @@ class DeviceInfo(BaseModel):
                         # Try IPv6
                         ip_obj = IPv6Address(ip)
                         ip_str = str(ip_obj)
-                    except AddressValueError:
-                        raise ValueError(f"Invalid IP address: {ip}")
+                    except AddressValueError as e:
+                        raise ValueError(f"Invalid IP address: {ip}") from e
             else:
                 raise ValueError(f"Invalid IP address type: {type(ip)}")
 
@@ -373,7 +372,7 @@ class DeviceInfo(BaseModel):
         health_factors.append(activity_score)
 
         # Error rate factor (1.0 - error_rate)
-        error_rate_value = float(self.log_activity.error_rate)
+        error_rate_value: float = cast(float, self.log_activity.error_rate)
         error_score = 1.0 - min(error_rate_value, 1.0)
         health_factors.append(error_score)
 
@@ -390,7 +389,7 @@ class DeviceInfo(BaseModel):
         self.health_score = sum(score * weight for score, weight in zip(health_factors, weights, strict=False))
 
         # Determine status from health score and activity
-        hours_since_last = float(self.log_activity.hours_since_last_log)
+        hours_since_last: float = cast(float, self.log_activity.hours_since_last_log)
         self.status = DeviceStatus.from_health_score(self.health_score, hours_since_last)
 
         # Generate status reason
@@ -408,7 +407,7 @@ class DeviceInfo(BaseModel):
         health_factors.append(activity_score)
 
         # Error rate factor (1.0 - error_rate)
-        error_rate_value = float(self.log_activity.error_rate)
+        error_rate_value: float = cast(float, self.log_activity.error_rate)
         error_score = 1.0 - min(error_rate_value, 1.0)
         health_factors.append(error_score)
 
@@ -425,7 +424,7 @@ class DeviceInfo(BaseModel):
         self.health_score = sum(score * weight for score, weight in zip(health_factors, weights, strict=False))
 
         # Determine status from health score and activity
-        hours_since_last = float(self.log_activity.hours_since_last_log)
+        hours_since_last: float = cast(float, self.log_activity.hours_since_last_log)
         self.status = DeviceStatus.from_health_score(self.health_score, hours_since_last)
 
         # Generate status reason
@@ -449,7 +448,7 @@ class DeviceInfo(BaseModel):
 
     def _calculate_recency_score(self) -> float:
         """Calculate recency health score based on time since last log."""
-        hours_since = float(self.log_activity.hours_since_last_log)
+        hours_since: float = cast(float, self.log_activity.hours_since_last_log)
 
         if hours_since == float('inf'):
             return 0.0
@@ -480,9 +479,9 @@ class DeviceInfo(BaseModel):
 
         elif self.status == DeviceStatus.WARNING:
             reasons = []
-            if float(self.log_activity.error_rate) > 0.1:
-                reasons.append(f"{float(self.log_activity.error_rate):.1%} error rate")
-            hours_since = float(self.log_activity.hours_since_last_log)
+            if cast(float, self.log_activity.error_rate) > 0.1:
+                reasons.append(f"{cast(float, self.log_activity.error_rate):.1%} error rate")
+            hours_since: float = cast(float, self.log_activity.hours_since_last_log)
             if hours_since > 6:
                 reasons.append(f"{hours_since:.1f}h since last log")
             if self.health_score < 0.7:
@@ -491,17 +490,17 @@ class DeviceInfo(BaseModel):
 
         elif self.status == DeviceStatus.CRITICAL:
             reasons = []
-            if float(self.log_activity.error_rate) > 0.3:
-                reasons.append(f"high error rate ({float(self.log_activity.error_rate):.1%})")
-            hours_since = float(self.log_activity.hours_since_last_log)
-            if hours_since > 12:
-                reasons.append(f"{hours_since:.1f}h inactive")
+            if cast(float, self.log_activity.error_rate) > 0.3:
+                reasons.append(f"high error rate ({cast(float, self.log_activity.error_rate):.1%})")
+            hours_since_crit: float = cast(float, self.log_activity.hours_since_last_log)
+            if hours_since_crit > 12:
+                reasons.append(f"{hours_since_crit:.1f}h inactive")
             if self.health_score < 0.4:
                 reasons.append(f"very low health ({self.health_score:.2f})")
             return f"Critical: {', '.join(reasons) if reasons else 'severe issues detected'}"
 
         elif self.status == DeviceStatus.OFFLINE:
-            hours = float(self.log_activity.hours_since_last_log)
+            hours: float = cast(float, self.log_activity.hours_since_last_log)
             if hours == float('inf'):
                 return "Offline: no log activity recorded"
             return f"Offline: {hours:.1f} hours since last activity"
@@ -572,7 +571,7 @@ class DeviceInfo(BaseModel):
         Returns:
             True if device has recent activity
         """
-        hours_since = float(self.log_activity.hours_since_last_log)
+        hours_since: float = cast(float, self.log_activity.hours_since_last_log)
         return hours_since <= hours_threshold
 
     def get_criticality_score(self) -> float:
@@ -623,8 +622,8 @@ class DeviceInfo(BaseModel):
             "device_type": self.device_type.value,
             "primary_ip": str(self.get_primary_ip()) if self.get_primary_ip() else None,
             "total_logs": self.log_activity.total_logs,
-            "error_rate": round(float(self.log_activity.error_rate), 3),
-            "hours_since_last_log": round(float(self.log_activity.hours_since_last_log), 1),
+            "error_rate": round(cast(float, self.log_activity.error_rate), 3),
+            "hours_since_last_log": round(cast(float, self.log_activity.hours_since_last_log), 1),
             "last_updated": self.last_updated.isoformat(),
             "status_reason": self.status_reason
         }

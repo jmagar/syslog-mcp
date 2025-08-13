@@ -412,7 +412,7 @@ def _extract_temporal_features(timeline_data: list[dict[str, Any]]) -> dict[str,
             last_dt = datetime.fromisoformat(last_timestamp.replace("Z", "+00:00"))
             duration = last_dt - first_dt
             features["duration_hours"] = round(duration.total_seconds() / 3600, 1)
-        except:
+        except (ValueError, TypeError, AttributeError):
             pass
 
     return features

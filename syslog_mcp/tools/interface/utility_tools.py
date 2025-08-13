@@ -46,28 +46,28 @@ async def generate_daily_report_interface(
             await get_device_summary(client, "all", 24)
             # Parse the result to extract metrics (simplified for now)
             device_summary = {"total_events": 0, "active_devices": []}
-        except:
+        except Exception:
             pass
 
         try:
             # Get auth summary
             await get_failed_auth_summary(client, None, 24, 10)
             auth_summary = {"total_attacks": 0, "attacking_ips": []}
-        except:
+        except Exception:
             pass
 
         try:
             # Get security summary
             await get_suspicious_activity(client, None, 24, "medium")
             security_summary = {"suspicious_events": 0}
-        except:
+        except Exception:
             pass
 
         try:
             # Get error summary
             await get_error_analysis(client, None, 24, None, 15)
             error_summary = {"total_errors": 0, "error_breakdown": []}
-        except:
+        except Exception:
             pass
 
         # Analysis Layer - pure business logic

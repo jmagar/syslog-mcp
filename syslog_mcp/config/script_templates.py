@@ -5,11 +5,10 @@ This module provides configuration-driven Elasticsearch script generation
 to improve maintainability and allow for easier updates to categorization rules.
 """
 
-from typing import Any, Dict, List
-
+from typing import Any
 
 # Authentication failure categorization patterns
-AUTH_FAILURE_PATTERNS: Dict[str, Dict[str, Any]] = {
+AUTH_FAILURE_PATTERNS: dict[str, dict[str, Any]] = {
     "password_brute_force": {
         "patterns": ["Failed password"],
         "category": "Password Brute Force"
@@ -30,7 +29,7 @@ AUTH_FAILURE_PATTERNS: Dict[str, Dict[str, Any]] = {
 
 # Suspicious activity categorization patterns (NON-AUTH ONLY)
 # Note: Authentication-related patterns moved to auth analysis to eliminate overlap
-SUSPICIOUS_ACTIVITY_PATTERNS: Dict[str, Dict[str, Any]] = {
+SUSPICIOUS_ACTIVITY_PATTERNS: dict[str, dict[str, Any]] = {
     "privilege_escalation": {
         "patterns": ["sudo", "command"],
         "category": "Privilege Escalation",
@@ -70,7 +69,7 @@ SUSPICIOUS_ACTIVITY_PATTERNS: Dict[str, Dict[str, Any]] = {
 }
 
 # Attack method categorization patterns
-ATTACK_METHOD_PATTERNS: Dict[str, Dict[str, Any]] = {
+ATTACK_METHOD_PATTERNS: dict[str, dict[str, Any]] = {
     "brute_force": {
         "patterns": ["Failed password"],
         "category": "Brute Force"
@@ -106,17 +105,17 @@ GEOGRAPHIC_MAPPING = {
 }
 
 # Private IP ranges to filter out
-PRIVATE_IP_RANGES: List[str] = ["10.", "192.168.", "172.16.", "172.17.", "172.18.", "172.19.", "172.20.", "172.21.", "172.22.", "172.23.", "172.24.", "172.25.", "172.26.", "172.27.", "172.28.", "172.29.", "172.30.", "172.31."]
+PRIVATE_IP_RANGES: list[str] = ["10.", "192.168.", "172.16.", "172.17.", "172.18.", "172.19.", "172.20.", "172.21.", "172.22.", "172.23.", "172.24.", "172.25.", "172.26.", "172.27.", "172.28.", "172.29.", "172.30.", "172.31."]
 
 
 def generate_auth_failure_categorization_script() -> str:
     """Generate Elasticsearch script for categorizing authentication failures."""
 
-    conditions: List[str] = []
+    conditions: list[str] = []
     for _pattern_key, pattern_data in AUTH_FAILURE_PATTERNS.items():
         pattern_data = pattern_data  # Type hint for mypy
         if pattern_data["patterns"]:  # Skip 'other' category
-            pattern_checks: List[str] = []
+            pattern_checks: list[str] = []
             for pattern in pattern_data["patterns"]:
                 pattern_checks.append(f"msg.indexOf('{pattern}') != -1")
 
@@ -135,19 +134,19 @@ def generate_auth_failure_categorization_script() -> str:
 def generate_suspicious_activity_categorization_script() -> str:
     """Generate Elasticsearch script for categorizing suspicious activities."""
 
-    conditions: List[str] = []
+    conditions: list[str] = []
     for _pattern_key, pattern_data in SUSPICIOUS_ACTIVITY_PATTERNS.items():
         pattern_data = pattern_data  # Type hint for mypy
         if pattern_data["patterns"]:  # Skip 'other' category
             if pattern_data.get("program_based"):
                 # Special handling for program-based patterns
-                program_checks: List[str] = []
+                program_checks: list[str] = []
                 for pattern in pattern_data["patterns"]:
                     program_checks.append(f"prog.equals('{pattern}')")
                 condition = f"if ({' || '.join(program_checks)}) {{ return '{pattern_data['category']}'; }}"
             else:
                 # Regular message-based patterns
-                pattern_checks: List[str] = []
+                pattern_checks: list[str] = []
                 for pattern in pattern_data["patterns"]:
                     pattern_checks.append(f"msg.indexOf('{pattern}') != -1")
                 condition = f"if ({' || '.join(pattern_checks)}) {{ return '{pattern_data['category']}'; }}"
@@ -168,11 +167,11 @@ def generate_suspicious_activity_categorization_script() -> str:
 def generate_attack_method_categorization_script() -> str:
     """Generate Elasticsearch script for categorizing attack methods."""
 
-    conditions: List[str] = []
+    conditions: list[str] = []
     for _pattern_key, pattern_data in ATTACK_METHOD_PATTERNS.items():
         pattern_data = pattern_data  # Type hint for mypy
         if pattern_data["patterns"]:  # Skip 'other' category
-            pattern_checks: List[str] = []
+            pattern_checks: list[str] = []
             for pattern in pattern_data["patterns"]:
                 pattern_checks.append(f"msg.indexOf('{pattern}') != -1")
 

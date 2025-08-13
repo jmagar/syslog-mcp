@@ -164,7 +164,7 @@ async def syslog_alerts_interface(
         # Ensure name and query are strings
         if not isinstance(name, str) or not isinstance(query, str):
             raise ValueError("Name and query must be strings")
-            
+
         return await create_alert_rule_interface(
             es_client, name=name, query=query, threshold=threshold,
             time_window=time_window, severity=severity, description=description
@@ -227,7 +227,7 @@ async def syslog_search_interface(
 
         if not all([start_time, end_time]):
             raise ValueError("Timerange search requires start_time and end_time parameters")
-            
+
         # Ensure start_time and end_time are strings
         if not isinstance(start_time, str) or not isinstance(end_time, str):
             raise ValueError("start_time and end_time must be strings")
@@ -260,7 +260,7 @@ async def syslog_search_interface(
 
         if not all([query, correlation_fields]):
             raise ValueError("Correlation search requires query and correlation_fields parameters")
-            
+
         # Ensure query and correlation_fields are strings
         if not isinstance(query, str) or not isinstance(correlation_fields, str):
             raise ValueError("query and correlation_fields must be strings")
