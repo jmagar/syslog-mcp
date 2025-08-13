@@ -101,3 +101,6 @@ cython_debug/
 temp/
 tmp/
 .mcp_cache/
+
+# Runtime files
+*.pid

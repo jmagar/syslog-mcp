@@ -32,6 +32,8 @@ dependencies = [
     "asyncio-throttle>=1.0.0",
     "structlog>=23.0.0",
     "python-dotenv>=1.0.0",
+    "mypy>=1.17.1",
+    "types-python-dateutil>=2.9.0.20250809",
 ]
 
 [project.optional-dependencies]

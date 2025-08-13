@@ -7,7 +7,7 @@ A comprehensive Model Context Protocol (MCP) server for advanced syslog analysis
 ### Core Analysis Tools
 
 - **Device Health Monitoring** - Comprehensive device status and activity analysis
-- **Security Analysis** - Failed authentication detection, suspicious activity monitoring, IP reputation analysis
+- **Security Analysis** - Failed authentication detection, suspicious activity monitoring, and timeline analysis
 - **System Error Analysis** - Error pattern detection and troubleshooting recommendations
 - **Authentication Timeline** - Track authentication events and patterns over time
 
@@ -68,13 +68,12 @@ Built with **ultra-focused modular architecture**:
 - **Maintainable** - Changes contained to relevant modules
 - **Extensible** - New tools follow established patterns
 
-## 📋 Available MCP Tools (18 Total)
+## 📋 Available MCP Tools (16 Total)
 
-### 🛡️ Security Analysis (4 tools)
+### 🛡️ Security Analysis (3 tools)
 
 - `failed_auth_summary_tool` - Analyze failed authentication attempts
 - `suspicious_activity_tool` - Detect suspicious system activities  
-- `ip_reputation_tool` - Analyze IP addresses and attack patterns
 - `auth_timeline_tool` - Track authentication events over time
 
 ### 📱 Device Monitoring (2 tools)

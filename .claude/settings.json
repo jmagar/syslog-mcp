@@ -97,8 +97,8 @@
       "Bash(* | sort *)",
       "Bash(* | uniq *)",
       "Bash(PYTHONPATH=* *)",
-      "Bash(PYTHONPATH=src uv run pytest tests/test_server.py -v)",
-      "Bash(PYTHONPATH=src uv run mypy src/)",
+      "Bash(uv run pytest tests/test_server.py -v)",
+      "Bash(uv run mypy syslog_mcp/)",
       "mcp__*"
     ],
     "deny": [
@@ -120,6 +120,6 @@
     ]
   },
   "env": {
-    "PYTHONPATH": "src"
+    "PYTHONPATH": "."
   }
 }

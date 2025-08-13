@@ -114,7 +114,7 @@ src/syslog_mcp/tools/
 ## Key Files Structure
 
 ```
-src/syslog_mcp/
+syslog_mcp/
 ├── main.py                      # MCP server entry point with FastMCP setup
 ├── services/
 │   └── elasticsearch_client.py # Async ES client with connection management
@@ -144,7 +144,7 @@ uv sync                          # Install all dependencies
 uv add package-name             # Add new dependency
 
 # Development server
-uv run python main.py           # Run MCP server (hot reload enabled)
+uv run python -m syslog_mcp     # Run MCP server (hot reload enabled)
 
 # Testing
 uv run pytest                   # Run all tests
@@ -153,13 +153,13 @@ uv run pytest -v               # Verbose test output
 uv run pytest --cov            # Test coverage report
 
 # Code quality
-uv run mypy src/                # Static type checking
-uv run black src/               # Format code
-uv run ruff check --fix src/    # Lint and auto-fix
-uv run ruff check src/          # Lint only (no auto-fix)
+uv run mypy syslog_mcp/         # Static type checking
+uv run black syslog_mcp/        # Format code
+uv run ruff check --fix syslog_mcp/  # Lint and auto-fix
+uv run ruff check syslog_mcp/   # Lint only (no auto-fix)
 
 # Performance testing
-uv run python -m cProfile main.py  # Profile performance
+uv run python -m cProfile -m syslog_mcp  # Profile performance
 ```
 
 ## Infrastructure & Configuration
@@ -197,7 +197,7 @@ ELASTICSEARCH_RETRY_TIMEOUT=60
   "mcpServers": {
     "syslog": {
       "command": "uv",
-      "args": ["run", "python", "/path/to/syslog-mcp/main.py"],
+      "args": ["run", "python", "-m", "syslog_mcp"],
       "env": {
         "ELASTICSEARCH_HOST": "squirts:9200"
       }
@@ -403,13 +403,13 @@ async def query_function(
 ### Debug Commands
 ```bash
 # Enable debug logging
-LOG_LEVEL=DEBUG uv run python main.py
+LOG_LEVEL=DEBUG uv run python -m syslog_mcp
 
 # Test Elasticsearch connection
-uv run python -c "from src.syslog_mcp.services.elasticsearch_client import ElasticsearchClient; import asyncio; asyncio.run(ElasticsearchClient().test_connection())"
+uv run python -c "from syslog_mcp.services.elasticsearch_client import ElasticsearchClient; import asyncio; asyncio.run(ElasticsearchClient().test_connection())"
 
 # Validate configuration
-uv run python -c "from src.syslog_mcp.config.elasticsearch import validate_config; validate_config()"
+uv run python -c "from syslog_mcp.config.elasticsearch import validate_config; validate_config()"
 ```
 
 ## Task Master AI Instructions
