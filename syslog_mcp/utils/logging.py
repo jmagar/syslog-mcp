@@ -9,6 +9,7 @@ import json
 import logging
 import logging.handlers
 import os
+import sys
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,6 +17,73 @@ from typing import Any
 from uuid import uuid4
 
 import structlog
+
+
+class RestartingFileHandler(logging.FileHandler):
+    """
+    File handler that restarts (truncates) the log file when it reaches max size
+    instead of rotating with backup files.
+    """
+
+    def __init__(self, filename: str, max_bytes: int = 10 * 1024 * 1024, mode: str = 'a', encoding: str | None = None, delay: bool = False, errors: str | None = None) -> None:
+        """
+        Initialize the handler.
+        
+        Args:
+            filename: Log file path
+            max_bytes: Maximum file size before restarting (default: 10MB)
+            mode: File open mode
+            encoding: File encoding
+            delay: Whether to delay file opening
+            errors: How to handle encoding errors
+        """
+        super().__init__(filename, mode, encoding, delay, errors)
+        self.max_bytes = max_bytes
+        
+    def emit(self, record: logging.LogRecord) -> None:
+        """
+        Emit a record, checking file size and restarting if necessary.
+        """
+        try:
+            # Check if we need to restart the file
+            if self.should_restart():
+                self.restart_file()
+            
+            # Emit the record normally
+            super().emit(record)
+        except Exception:
+            self.handleError(record)
+            
+    def should_restart(self) -> bool:
+        """
+        Check if the file should be restarted based on size.
+        """
+        if not os.path.exists(self.baseFilename):
+            return False
+            
+        try:
+            return os.path.getsize(self.baseFilename) >= self.max_bytes
+        except OSError:
+            return False
+            
+    def restart_file(self) -> None:
+        """
+        Restart the log file by closing, truncating, and reopening.
+        """
+        try:
+            # Close current stream
+            if self.stream:
+                self.stream.close()
+            
+            # Truncate the file by opening in write mode
+            with open(self.baseFilename, 'w', encoding=self.encoding, errors=self.errors) as f:
+                f.write(f"=== Log file restarted at {datetime.now(UTC).isoformat()} ===\n")
+            
+            # Reopen in append mode
+            self.stream = self._open()
+        except Exception as e:
+            # If restart fails, continue with existing stream
+            print(f"Failed to restart log file: {e}", file=sys.stderr)
 
 
 class CorrelationIDProcessor:
@@ -111,7 +179,6 @@ def configure_logging(
     enable_console: bool = True,
     enable_file: bool = True,
     max_file_size: int = 10 * 1024 * 1024,  # 10MB
-    backup_count: int = 5,
     enable_json_logging: bool = True,
     verbose: bool = False,
 ) -> None:
@@ -123,8 +190,7 @@ def configure_logging(
         log_file: Path to log file (defaults to logs/syslog-mcp.log)
         enable_console: Enable console logging
         enable_file: Enable file logging
-        max_file_size: Maximum size of log file before rotation
-        backup_count: Number of backup files to keep
+        max_file_size: Maximum size of log file before restarting (truncating)
         enable_json_logging: Enable JSON structured logging
         verbose: Enable verbose/debug logging
     """
@@ -167,10 +233,10 @@ def configure_logging(
             )
         handlers.append(console_handler)
 
-    # File handler with rotation
+    # File handler with restart (truncate when size limit reached)
     if enable_file:
-        file_handler = logging.handlers.RotatingFileHandler(
-            log_file, maxBytes=max_file_size, backupCount=backup_count
+        file_handler = RestartingFileHandler(
+            log_file, max_bytes=max_file_size
         )
         if enable_json_logging:
             file_handler.setFormatter(JSONFormatter())
