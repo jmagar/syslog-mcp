@@ -107,7 +107,7 @@ class LogEntry(BaseModel):
         ...,
         min_length=1,
         max_length=255,
-        description="Source device or hostname",
+        description="Source device name",
         examples=["web-server-01", "firewall.local", "192.168.1.100"]
     )
 
@@ -248,7 +248,7 @@ class LogEntry(BaseModel):
         """
         Validate and normalize device names.
 
-        Accepts hostnames, IP addresses, and device identifiers
+        Accepts device names, IP addresses, and device identifiers
         with proper validation and normalization.
         """
         if not isinstance(v, str):
@@ -270,10 +270,10 @@ class LogEntry(BaseModel):
             except AddressValueError:
                 pass
 
-        # Validate hostname format
+        # Validate device name format
         # Allow alphanumeric, hyphens, dots, underscores
-        hostname_pattern = re.compile(r'^[a-zA-Z0-9._-]+$')
-        if not hostname_pattern.match(device):
+        device_pattern = re.compile(r'^[a-zA-Z0-9._-]+$')
+        if not device_pattern.match(device):
             raise ValueError(f"Invalid device name format: {device}")
 
         # Check length constraints

@@ -1713,13 +1713,13 @@ class ElasticsearchClient:
             timestamp=datetime.fromisoformat(source.get("timestamp", datetime.now().isoformat())),
             level=level,
             message=source.get("message", ""),
-            device=source.get("device", source.get("hostname", "unknown")),
+            device=source.get("device", "unknown"),
             process_id=source.get("pid", source.get("process_id")),
             process_name=source.get("process_name"),
             facility=source.get("facility"),
             source_ip=None,  # Optional field, not available in this context
             metadata=source.get("metadata", {}),
-            index_name=hit.get("_index")  # Get index name from hit metadata
+            index_name=hit.get("_index")  # Get index name from Elasticsearch hit metadata
         )
 
         return log_entry

@@ -12,6 +12,7 @@ from ...services.gotify_client import send_alert_notification, test_gotify_confi
 from ...utils.logging import get_logger
 from ..analysis.report_analyzer import analyze_daily_report_data, export_logs_to_file
 from ..data_access.search_queries import query_general_log_search
+from ..data_access.device_queries import query_device_tail
 from ..data_access.storage_queries import (
     create_alert_rule,
     export_logs_query,
@@ -271,3 +272,98 @@ async def alert_rules_interface(client: ElasticsearchClient) -> str:
     except Exception as e:
         logger.error(f"Alert rules error: {e}")
         return f"Error retrieving alert rules: {str(e)}"
+
+
+async def syslog_tail_interface(
+    client: ElasticsearchClient,
+    device: str,
+    lines: int = 50
+) -> str:
+    """Display recent log entries for a device (like 'tail -f' for logs)."""
+
+    try:
+        # Data Access Layer - get recent logs from Elasticsearch
+        tail_results = await query_device_tail(
+            es_client=client,
+            device=device,
+            lines=lines
+        )
+
+        # Extract log entries
+        log_entries = []
+        if "hits" in tail_results and "hits" in tail_results["hits"]:
+            log_entries = [hit["_source"] for hit in tail_results["hits"]["hits"]]
+
+        # Get aggregation data for summary
+        aggs = tail_results.get("aggregations", {})
+        total_entries = tail_results["hits"]["total"]["value"]
+
+        # Build summary report
+        summary = f"# 📄 Device Log Tail: {device}\n\n"
+        
+        if total_entries == 0:
+            summary += "❌ **No log entries found for this device.**\n\n"
+            summary += f"Make sure the device name '{device}' is correct and has recent activity."
+            return summary
+
+        summary += f"**Total entries available:** {total_entries:,}\n"
+        summary += f"**Showing last:** {len(log_entries)} entries\n\n"
+
+        # Add aggregation summaries
+        if "severity_summary" in aggs:
+            severity_buckets = aggs["severity_summary"]["buckets"]
+            if severity_buckets:
+                summary += "## Severity Distribution\n"
+                for bucket in severity_buckets:
+                    severity = bucket["key"]
+                    count = bucket["doc_count"]
+                    summary += f"- **{severity.upper()}:** {count}\n"
+                summary += "\n"
+
+        if "program_summary" in aggs:
+            program_buckets = aggs["program_summary"]["buckets"]
+            if program_buckets:
+                summary += "## Top Programs\n"
+                for bucket in program_buckets[:5]:  # Top 5
+                    program = bucket["key"]
+                    count = bucket["doc_count"]
+                    summary += f"- **{program}:** {count}\n"
+                summary += "\n"
+
+        # Show latest activity timestamp
+        if "latest_activity" in aggs and aggs["latest_activity"]["hits"]["hits"]:
+            latest_timestamp = aggs["latest_activity"]["hits"]["hits"][0]["_source"]["timestamp"]
+            summary += f"**Latest Activity:** {latest_timestamp}\n\n"
+
+        # Display log entries in chronological order (most recent first)
+        summary += "## Recent Log Entries\n\n"
+        for i, entry in enumerate(log_entries):
+            timestamp = entry.get("timestamp", "unknown")
+            severity = entry.get("severity", "info").upper()
+            program = entry.get("program", "unknown")
+            message = entry.get("message", "")
+            # Handle both device and hostname fields for backward compatibility
+            device_name = entry.get("device") or entry.get("hostname", "unknown")
+
+            # Format timestamp for readability
+            if timestamp != "unknown":
+                try:
+                    from datetime import datetime
+                    dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                    formatted_time = dt.strftime("%Y-%m-%d %H:%M:%S")
+                except:
+                    formatted_time = timestamp
+            else:
+                formatted_time = timestamp
+
+            # Add entry with formatting
+            summary += f"**[{i+1:02d}]** `{formatted_time}` **{severity}** `{program}`\n"
+            summary += f"```\n{message}\n```\n\n"
+
+        summary += f"---\n*Showing {len(log_entries)} of {total_entries:,} total entries for device '{device}'*"
+
+        return summary
+
+    except Exception as e:
+        logger.error(f"Device tail error: {e}")
+        return f"Error retrieving log tail for device '{device}': {str(e)}"

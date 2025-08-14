@@ -225,7 +225,7 @@ async def query_error_analysis(
             },
             "affected_devices": {
                 "terms": {
-                    "field": "hostname.keyword",
+                    "field": "device.keyword",
                     "size": 20
                 }
             },
@@ -266,7 +266,7 @@ async def query_error_analysis(
                         "top_hits": {
                             "sort": [{"timestamp": {"order": "desc"}}],
                             "size": 2,
-                            "_source": ["timestamp", "hostname", "message", "severity"]
+                            "_source": ["timestamp", "device", "message", "severity"]
                         }
                     }
                 }
@@ -350,7 +350,7 @@ async def query_device_activity_timeline(
             },
             "overall_activity": {
                 "terms": {
-                    "field": "hostname.keyword",
+                    "field": "device.keyword",
                     "size": 50
                 },
                 "aggs": {
@@ -402,6 +402,61 @@ async def query_device_activity_timeline(
     logger.debug(f"Executing activity timeline query: {search_query}")
     response = await es_client.search_raw(
         query=search_query,
+        index="syslog-ng",
+        timeout="30s"
+    )
+
+    return response
+
+
+async def query_device_tail(
+    es_client: ElasticsearchClient,
+    device: str,
+    lines: int = 50
+) -> dict[str, Any]:
+    """Query recent log entries for a specific device (like 'tail -f' for logs)."""
+
+    # Build tail query - get the most recent entries for the device
+    tail_query = {
+        "query": {
+            "term": {
+                "hostname.keyword": device
+            }
+        },
+        "size": lines,
+        "sort": [{"timestamp": {"order": "desc"}}],
+        "_source": ["timestamp", "hostname", "message", "program", "severity", "facility"],
+        "aggs": {
+            "entry_count": {
+                "value_count": {
+                    "field": "timestamp"
+                }
+            },
+            "severity_summary": {
+                "terms": {
+                    "field": "severity.keyword",
+                    "size": 10
+                }
+            },
+            "program_summary": {
+                "terms": {
+                    "field": "program.keyword",
+                    "size": 10
+                }
+            },
+            "latest_activity": {
+                "top_hits": {
+                    "sort": [{"timestamp": {"order": "desc"}}],
+                    "size": 1,
+                    "_source": ["timestamp"]
+                }
+            }
+        }
+    }
+
+    logger.debug(f"Executing device tail query for {device}: {tail_query}")
+    response = await es_client.search_raw(
+        query=tail_query,
         index="syslog-ng",
         timeout="30s"
     )

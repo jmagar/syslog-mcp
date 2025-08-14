@@ -25,7 +25,16 @@ class RestartingFileHandler(logging.FileHandler):
     instead of rotating with backup files.
     """
 
-    def __init__(self, filename: str, max_bytes: int = 10 * 1024 * 1024, mode: str = 'a', encoding: str | None = None, delay: bool = False, errors: str | None = None) -> None:
+    def __init__(
+        self,
+        filename: str,
+        *,
+        max_bytes: int = 10 * 1024 * 1024,
+        mode: str = 'a',
+        encoding: str | None = None,
+        delay: bool = False,
+        errors: str | None = None
+    ) -> None:
         """
         Initialize the handler.
         

@@ -79,7 +79,7 @@ def analyze_failed_authentication_data(
         source = hit["_source"]
         sample_attacks.append({
             "timestamp": source.get("timestamp"),
-            "device": source.get("hostname"),
+            "device": source.get("device"),
             "message": source.get("message"),
             "program": source.get("program"),
             "level": source.get("severity")

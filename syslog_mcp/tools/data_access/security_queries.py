@@ -65,7 +65,7 @@ async def query_failed_auth_attempts(
     # Add device filter if specified
     if device:
         base_query["bool"]["filter"].append({
-            "term": {"hostname.keyword": device}
+            "term": {"device.keyword": device}
         })
 
     # Build comprehensive aggregation query
@@ -73,7 +73,7 @@ async def query_failed_auth_attempts(
         "query": base_query,
         "size": limit,
         "sort": [{"timestamp": {"order": "desc"}}],
-        "_source": ["timestamp", "hostname", "message", "program", "severity"],
+        "_source": ["timestamp", "device", "message", "program", "severity"],
         "aggs": {
             "attacking_ips": {
                 "terms": {
@@ -95,7 +95,7 @@ async def query_failed_auth_attempts(
             },
             "targeted_devices": {
                 "terms": {
-                    "field": "hostname.keyword",
+                    "field": "device.keyword",
                     "size": 20
                 }
             },
@@ -223,7 +223,7 @@ async def query_suspicious_activity(
     # Add device filter if specified
     if device:
         base_query["bool"]["filter"].append({
-            "term": {"hostname.keyword": device}
+            "term": {"device.keyword": device}
         })
 
     search_query = {

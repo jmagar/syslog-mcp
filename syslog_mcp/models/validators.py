@@ -12,55 +12,55 @@ from ipaddress import AddressValueError, IPv4Address, IPv6Address
 from typing import Any
 
 
-def validate_hostname(value: Any) -> str:
+def validate_device(value: Any) -> str:
     """
-    Validate hostname format according to RFC standards.
+    Validate device name format according to RFC standards.
 
     Accepts:
-    - Standard hostnames (alphanumeric, hyphens, dots)
+    - Standard device names (alphanumeric, hyphens, dots)
     - IP addresses (IPv4 and IPv6)
     - Fully qualified domain names
 
     Args:
-        value: Value to validate as hostname
+        value: Value to validate as device name
 
     Returns:
-        Normalized hostname string
+        Normalized device name string
 
     Raises:
-        ValueError: If hostname format is invalid
+        ValueError: If device name format is invalid
     """
     if not isinstance(value, str):
         value = str(value)
 
-    hostname = value.strip().lower()
-    if not hostname:
-        raise ValueError("Hostname cannot be empty")
+    device_name = value.strip().lower()
+    if not device_name:
+        raise ValueError("Device name cannot be empty")
 
     # Check length constraints
-    if len(hostname) > 253:
-        raise ValueError(f"Hostname too long: {len(hostname)} characters (max 253)")
+    if len(device_name) > 253:
+        raise ValueError(f"Device name too long: {len(device_name)} characters (max 253)")
 
-    # Check if it's an IP address (valid hostname)
+    # Check if it's an IP address (valid device name)
     try:
-        IPv4Address(hostname)
-        return str(hostname)
+        IPv4Address(device_name)
+        return str(device_name)
     except AddressValueError:
         try:
-            IPv6Address(hostname)
-            return str(hostname)
+            IPv6Address(device_name)
+            return str(device_name)
         except AddressValueError:
             pass
 
-    # Validate as hostname/FQDN
+    # Validate as device name/FQDN
     # Each label can be 1-63 characters
-    labels = hostname.split('.')
+    labels = device_name.split('.')
     if len(labels) > 127:
-        raise ValueError("Too many labels in hostname")
+        raise ValueError("Too many labels in device name")
 
     for label in labels:
         if not label:
-            raise ValueError("Empty label in hostname")
+            raise ValueError("Empty label in device name")
 
         if len(label) > 63:
             raise ValueError(f"Label too long: {label} ({len(label)} characters, max 63)")
@@ -69,7 +69,7 @@ def validate_hostname(value: Any) -> str:
         if not re.match(r'^[a-z0-9]([a-z0-9-]*[a-z0-9])?$', label):
             raise ValueError(f"Invalid label format: {label}")
 
-    return str(hostname)
+    return str(device_name)
 
 
 def validate_ip_address_list(

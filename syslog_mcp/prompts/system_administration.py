@@ -20,7 +20,7 @@ def register_system_administration_prompts(mcp: FastMCP) -> None:
         meta={"version": "1.0", "category": "administration"}
     )
     def device_health_check(
-        device: str = Field(..., description="Device name or hostname to analyze"),
+        device: str = Field(..., description="Device name to analyze"),
         assessment_hours: int = Field(24, description="Hours of data to analyze (default: 24)")
     ) -> str:
         """

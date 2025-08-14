@@ -111,7 +111,7 @@ def analyze_error_patterns_data(
                     source = hit["_source"]
                     sample_errors.append({
                         "timestamp": source.get("timestamp"),
-                        "device": source.get("hostname"),
+                        "device": source.get("device"),
                         "message": source.get("message"),
                         "level": source.get("severity")
                     })

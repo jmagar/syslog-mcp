@@ -83,7 +83,7 @@ def analyze_search_correlate_data(
                     for hit in bucket["sample_events"]["hits"]["hits"]:
                         sample_events.append({
                             "timestamp": hit["_source"]["timestamp"],
-                            "device": hit["_source"]["hostname"],
+                            "device": hit["_source"]["device"],
                             "message": hit["_source"]["message"][:100] + "..." if len(hit["_source"]["message"]) > 100 else hit["_source"]["message"],
                             "program": hit["_source"]["program"],
                             "level": hit["_source"]["severity"]
@@ -205,7 +205,7 @@ def analyze_search_correlate_data(
         "sample_events": [
             {
                 "timestamp": hit["_source"]["timestamp"],
-                "device": hit["_source"]["hostname"],
+                "device": hit["_source"]["device"],
                 "message": hit["_source"]["message"][:150] + "..." if len(hit["_source"]["message"]) > 150 else hit["_source"]["message"],
                 "program": hit["_source"]["program"],
                 "level": hit["_source"]["severity"]

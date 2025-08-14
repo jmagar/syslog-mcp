@@ -45,7 +45,7 @@ async def query_logs_by_timerange(
     # Add device filter if specified
     if device:
         base_query["bool"]["filter"].append({
-            "term": {"hostname.keyword": device}
+            "term": {"device.keyword": device}
         })
 
     # Add text search if specified
@@ -63,11 +63,11 @@ async def query_logs_by_timerange(
         "query": base_query,
         "size": limit,
         "sort": [{"timestamp": {"order": "desc"}}],
-        "_source": ["timestamp", "hostname", "message", "program", "severity", "facility"],
+        "_source": ["timestamp", "device", "message", "program", "severity", "facility"],
         "aggs": {
             "device_breakdown": {
                 "terms": {
-                    "field": "hostname.keyword",
+                    "field": "device.keyword",
                     "size": 20
                 }
             },
@@ -216,7 +216,7 @@ async def query_full_text_search(
     # Add device filter if specified
     if device:
         base_query["bool"]["filter"].append({
-            "term": {"hostname.keyword": device}
+            "term": {"device.keyword": device}
         })
 
     es_query = {
@@ -226,7 +226,7 @@ async def query_full_text_search(
             {"_score": {"order": "desc"}},
             {"timestamp": {"order": "desc"}}
         ],
-        "_source": ["timestamp", "hostname", "message", "program", "severity", "facility"],
+        "_source": ["timestamp", "device", "message", "program", "severity", "facility"],
         "highlight": {
             "fields": {
                 "message": {
@@ -247,7 +247,7 @@ async def query_full_text_search(
             },
             "matching_devices": {
                 "terms": {
-                    "field": "hostname.keyword",
+                    "field": "device.keyword",
                     "size": 20
                 }
             },
@@ -330,7 +330,7 @@ async def query_general_log_search(
     """Query general log search with comprehensive filtering from Elasticsearch."""
 
     # DEBUG: Log what we're receiving to identify the issue
-    logger.info(f"DEBUG query_general_log_search: query='{query}', level='{level}', device='{device}'")
+    logger.debug(f"query_general_log_search: query='{query}', level='{level}', device='{device}'")
 
     # Simple, reliable time range calculation using EXACT pattern from correlation search
     if not start_time and not end_time:
@@ -377,7 +377,7 @@ async def query_general_log_search(
     # Add device filter if specified (keeping this since it works in correlation)
     if device:
         base_query["bool"]["filter"].append({
-            "term": {"hostname.keyword": device}
+            "term": {"device.keyword": device}
         })
 
     # SIMPLE search query matching correlation pattern exactly
@@ -385,17 +385,17 @@ async def query_general_log_search(
         "query": base_query,
         "size": limit,
         "sort": [{"timestamp": {"order": "desc"}}],
-        "_source": ["timestamp", "hostname", "message", "program", "severity", "facility"]
+        "_source": ["timestamp", "device", "message", "program", "severity", "facility"]
     }
 
-    logger.info(f"DEBUG FULL QUERY: {search_query}")
+    logger.debug(f"Full query: {search_query}")
     logger.debug(f"Executing general search query: {search_query}")
     response = await es_client.search_raw(
         query=search_query,
         index="syslog-ng",
         timeout="30s"
     )
-    logger.info(f"DEBUG RESPONSE HITS: {response.get('hits', {}).get('total', {})}")
+    logger.debug(f"Response hits: {response.get('hits', {}).get('total', {})}")
 
     return response
 
@@ -419,9 +419,9 @@ async def query_search_correlate(
         raise ValueError("At least one correlation field must be provided")
 
     # Validate correlation fields and map to actual index fields
-    valid_fields = ["device", "hostname", "program", "level", "severity", "facility"]
+    valid_fields = ["device", "program", "level", "severity", "facility"]
     field_mapping = {
-        "device": "hostname",
+        "device": "device",
         "level": "severity"
     }
 
@@ -469,7 +469,7 @@ async def query_search_correlate(
     # Add device filter if specified
     if device:
         base_query["bool"]["filter"].append({
-            "term": {"hostname.keyword": device}
+            "term": {"device.keyword": device}
         })
 
     # Build aggregations for correlation analysis
@@ -493,7 +493,7 @@ async def query_search_correlate(
                     "top_hits": {
                         "sort": [{"timestamp": {"order": "desc"}}],
                         "size": 3,
-                        "_source": ["timestamp", "hostname", "message", "program", "severity"]
+                        "_source": ["timestamp", "device", "message", "program", "severity"]
                     }
                 }
             }
@@ -503,7 +503,7 @@ async def query_search_correlate(
         "query": base_query,
         "size": limit,
         "sort": [{"timestamp": {"order": "desc"}}],
-        "_source": ["timestamp", "hostname", "message", "program", "severity", "facility"],
+        "_source": ["timestamp", "device", "message", "program", "severity", "facility"],
         "aggs": {
             **correlation_aggs,
             "event_timeline": {
@@ -515,7 +515,7 @@ async def query_search_correlate(
             },
             "device_program_correlation": {
                 "terms": {
-                    "field": "hostname.keyword",
+                    "field": "device.keyword",
                     "size": 20
                 },
                 "aggs": {
@@ -530,7 +530,7 @@ async def query_search_correlate(
         }
     }
 
-    logger.info(f"DEBUG CORRELATION FULL QUERY: {search_query}")
+    logger.debug(f"Correlation full query: {search_query}")
     logger.debug(f"Executing correlation search query: {search_query}")
 
     try:
@@ -539,7 +539,7 @@ async def query_search_correlate(
             index="syslog-ng",
             timeout="30s"
         )
-        logger.info(f"DEBUG CORRELATION RESPONSE HITS: {response.get('hits', {}).get('total', {})}")
+        logger.debug(f"Correlation response hits: {response.get('hits', {}).get('total', {})}")
         return response
     except Exception as e:
         logger.error(f"Correlation search query failed: {e}")

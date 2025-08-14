@@ -166,7 +166,7 @@ async def search_correlate(
         # Parse correlation fields (comma-separated string to list)
         fields_list = [field.strip() for field in correlation_fields.split(",") if field.strip()]
         if not fields_list:
-            return "Error: No correlation fields specified. Provide comma-separated field names (e.g., 'hostname,program,severity')"
+            return "Error: No correlation fields specified. Provide comma-separated field names (e.g., 'device,program,severity')"
 
         # Data Access Layer - get raw data from Elasticsearch
         search_results = await query_search_correlate(

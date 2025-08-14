@@ -34,7 +34,7 @@ class SearchLogsParameters(BaseModel):
 
     device: str | None = Field(
         None,
-        description="Filter logs by device/hostname (supports wildcards)"
+        description="Filter logs by device (supports wildcards)"
     )
 
     level: LogLevel | None = Field(
@@ -109,7 +109,7 @@ def register_search_tools(mcp: FastMCP) -> None:
 
         Args:
             query: Text search query to match against log messages
-            device: Filter logs by device/hostname (supports wildcards)
+            device: Filter logs by device (supports wildcards)
             level: Filter logs by severity level (DEBUG, INFO, WARN, ERROR, CRITICAL)
             start_time: Start of time range (ISO 8601 format)
             end_time: End of time range (ISO 8601 format)
@@ -174,10 +174,10 @@ def register_search_tools(mcp: FastMCP) -> None:
             # Build search filters
             filters = []
             if params.device:
-                # Search both hostname and host fields since logs use different field names
+                # Search the device field
                 device_operator = "wildcard" if "*" in params.device or "?" in params.device else "eq"
                 filters.append(SearchFilter(
-                    field="hostname",  # Primary field used by most logs
+                    field="device",  # Primary field used by logs
                     value=params.device,
                     operator=device_operator,
                     case_sensitive=False

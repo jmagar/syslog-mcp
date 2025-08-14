@@ -18,7 +18,7 @@ from .interface.consolidated_tools import (
     syslog_search_interface,
     syslog_sec_interface,
 )
-from .interface.utility_tools import export_logs_interface
+from .interface.utility_tools import export_logs_interface, syslog_tail_interface
 
 logger = get_logger(__name__)
 
@@ -285,6 +285,38 @@ def register_device_analysis_tools(mcp: FastMCP) -> None:
         except Exception as e:
             log_mcp_response("syslog_export", False, error=str(e))
             return f"Export error: {str(e)}"
+        finally:
+            await es_client.disconnect()
+
+    @mcp.tool()
+    async def syslog_tail(
+        device: str,
+        lines: int = 50
+    ) -> str:
+        """
+        Display recent log entries for a device (like 'tail -f' for logs).
+
+        Args:
+            device: Device name to get recent logs from (required)
+            lines: Number of recent lines to display (default: 50)
+
+        Examples:
+            syslog_tail TOOTIE
+            syslog_tail web-server-01 --lines=100
+        """
+        log_mcp_request("syslog_tail", {"device": device, "lines": lines})
+
+        try:
+            es_client = ElasticsearchClient()
+            await es_client.connect()
+
+            result = await syslog_tail_interface(es_client, device=device, lines=lines)
+
+            log_mcp_response("syslog_tail", True)
+            return result
+        except Exception as e:
+            log_mcp_response("syslog_tail", False, error=str(e))
+            return f"Tail error for device '{device}': {str(e)}"
         finally:
             await es_client.disconnect()
 

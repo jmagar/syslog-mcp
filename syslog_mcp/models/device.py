@@ -167,7 +167,7 @@ class DeviceInfo(BaseModel):
         ...,
         min_length=1,
         max_length=255,
-        description="Device name or hostname",
+        description="Device name",
         examples=["web-server-01", "firewall.local", "192.168.1.100"]
     )
 

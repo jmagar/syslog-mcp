@@ -80,7 +80,7 @@ def analyze_suspicious_activity_data(
         source = hit["_source"]
         sample_events.append({
             "timestamp": source.get("timestamp"),
-            "device": source.get("hostname"),
+            "device": source.get("device"),
             "message": source.get("message"),
             "program": source.get("program"),
             "level": source.get("severity"),
