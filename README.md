@@ -128,7 +128,367 @@ cp .env.example .env
 1. **Run the MCP server:**
 
 ```bash
-uv run python main.py
+uv run python -m syslog_mcp
+```
+
+## 🐳 Infrastructure Deployment (Docker)
+
+Deploy a complete syslog collection and analysis infrastructure using Docker Compose.
+
+### Prerequisites
+
+- Docker and Docker Compose installed
+- Network connectivity on ports 514 (UDP/TCP), 601, 6514
+- At least 2GB RAM for Elasticsearch
+- Sufficient disk space for log storage
+
+### Quick Start
+
+1. **Create external network** (one-time setup):
+   ```bash
+   docker network create jakenet
+   ```
+
+2. **Start the infrastructure**:
+   ```bash
+   docker-compose up -d
+   ```
+
+3. **Verify services are running**:
+   ```bash
+   # Check container status
+   docker-compose ps
+   
+   # Verify Elasticsearch health
+   curl http://localhost:9200/_cluster/health
+   
+   # Check syslog-ng logs
+   docker logs syslog-ng
+   ```
+
+### Directory Structure
+
+The Docker setup creates the following structure:
+```
+syslog-mcp/
+├── docker-compose.yml       # Docker services configuration
+├── syslog-ng.conf          # Syslog-ng configuration
+├── .env                    # Environment variables
+└── /mnt/appdata/          # Data persistence (configurable)
+    ├── syslog-ng/         # Syslog files by device
+    └── syslog-ng_elasticsearch/  # Elasticsearch data
+```
+
+### Services Overview
+
+| Service | Ports | Purpose |
+|---------|-------|---------|
+| syslog-ng | 514 (UDP/TCP), 601, 6514 | Receives and processes syslog messages |
+| elasticsearch | 9200, 9300 | Stores and indexes log data |
+
+### Custom Network Configuration
+
+If you need to use a different network instead of `jakenet`:
+
+1. Create your network:
+   ```bash
+   docker network create your-network-name
+   ```
+
+2. Update `docker-compose.yml`:
+   ```yaml
+   networks:
+     your-network-name:
+       external: true
+   ```
+
+## 📡 Configuring Devices to Send Logs
+
+Configure your devices to send syslog messages to the syslog-ng server.
+
+### Linux Servers (rsyslog)
+
+Edit `/etc/rsyslog.conf` or `/etc/rsyslog.d/50-remote.conf`:
+
+```bash
+# Send all logs via TCP (recommended)
+*.* @@your-syslog-server:514
+
+# Or send via UDP (less reliable)
+*.* @your-syslog-server:514
+
+# Send only specific facilities
+auth,authpriv.* @@your-syslog-server:514
+kern.* @@your-syslog-server:514
+
+# Restart rsyslog
+sudo systemctl restart rsyslog
+```
+
+### Network Devices
+
+#### Cisco IOS/IOS-XE
+```cisco
+logging host your-syslog-server transport tcp port 514
+logging trap informational
+logging origin-id hostname
+logging source-interface GigabitEthernet0/0
+```
+
+#### Cisco NX-OS
+```cisco
+logging server your-syslog-server 5 port 514 use-vrf management
+logging origin-id hostname
+logging timestamp milliseconds
+```
+
+#### Ubiquiti UniFi
+Via Controller UI:
+1. Settings → System Settings → Remote Logging
+2. Enable "Enable remote syslog server"
+3. Host: `your-syslog-server`
+4. Port: `514`
+5. Protocol: TCP/UDP as preferred
+
+Via SSH (EdgeRouter):
+```bash
+set system syslog host your-syslog-server facility all level info
+set system syslog host your-syslog-server port 514
+commit
+save
+```
+
+#### MikroTik RouterOS
+```mikrotik
+/system logging action
+add name=remote target=remote remote=your-syslog-server remote-port=514
+/system logging
+add action=remote topics=info,warning,error,critical
+```
+
+### Firewalls
+
+#### pfSense
+1. Status → System Logs → Settings
+2. Enable "Send log messages to remote syslog server"
+3. Remote Syslog Server: `your-syslog-server:514`
+4. Select log types to forward
+
+#### OPNsense
+1. System → Settings → Logging / Targets
+2. Add new target:
+   - Transport: TCP4 or UDP4
+   - Application: syslog
+   - Program: `*`
+   - Level: Info
+   - Hostname: `your-syslog-server`
+   - Port: `514`
+
+#### FortiGate
+```fortigate
+config log syslogd setting
+    set status enable
+    set server "your-syslog-server"
+    set port 514
+    set facility local7
+    set source-ip x.x.x.x
+end
+```
+
+### Docker Containers
+
+#### Using Docker logging driver
+```bash
+# For a single container
+docker run --log-driver=syslog \
+  --log-opt syslog-address=tcp://your-syslog-server:514 \
+  --log-opt tag="{{.Name}}" \
+  your-image
+
+# In docker-compose.yml
+services:
+  app:
+    image: your-image
+    logging:
+      driver: syslog
+      options:
+        syslog-address: "tcp://your-syslog-server:514"
+        tag: "{{.Name}}/{{.ID}}"
+```
+
+### Windows Servers
+
+#### Using nxlog (Recommended)
+
+1. Install [nxlog](https://nxlog.co/products/nxlog-community-edition)
+2. Configure `nxlog.conf`:
+
+```xml
+<Input eventlog>
+    Module im_msvistalog
+</Input>
+
+<Output syslog>
+    Module om_tcp
+    Host your-syslog-server
+    Port 514
+    Exec to_syslog_ietf();
+</Output>
+
+<Route 1>
+    Path eventlog => syslog
+</Route>
+```
+
+#### Using Windows Event Forwarding
+```powershell
+# Configure Windows Event Collector
+wecutil cs subscription.xml
+# Where subscription.xml points to your syslog forwarder
+```
+
+### Application-Specific Logging
+
+#### Python Applications
+```python
+import logging.handlers
+
+syslog = logging.handlers.SysLogHandler(
+    address=('your-syslog-server', 514),
+    socktype=socket.SOCK_STREAM  # TCP
+)
+syslog.setFormatter(logging.Formatter(
+    '%(name)s: %(levelname)s %(message)s'
+))
+logger.addHandler(syslog)
+```
+
+#### Node.js Applications
+```javascript
+const winston = require('winston');
+require('winston-syslog').Syslog;
+
+winston.add(new winston.transports.Syslog({
+    host: 'your-syslog-server',
+    port: 514,
+    protocol: 'tcp4',
+    app_name: 'node-app'
+}));
+```
+
+## ✅ Verification & Troubleshooting
+
+### Verify Logs are Being Received
+
+1. **Check syslog-ng is receiving logs**:
+   ```bash
+   # Watch syslog-ng logs
+   docker logs -f syslog-ng
+   
+   # Check local log files
+   docker exec syslog-ng ls -la /var/log/
+   ```
+
+2. **Send a test message**:
+   ```bash
+   # Using logger (from any Linux host)
+   logger -n your-syslog-server -P 514 "Test message from $(hostname)"
+   
+   # Using netcat
+   echo "<14>Test syslog message" | nc your-syslog-server 514
+   ```
+
+3. **Verify Elasticsearch indexing**:
+   ```bash
+   # Check indices
+   curl http://localhost:9200/_cat/indices/syslog-*
+   
+   # Search recent logs
+   curl http://localhost:9200/syslog-*/_search?q=*&size=10
+   ```
+
+### Common Issues & Solutions
+
+#### Logs Not Appearing in Elasticsearch
+
+1. **Check syslog-ng to Elasticsearch connection**:
+   ```bash
+   docker logs syslog-ng | grep -i elasticsearch
+   ```
+
+2. **Verify Elasticsearch is accessible from syslog-ng**:
+   ```bash
+   docker exec syslog-ng curl http://elasticsearch:9200
+   ```
+
+3. **Check syslog-ng configuration syntax**:
+   ```bash
+   docker exec syslog-ng syslog-ng --syntax-only
+   ```
+
+#### Connection Refused Errors
+
+1. **Verify firewall rules**:
+   ```bash
+   # Check if port is open
+   sudo netstat -tulpn | grep 514
+   
+   # Test connectivity
+   telnet your-syslog-server 514
+   ```
+
+2. **Check Docker port mapping**:
+   ```bash
+   docker port syslog-ng
+   ```
+
+#### Timezone Mismatches
+
+1. **Set timezone in docker-compose.yml**:
+   ```yaml
+   environment:
+     - TZ=America/New_York
+   ```
+
+2. **Verify timezone in containers**:
+   ```bash
+   docker exec syslog-ng date
+   docker exec elasticsearch date
+   ```
+
+#### High Memory Usage
+
+1. **Adjust Elasticsearch heap size** in `docker-compose.yml`:
+   ```yaml
+   environment:
+     - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+   ```
+
+2. **Monitor memory usage**:
+   ```bash
+   docker stats elasticsearch
+   ```
+
+### Performance Tuning
+
+#### Syslog-ng Optimization
+```conf
+options {
+    # Increase for high-volume environments
+    log_fifo_size(10000);
+    # Adjust based on CPU cores
+    threaded(yes);
+};
+```
+
+#### Elasticsearch Optimization
+```bash
+# Increase indices refresh interval for better ingestion
+curl -X PUT "localhost:9200/syslog-*/_settings" -H 'Content-Type: application/json' -d'{
+  "index": {
+    "refresh_interval": "30s"
+  }
+}'
 ```
 
 ## ⚙️ Configuration
@@ -137,11 +497,14 @@ uv run python main.py
 
 ```bash
 # Elasticsearch Configuration
-ELASTICSEARCH_HOST=your-elasticsearch-host:9200
+# Use localhost:9200 when MCP server runs on host (Docker infrastructure)
+# Use elasticsearch:9200 when MCP server runs in Docker network
+# Use actual hostname/IP for external Elasticsearch (e.g., squirts:9200)
+ELASTICSEARCH_HOST=localhost:9200
 ELASTICSEARCH_USER=your-username
 ELASTICSEARCH_PASSWORD=your-password
-ELASTICSEARCH_USE_SSL=true
-ELASTICSEARCH_VERIFY_CERTS=true
+ELASTICSEARCH_USE_SSL=false
+ELASTICSEARCH_VERIFY_CERTS=false
 
 # Index Configuration  
 ELASTICSEARCH_INDEX=syslog-*
@@ -155,16 +518,65 @@ GOTIFY_URL=https://gotify-server:443
 GOTIFY_TOKEN=your_gotify_app_token_here
 ```
 
-### MCP Client Configuration (`.mcp.json`)
+### MCP Client Configuration
+
+#### For MCP Server on Host (with Docker Infrastructure)
+
+Configure Claude Desktop or your MCP client (`.mcp.json` or `claude_desktop_config.json`):
 
 ```json
 {
   "mcpServers": {
     "syslog": {
       "command": "uv",
-      "args": ["run", "python", "/path/to/syslog-mcp/main.py"],
+      "args": ["run", "python", "-m", "syslog_mcp"],
+      "cwd": "/path/to/syslog-mcp",
       "env": {
-        "ELASTICSEARCH_HOST": "your-host:9200"
+        "ELASTICSEARCH_HOST": "localhost:9200",
+        "ELASTICSEARCH_USE_SSL": "false"
+      }
+    }
+  }
+}
+```
+
+#### For Everything in Docker
+
+If running the MCP server as a Docker container alongside the infrastructure:
+
+```json
+{
+  "mcpServers": {
+    "syslog": {
+      "command": "docker",
+      "args": ["run", "--rm", "--network", "jakenet", 
+               "-e", "ELASTICSEARCH_HOST=elasticsearch:9200",
+               "syslog-mcp:latest"],
+      "env": {
+        "DOCKER_HOST": "unix:///var/run/docker.sock"
+      }
+    }
+  }
+}
+```
+
+#### For External Elasticsearch
+
+If using an existing Elasticsearch cluster:
+
+```json
+{
+  "mcpServers": {
+    "syslog": {
+      "command": "uv",
+      "args": ["run", "python", "-m", "syslog_mcp"],
+      "cwd": "/path/to/syslog-mcp",
+      "env": {
+        "ELASTICSEARCH_HOST": "your-elasticsearch-host:9200",
+        "ELASTICSEARCH_USER": "your-username",
+        "ELASTICSEARCH_PASSWORD": "your-password",
+        "ELASTICSEARCH_USE_SSL": "true",
+        "ELASTICSEARCH_VERIFY_CERTS": "true"
       }
     }
   }

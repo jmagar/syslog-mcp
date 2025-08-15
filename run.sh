@@ -13,8 +13,8 @@ if [ "$1" = "logs" ]; then
         export $(grep -v '^#' .env | xargs)
     fi
     
-    LOG_FILE="${MCP_LOG_FILE:-logs/syslog_mcp_server.log}"
-    PID_FILE="logs/syslog_mcp_server.pid"
+    LOG_FILE="${MCP_LOG_FILE:-/tmp/syslog_mcp_server.log}"
+    PID_FILE="/tmp/syslog_mcp_server.pid"
     
     if [ -f "$PID_FILE" ]; then
         SERVER_PID=$(cat "$PID_FILE")
@@ -50,9 +50,9 @@ fi
 HOST="${MCP_HOST:-localhost}"
 PORT="${MCP_PORT:-8005}"
 TRANSPORT="${MCP_TRANSPORT:-http}"
-LOG_FILE="${MCP_LOG_FILE:-logs/syslog_mcp_server.log}"
+LOG_FILE="${MCP_LOG_FILE:-/tmp/syslog_mcp_server.log}"
 
-PID_FILE="logs/syslog_mcp_server.pid"
+PID_FILE="/tmp/syslog_mcp_server.pid"
 
 # Ensure logs directory exists
 LOG_DIR=$(dirname "$LOG_FILE")

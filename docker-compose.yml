@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  syslog-ng:
+    container_name: syslog-ng
+    image: lscr.io/linuxserver/syslog-ng:latest
+    restart: unless-stopped
+    networks:
+      - jakenet
+    ports:
+      - "514:514/udp"
+      - "514:514/tcp"
+      - "601:601"
+      - "6514:6514"
+    volumes:
+      - ./syslog-ng.conf:/config/syslog-ng.conf
+      - /mnt/appdata/syslog-ng:/var/log
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Etc/UTC
+    depends_on:
+      - elasticsearch
+
+  elasticsearch:
+    container_name: elasticsearch
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.15.0
+    restart: unless-stopped
+    networks:
+      - jakenet
+    environment:
+      - discovery.type=single-node
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - xpack.security.enabled=false
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    volumes:
+      - /mnt/appdata/syslog-ng_elasticsearch:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+networks:
+  jakenet:
+    external: true

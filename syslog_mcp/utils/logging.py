@@ -196,7 +196,7 @@ def configure_logging(
 
     Args:
         log_level: Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-        log_file: Path to log file (defaults to logs/syslog-mcp.log)
+        log_file: Path to log file (defaults to /tmp/syslog-mcp.log)
         enable_console: Enable console logging
         enable_file: Enable file logging
         max_file_size: Maximum size of log file before restarting (truncating)
@@ -213,11 +213,9 @@ def configure_logging(
     # Convert string level to logging level
     numeric_level = getattr(logging, log_level, logging.INFO)
 
-    # Create logs directory if it doesn't exist
+    # Use /tmp for log files by default
     if log_file is None:
-        log_dir = Path("logs")
-        log_dir.mkdir(exist_ok=True)
-        log_file = str(log_dir / "syslog-mcp.log")
+        log_file = "/tmp/syslog-mcp.log"
 
     # Clear existing handlers
     root_logger = logging.getLogger()
