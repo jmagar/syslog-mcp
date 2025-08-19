@@ -1,6 +1,26 @@
-version: '3.8'
-
 services:
+  syslog-mcp:
+    container_name: syslog-mcp
+    build: .
+    restart: unless-stopped
+    networks:
+      - jakenet
+    ports:
+      - "8005:8005"
+    environment:
+      - ELASTICSEARCH_HOST=elasticsearch:9200
+      - ELASTICSEARCH_USE_SSL=false
+      - ELASTICSEARCH_VERIFY_CERTS=false
+      - LOG_LEVEL=INFO
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8005
+      - MCP_TRANSPORT=http
+    depends_on:
+      - syslog-ng
+      - elasticsearch
+    volumes:
+      - /tmp:/tmp
+
   syslog-ng:
     container_name: syslog-ng
     image: lscr.io/linuxserver/syslog-ng:latest
@@ -30,18 +50,11 @@ services:
       - jakenet
     environment:
       - discovery.type=single-node
-      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
-      - xpack.security.enabled=false
     ports:
       - "9200:9200"
       - "9300:9300"
     volumes:
       - /mnt/appdata/syslog-ng_elasticsearch:/usr/share/elasticsearch/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
 
 networks:
   jakenet:
