@@ -1,0 +1,1 @@
+"""Integration tests for syslog-mcp with real dependencies."""

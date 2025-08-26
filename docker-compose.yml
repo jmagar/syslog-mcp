@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   syslog-ng:
     container_name: syslog-ng

@@ -9,7 +9,7 @@ description = "A Model Context Protocol (MCP) server for querying and analyzing 
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
-    {name = "Your Name", email = "your.email@example.com"}
+    {name = "Jacob Magar", email = "jmagar@gmail.com"}
 ]
 keywords = ["mcp", "syslog", "elasticsearch", "logging", "model-context-protocol"]
 classifiers = [
@@ -40,11 +40,18 @@ dependencies = [
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
+    "pytest-xdist>=3.0.0",
     "mypy>=1.5.0",
     "black>=23.0.0",
     "ruff>=0.1.0",
     "pytest-cov>=4.0.0",
     "pre-commit>=3.0.0",
+    "testcontainers>=3.7.0",
+    "faker>=20.0.0",
+    "factory-boy>=3.3.0",
+    "hypothesis>=6.82.0",
+    "pytest-benchmark>=4.0.0",
+    "mutmut>=2.4.0",
 ]
 
 [project.scripts]
@@ -85,6 +92,7 @@ extend-exclude = '''
 [tool.ruff]
 target-version = "py311"
 line-length = 88
+cache-dir = ".cache/ruff"
 
 [tool.ruff.lint]
 select = [
@@ -97,6 +105,9 @@ select = [
     "C4", # flake8-comprehensions
     "UP", # pyupgrade
     "PTH", # flake8-use-pathlib
+    "S",  # flake8-bandit (security)
+    "ASYNC", # flake8-async
+    "RUF", # ruff-specific rules
 ]
 ignore = [
     "E501",  # line too long, handled by black
@@ -117,6 +128,8 @@ show_error_codes = true
 warn_redundant_casts = true
 warn_unused_ignores = true
 warn_no_return = true
+cache_dir = ".cache/mypy"
+fast_module_lookup = true
 
 [[tool.mypy.overrides]]
 module = "tests.*"
@@ -127,6 +140,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+cache_dir = ".cache/pytest"
 addopts = [
     "--strict-markers",
     "--strict-config",
@@ -136,8 +150,13 @@ addopts = [
     "--cov-report=xml",
 ]
 markers = [
-    "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
-    "unit: marks tests as unit tests",
+    "unit: marks tests as unit tests (fast, minimal dependencies)",
+    "integration: marks tests as integration tests (requires Elasticsearch)",
+    "slow: marks tests as slow-running tests",
+    "elasticsearch: marks tests that require Elasticsearch connection",
+    "performance: marks tests that measure performance",
+    "error_handling: marks tests that test error scenarios",
+    "security: marks tests that test security features",
 ]
 asyncio_mode = "auto"
 
@@ -147,6 +166,7 @@ omit = [
     "*/tests/*",
     "*/test_*.py",
 ]
+data_file = ".cache/coverage/.coverage"
 
 [tool.coverage.report]
 exclude_lines = [
@@ -160,4 +180,29 @@ exclude_lines = [
     "if __name__ == .__main__.:",
     "class .*\\bProtocol\\):",
     "@(abc\\.)?abstractmethod",
+]
+
+[tool.coverage.html]
+directory = ".cache/coverage/htmlcov"
+
+[tool.coverage.xml]
+output = ".cache/coverage/coverage.xml"
+
+[tool.ruff.format]
+cache-dir = ".cache/ruff"
+
+[tool.pre-commit]
+default_stages = ["commit", "push"]
+
+[dependency-groups]
+dev = [
+    "factory-boy>=3.3.3",
+    "faker>=37.5.3",
+    "hypothesis>=6.138.3",
+    "mutmut>=3.3.1",
+    "pytest-asyncio>=1.1.0",
+    "pytest-benchmark>=5.1.0",
+    "pytest-cov>=6.2.1",
+    "pytest-xdist>=3.8.0",
+    "testcontainers>=4.12.0",
 ]
