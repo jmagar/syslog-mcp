@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  elasticsearch-test:
+    container_name: elasticsearch-test
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.15.0
+    environment:
+      - discovery.type=single-node
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - xpack.security.enabled=false
+      - cluster.name=test-cluster
+      - bootstrap.memory_lock=true
+      - "indices.query.bool.max_clause_count=10000"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=30s"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
+    tmpfs:
+      - /usr/share/elasticsearch/data:size=1G
+    networks:
+      - test-network
+
+networks:
+  test-network:
+    driver: bridge
