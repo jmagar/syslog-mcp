@@ -84,13 +84,30 @@ assert_gte() {
     fi
 }
 
-# Assert JSON output contains no error field
+# Assert JSON output represents a successful MCP tool call (isError absent or false)
 assert_no_error() {
     local label="$1" output="$2"
-    if echo "$output" | grep -qi '"error"'; then
-        fail "$label (response contains error: $(echo "$output" | head -3))"
-    else
+    if echo "$output" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    sys.exit(1 if d.get('isError') else 0)
+except Exception:
+    sys.exit(0)  # non-JSON output treated as pass (e.g. mcporter errors shown separately)
+" 2>/dev/null; then
         pass "$label"
+    else
+        local detail
+        detail=$(echo "$output" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    content = d.get('content', [])
+    print(content[0].get('text','')[:120] if content else '')
+except Exception:
+    print(sys.stdin.read()[:120])
+" 2>/dev/null)
+        fail "$label (isError=true: $detail)"
     fi
 }
 

@@ -144,21 +144,26 @@ if command -v sqlite3 &>/dev/null; then
     RAW_RESULTS=$(kb_search "$DB_PATH" "$QUERY" 20)
 
     if [[ -n "$RAW_RESULTS" ]]; then
-      # Apply type filter and format
+      # kb_search outputs JSON array; parse with jq so '|'/newlines in fields are safe
       RESULTS=""
 
-      while IFS='|' read -r type content bead tags; do
+      while IFS= read -r ROW; do
+        local type content bead tags
+        type=$(echo "$ROW" | jq -r '.type // empty' 2>/dev/null)
         [[ -z "$type" ]] && continue
 
         if [[ -n "$TYPE_FILTER" ]] && [[ "$type" != "$TYPE_FILTER" ]]; then
           continue
         fi
 
+        content=$(echo "$ROW" | jq -r '.content // empty' 2>/dev/null)
+        bead=$(echo "$ROW" | jq -r '.bead // empty' 2>/dev/null)
+        tags=$(echo "$ROW" | jq -r '.tags_text // empty' 2>/dev/null)
         TYPE_UPPER=$(echo "$type" | tr '[:lower:]' '[:upper:]')
         RESULTS="${RESULTS}[$TYPE_UPPER] $content
   bead: $bead | $tags
 "
-      done <<< "$RAW_RESULTS"
+      done < <(echo "$RAW_RESULTS" | jq -c '.[]' 2>/dev/null)
 
       if [[ -n "$RESULTS" ]]; then
         echo "$RESULTS"

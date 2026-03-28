@@ -35,6 +35,7 @@ POST http://<host>:3100/mcp               (direct)
 ## Config
 
 Environment variables (prefix `SYSLOG_MCP_`, double underscore for nesting within sections):
+
 ```bash
 SYSLOG_MCP_SYSLOG__UDP_BIND=0.0.0.0:1514
 SYSLOG_MCP_STORAGE__DB_PATH=/data/syslog.db

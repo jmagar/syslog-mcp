@@ -160,7 +160,8 @@ kb_search() {
   SAFE_FTS_QUERY="${FTS_QUERY//\'/\'\'}"
 
   # BM25 weights: content=-10, tags_text=-5, type=-2, key=-1
-  sqlite3 -separator '|' "$DB_PATH" <<SQL
+  # JSON mode avoids pipe/newline corruption if fields contain '|' or newlines
+  sqlite3 -json "$DB_PATH" <<SQL
 SELECT k.type, k.content, k.bead, k.tags_text
 FROM knowledge_fts fts
 JOIN knowledge k ON k.rowid = fts.rowid
@@ -198,10 +199,11 @@ kb_sync() {
       for (( i=0; i<ROW_COUNT; i++ )); do
         local ISSUE_ID COMMENT_TEXT PREFIX TYPE CONTENT SLUG KEY
 
-        # Single jq call extracts both fields to avoid two subprocess spawns per row
-        local ROW_FIELDS
-        ROW_FIELDS=$(echo "$COMMENT_JSON" | jq -r ".[$i] | [(.issue_id // empty), (.text // empty)] | join(\"\u0001\")" 2>/dev/null)
-        IFS=$'\001' read -r ISSUE_ID COMMENT_TEXT <<< "$ROW_FIELDS"
+        # Single jq call; @base64 per field preserves embedded newlines
+        local -a ROW_B64
+        mapfile -t ROW_B64 < <(echo "$COMMENT_JSON" | jq -r ".[$i] | (.issue_id // \"\"), (.text // \"\") | @base64" 2>/dev/null)
+        ISSUE_ID=$(printf '%s' "${ROW_B64[0]:-}" | base64 -d 2>/dev/null)
+        COMMENT_TEXT=$(printf '%s' "${ROW_B64[1]:-}" | base64 -d 2>/dev/null)
         [[ -z "$COMMENT_TEXT" ]] && continue
 
         PREFIX=""
@@ -258,16 +260,30 @@ _kb_sync_jsonl() {
   tail -n +"$(( SKIP + 1 ))" "$JSONL_FILE" | while IFS= read -r LINE; do
     [[ -z "$LINE" ]] && continue
 
-    # Single jq invocation extracts all fields (avoids 7 subprocess spawns per line)
-    local FIELDS
-    FIELDS=$(echo "$LINE" | jq -r '[.key // empty, .type // "", .content // "", .source // "", ((.tags // []) | join(" ")), (.ts // 0 | tostring), .bead // ""] | join("\u0001")' 2>/dev/null)
-    [[ -z "$FIELDS" ]] && continue
+    # Single jq call; @base64 per field preserves embedded newlines in content/bead
+    local -a FIELDS_B64
+    mapfile -t FIELDS_B64 < <(echo "$LINE" | jq -r '
+      (.key // ""),
+      (.type // ""),
+      (.content // ""),
+      ((.tags // []) | join(" ")),
+      (.ts // 0 | tostring),
+      (.bead // "")
+      | @base64
+    ' 2>/dev/null)
 
-    local KEY TYPE CONTENT SOURCE TAGS_TEXT TS BEAD
-    IFS=$'\001' read -r KEY TYPE CONTENT SOURCE TAGS_TEXT TS BEAD <<< "$FIELDS"
+    local KEY TYPE CONTENT TAGS_TEXT TS BEAD
+    KEY=$(printf '%s' "${FIELDS_B64[0]:-}" | base64 -d 2>/dev/null)
     [[ -z "$KEY" ]] && continue
 
-    kb_insert "$DB_PATH" "$KEY" "$TYPE" "$CONTENT" "$SOURCE" "$TAGS_TEXT" "$TS" "$BEAD"
+    TYPE=$(printf '%s' "${FIELDS_B64[1]:-}" | base64 -d 2>/dev/null)
+    CONTENT=$(printf '%s' "${FIELDS_B64[2]:-}" | base64 -d 2>/dev/null)
+    TAGS_TEXT=$(printf '%s' "${FIELDS_B64[3]:-}" | base64 -d 2>/dev/null)
+    TS=$(printf '%s' "${FIELDS_B64[4]:-}" | base64 -d 2>/dev/null)
+    BEAD=$(printf '%s' "${FIELDS_B64[5]:-}" | base64 -d 2>/dev/null)
+
+    # Use JSONL file path as source so per-file watermark count works correctly
+    kb_insert "$DB_PATH" "$KEY" "$TYPE" "$CONTENT" "$JSONL_FILE" "$TAGS_TEXT" "$TS" "$BEAD"
   done
 }
 

@@ -1,4 +1,5 @@
 # Session: Post-Reboot Cleanup and Code Review
+
 **Date:** 2026-03-28
 **Branch:** `chore/add-lavra-project-config`
 
@@ -53,7 +54,7 @@ Post-reboot recovery session. Investigated pre-reboot state via session JSONL fi
 | `thiserror`, `uuid`, `axum-extra`, `tower` unused deps | Minor | `Cargo.toml:13-14,40-41` | Removed all four |
 | Raw 8-tuple as inter-module data contract | Major | `db.rs:128`, `syslog.rs:145,195` | Linter introduced `LogBatchEntry` type alias; `for (_, host, ...)` replaced with `entry.1` |
 | `parse_syslog` return type `Option<ParsedLog>` never returns `None` | Minor | `syslog.rs:208` | Changed return to `ParsedLog`; removed dead else branches from both call sites |
-| `unwrap()` on `checked_sub_signed` in production path | Minor | `db.rs:286` | Replaced with `.ok_or_else(|| anyhow!(...))` |
+| `unwrap()` on `checked_sub_signed` in production path | Minor | `db.rs:286` | Replaced with `.ok_or_else(\|\| anyhow!(...))` |
 | `warn` import orphaned after removing dead parse-failure log lines | — | `syslog.rs:7` | Removed |
 
 ---

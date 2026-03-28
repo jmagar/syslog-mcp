@@ -329,10 +329,18 @@ pub fn get_stats(pool: &DbPool) -> Result<serde_json::Value> {
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Deferred)?;
     let total_logs: i64 = tx.query_row("SELECT COUNT(*) FROM logs", [], |r| r.get(0))?;
     let total_hosts: i64 = tx.query_row("SELECT COUNT(*) FROM hosts", [], |r| r.get(0))?;
-    let oldest: Option<String> =
-        tx.query_row("SELECT MIN(timestamp) FROM logs", [], |r| r.get(0)).ok();
-    let newest: Option<String> =
-        tx.query_row("SELECT MAX(timestamp) FROM logs", [], |r| r.get(0)).ok();
+    // MIN/MAX return a single nullable row; use get::<_, Option<_>> so NULL becomes
+    // None while real query errors (e.g. missing table) still propagate via `?`.
+    let oldest: Option<String> = tx.query_row(
+        "SELECT MIN(timestamp) FROM logs",
+        [],
+        |r| r.get::<_, Option<String>>(0),
+    )?;
+    let newest: Option<String> = tx.query_row(
+        "SELECT MAX(timestamp) FROM logs",
+        [],
+        |r| r.get::<_, Option<String>>(0),
+    )?;
     tx.finish()?;
 
     Ok(serde_json::json!({

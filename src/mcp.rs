@@ -317,7 +317,7 @@ fn tool_definitions() -> Vec<Value> {
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Max total events to return (default 500, max 2000)"
+                        "description": "Max total events to return (default 500, max 999)"
                     }
                 },
                 "required": ["reference_time"]
@@ -431,9 +431,11 @@ async fn execute_tool(state: &AppState, name: &str, args: Value) -> anyhow::Resu
                 .map(|&s| s.to_string())
                 .collect();
 
-            // Parse reference time and compute window
+            // Parse reference time and normalize to UTC so window bounds compare
+            // correctly against UTC-stored timestamps (mixed offsets misorder TEXT).
             let ref_dt = chrono::DateTime::parse_from_rfc3339(reference_time)
-                .map_err(|e| anyhow::anyhow!("Invalid reference_time '{}': {e}", reference_time))?;
+                .map_err(|e| anyhow::anyhow!("Invalid reference_time '{}': {e}", reference_time))?
+                .with_timezone(&chrono::Utc);
 
             let from = (ref_dt - chrono::Duration::minutes(window)).to_rfc3339();
             let to = (ref_dt + chrono::Duration::minutes(window)).to_rfc3339();
@@ -442,7 +444,9 @@ async fn execute_tool(state: &AppState, name: &str, args: Value) -> anyhow::Resu
                 .get("limit")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(500)
-                .min(2000) as u32;
+                // Cap at 999: search_logs hard-limits to 1000 rows, so limit+1 must
+                // stay ≤ 1000 for the truncation sentinel to work correctly.
+                .min(999) as u32;
 
             let search = SearchParams {
                 query: args.get("query").and_then(|v| v.as_str()).map(String::from),

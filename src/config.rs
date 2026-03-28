@@ -66,8 +66,14 @@ impl Default for Config {
 }
 
 fn parse_addr(field: &str, value: &str) -> anyhow::Result<()> {
-    value.parse::<std::net::SocketAddr>()
-        .map_err(|e| anyhow::anyhow!("Invalid {} '{}': {}", field, value, e))?;
+    use std::net::ToSocketAddrs;
+    // Use ToSocketAddrs so hostnames like "localhost:3100" are accepted,
+    // matching the trait Tokio's bind methods accept at runtime.
+    value
+        .to_socket_addrs()
+        .map_err(|e| anyhow::anyhow!("Invalid {field} address '{value}': {e}"))?
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("Invalid {field} address '{value}': resolved to no addresses"))?;
     Ok(())
 }
 

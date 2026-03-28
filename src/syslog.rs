@@ -74,15 +74,23 @@ async fn udp_listener(bind: &str, max_size: usize, tx: mpsc::Sender<ParsedLog>) 
     info!(bind = %bind, "UDP syslog listener bound");
 
     let mut buf = vec![0u8; max_size];
+    let mut backpressure = false;
     loop {
         match socket.recv_from(&mut buf).await {
             Ok((len, addr)) => {
                 let raw = String::from_utf8_lossy(&buf[..len]).to_string();
                 debug!(src = %addr, len, "UDP syslog received");
 
-                if tx.capacity() == 0 {
-                    warn!(src = %addr, "syslog write channel full — backpressure applied");
+                // Log backpressure only on state transitions to avoid log storms.
+                let at_capacity = tx.capacity() == 0;
+                if at_capacity && !backpressure {
+                    warn!("syslog write channel full — backpressure applied");
+                    backpressure = true;
+                } else if !at_capacity && backpressure {
+                    info!("syslog write channel cleared — backpressure lifted");
+                    backpressure = false;
                 }
+
                 if tx.send(parse_syslog(&raw)).await.is_err() {
                     error!("Write channel closed");
                     break;
@@ -109,6 +117,7 @@ async fn tcp_listener(bind: &str, tx: mpsc::Sender<ParsedLog>) -> Result<()> {
                     info!(peer = %addr, "TCP syslog connection accepted");
                     let reader = BufReader::new(stream);
                     let mut lines = reader.lines();
+                    let mut backpressure = false;
 
                     loop {
                         match lines.next_line().await {
@@ -116,8 +125,14 @@ async fn tcp_listener(bind: &str, tx: mpsc::Sender<ParsedLog>) -> Result<()> {
                                 if line.is_empty() {
                                     continue;
                                 }
-                                if tx.capacity() == 0 {
+                                // Log backpressure only on state transitions.
+                                let at_capacity = tx.capacity() == 0;
+                                if at_capacity && !backpressure {
                                     warn!(peer = %addr, "syslog write channel full — backpressure applied");
+                                    backpressure = true;
+                                } else if !at_capacity && backpressure {
+                                    info!(peer = %addr, "syslog write channel cleared — backpressure lifted");
+                                    backpressure = false;
                                 }
                                 if tx.send(parse_syslog(&line)).await.is_err() {
                                     break;
