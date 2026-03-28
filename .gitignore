@@ -21,7 +21,6 @@ desktop.ini
 *.cert
 
 # Docs (generated, session-specific)
-docs/sessions
 docs/reports
 docs/superpowers
 
