@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 use crate::config::SyslogConfig;
 use crate::db::{self, DbPool};
@@ -84,13 +84,9 @@ async fn udp_listener(bind: &str, max_size: usize, tx: mpsc::Sender<ParsedLog>) 
                 let raw = String::from_utf8_lossy(&buf[..len]).to_string();
                 debug!(src = %addr, len, "UDP syslog received");
 
-                if let Some(parsed) = parse_syslog(&raw) {
-                    if tx.send(parsed).await.is_err() {
-                        error!("Write channel closed");
-                        break;
-                    }
-                } else {
-                    warn!(raw = %raw.chars().take(200).collect::<String>(), "Failed to parse syslog message");
+                if tx.send(parse_syslog(&raw)).await.is_err() {
+                    error!("Write channel closed");
+                    break;
                 }
             }
             Err(e) => {
@@ -119,12 +115,8 @@ async fn tcp_listener(bind: &str, tx: mpsc::Sender<ParsedLog>) -> Result<()> {
                         if line.is_empty() {
                             continue;
                         }
-                        if let Some(parsed) = parse_syslog(&line) {
-                            if tx.send(parsed).await.is_err() {
-                                break;
-                            }
-                        } else {
-                            warn!(raw = %line.chars().take(200).collect::<String>(), "Failed to parse TCP syslog");
+                        if tx.send(parse_syslog(&line)).await.is_err() {
+                            break;
                         }
                     }
                     info!(peer = %addr, "TCP syslog connection closed");
@@ -142,8 +134,7 @@ async fn batch_writer(mut rx: mpsc::Receiver<ParsedLog>, pool: Arc<DbPool>) {
     let batch_size = 100;
     let flush_interval = tokio::time::Duration::from_millis(500);
 
-    let mut batch: Vec<(String, String, Option<String>, String, Option<String>, Option<String>, String, String)> =
-        Vec::with_capacity(batch_size);
+    let mut batch: Vec<db::LogBatchEntry> = Vec::with_capacity(batch_size);
 
     loop {
         let deadline = tokio::time::sleep(flush_interval);
@@ -192,7 +183,7 @@ async fn batch_writer(mut rx: mpsc::Receiver<ParsedLog>, pool: Arc<DbPool>) {
 
 fn flush_batch(
     pool: &DbPool,
-    batch: &mut Vec<(String, String, Option<String>, String, Option<String>, Option<String>, String, String)>,
+    batch: &mut Vec<db::LogBatchEntry>,
 ) {
     match db::insert_logs_batch(pool, batch) {
         Ok(n) => {
@@ -206,8 +197,8 @@ fn flush_batch(
 }
 
 /// Parse a raw syslog message (RFC 3164 / RFC 5424 / loose)
-fn parse_syslog(raw: &str) -> Option<ParsedLog> {
-    let msg = syslog_loose::parse_message(raw);
+fn parse_syslog(raw: &str) -> ParsedLog {
+    let msg = syslog_loose::parse_message(raw, syslog_loose::Variant::Either);
 
     let severity_num = msg.severity.map(|s| s as u8).unwrap_or(6); // default to info
     let facility_num = msg.facility.map(|f| f as u8);
@@ -221,20 +212,7 @@ fn parse_syslog(raw: &str) -> Option<ParsedLog> {
 
     let timestamp = msg
         .timestamp
-        .map(|ts| match ts {
-            syslog_loose::IncompleteDate::Complete(dt) => dt.to_rfc3339(),
-            syslog_loose::IncompleteDate::HadYear(dt) => dt.to_rfc3339(),
-            syslog_loose::IncompleteDate::HadMonth(dt) => dt.to_rfc3339(),
-            syslog_loose::IncompleteDate::HadTimezone(nt) => {
-                // No date info, use today's date
-                let now = Utc::now().date_naive();
-                now.and_time(nt).and_utc().to_rfc3339()
-            }
-            syslog_loose::IncompleteDate::None(nt) => {
-                let now = Utc::now().date_naive();
-                now.and_time(nt).and_utc().to_rfc3339()
-            }
-        })
+        .map(|dt| dt.to_rfc3339())
         .unwrap_or_else(|| Utc::now().to_rfc3339());
 
     let hostname = msg
@@ -248,7 +226,7 @@ fn parse_syslog(raw: &str) -> Option<ParsedLog> {
         syslog_loose::ProcId::Name(s) => s.to_string(),
     });
 
-    Some(ParsedLog {
+    ParsedLog {
         timestamp,
         hostname,
         facility,
@@ -257,5 +235,5 @@ fn parse_syslog(raw: &str) -> Option<ParsedLog> {
         process_id,
         message: msg.msg.to_string(),
         raw: raw.to_string(),
-    })
+    }
 }

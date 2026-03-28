@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chrono::{NaiveDateTime, Utc};
+use chrono::Utc;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::params;
@@ -8,6 +8,18 @@ use serde::{Deserialize, Serialize};
 use crate::config::StorageConfig;
 
 pub type DbPool = Pool<SqliteConnectionManager>;
+
+/// Tuple form of a log entry for batch insertion
+pub type LogBatchEntry = (
+    String,         // timestamp
+    String,         // hostname
+    Option<String>, // facility
+    String,         // severity
+    Option<String>, // app_name
+    Option<String>, // process_id
+    String,         // message
+    String,         // raw
+);
 
 /// A parsed and stored log entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,43 +133,11 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
     Ok(pool)
 }
 
-/// Insert a single log entry (used by the syslog listener)
-pub fn insert_log(
-    pool: &DbPool,
-    timestamp: &str,
-    hostname: &str,
-    facility: Option<&str>,
-    severity: &str,
-    app_name: Option<&str>,
-    process_id: Option<&str>,
-    message: &str,
-    raw: &str,
-) -> Result<i64> {
-    let conn = pool.get()?;
-    conn.execute(
-        "INSERT INTO logs (timestamp, hostname, facility, severity, app_name, process_id, message, raw)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        params![timestamp, hostname, facility, severity, app_name, process_id, message, raw],
-    )?;
-    let id = conn.last_insert_rowid();
-
-    // Upsert host registry
-    conn.execute(
-        "INSERT INTO hosts (hostname, log_count)
-         VALUES (?1, 1)
-         ON CONFLICT(hostname) DO UPDATE SET
-             last_seen = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-             log_count = log_count + 1",
-        params![hostname],
-    )?;
-
-    Ok(id)
-}
 
 /// Batch insert for higher throughput
 pub fn insert_logs_batch(
     pool: &DbPool,
-    entries: &[(String, String, Option<String>, String, Option<String>, Option<String>, String, String)],
+    entries: &[LogBatchEntry],
 ) -> Result<usize> {
     let mut conn = pool.get()?;
     let tx = conn.transaction()?;
@@ -180,8 +160,8 @@ pub fn insert_logs_batch(
                  last_seen = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
                  log_count = log_count + 1",
         )?;
-        for (_, host, _, _, _, _, _, _) in entries {
-            host_stmt.execute(params![host])?;
+        for entry in entries {
+            host_stmt.execute(params![entry.1])?;
         }
     }
 
@@ -214,15 +194,15 @@ pub fn search_logs(pool: &DbPool, params: &SearchParams) -> Result<Vec<LogEntry>
         Ok(rows.filter_map(|r| r.ok()).collect())
     } else {
         let mut sql = String::from(
-            "SELECT id, timestamp, hostname, facility, severity,
-                    app_name, process_id, message, received_at
-             FROM logs WHERE 1=1",
+            "SELECT l.id, l.timestamp, l.hostname, l.facility, l.severity,
+                    l.app_name, l.process_id, l.message, l.received_at
+             FROM logs l WHERE 1=1",
         );
         let mut bindings: Vec<Box<dyn rusqlite::types::ToSql>> = vec![];
         let mut idx = 1;
 
         append_filters(&mut sql, &mut bindings, &mut idx, params);
-        sql.push_str(&format!(" ORDER BY timestamp DESC LIMIT {limit}"));
+        sql.push_str(&format!(" ORDER BY l.timestamp DESC LIMIT {limit}"));
 
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(bindings.iter().map(|b| b.as_ref())), map_row)?;
@@ -251,7 +231,6 @@ pub fn tail_logs(pool: &DbPool, hostname: Option<&str>, app_name: Option<&str>, 
     if let Some(a) = app_name {
         sql.push_str(&format!(" AND app_name = ?{idx}"));
         bindings.push(Box::new(a.to_string()));
-        idx += 1;
     }
 
     sql.push_str(&format!(" ORDER BY timestamp DESC LIMIT {n}"));
@@ -316,7 +295,7 @@ pub fn purge_old_logs(pool: &DbPool, retention_days: u32) -> Result<usize> {
     let conn = pool.get()?;
     let cutoff = Utc::now()
         .checked_sub_signed(chrono::Duration::days(retention_days as i64))
-        .unwrap()
+        .ok_or_else(|| anyhow::anyhow!("date arithmetic overflow for retention_days={retention_days}"))?
         .format("%Y-%m-%dT%H:%M:%SZ")
         .to_string();
 

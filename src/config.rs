@@ -1,4 +1,4 @@
-use figment::{providers::{Env, Serialized, Toml}, Figment};
+use figment::{providers::{Env, Format, Serialized, Toml}, Figment};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 

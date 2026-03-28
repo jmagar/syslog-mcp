@@ -13,8 +13,6 @@ use axum::{
 use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tokio_stream::StreamExt;
-use tracing::{error, info};
 
 use crate::config::McpConfig;
 use crate::db::{self, DbPool, SearchParams};
@@ -29,6 +27,7 @@ pub struct AppState {
 /// MCP JSON-RPC request
 #[derive(Debug, Deserialize)]
 struct JsonRpcRequest {
+    #[expect(dead_code, reason = "required by JSON-RPC 2.0 spec; serde needs the field for deserialization")]
     jsonrpc: String,
     id: Option<Value>,
     method: String,
@@ -104,14 +103,13 @@ async fn handle_mcp_post(
     State(state): State<AppState>,
     Json(req): Json<JsonRpcRequest>,
 ) -> impl IntoResponse {
-    let id = req.id.clone().unwrap_or(Value::Null);
     let response = dispatch(&state, &req).await;
     Json(response)
 }
 
 /// SSE endpoint for MCP (legacy transport support)
 async fn handle_sse(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
 ) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
     let stream = tokio_stream::once(Ok(Event::default()
         .event("endpoint")

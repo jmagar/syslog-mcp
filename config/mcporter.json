@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "syslog-mcp": {
+      "url": "http://localhost:3100/mcp",
+      "transport": "http"
+    }
+  }
+}

@@ -35,3 +35,8 @@ config.local.toml
 .dolt/
 *.db
 .beads-credential-key
+
+# Runtime data (SQLite DB and WAL files)
+data/
+*.db-shm
+*.db-wal
