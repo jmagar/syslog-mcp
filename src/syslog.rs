@@ -244,7 +244,7 @@ fn parse_syslog(raw: &str) -> ParsedLog {
 
     let timestamp = msg
         .timestamp
-        .map(|dt| dt.to_rfc3339())
+        .map(|dt| dt.with_timezone(&Utc).to_rfc3339())
         .unwrap_or_else(|| Utc::now().to_rfc3339());
 
     let hostname = msg

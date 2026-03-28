@@ -98,14 +98,17 @@ if [[ -n "$TOPIC_ID" ]]; then
   fi
 
   for CHILD_ID in $CHILDREN; do
-    grep "\"bead\":\"$CHILD_ID\"" "$KNOWLEDGE_FILE" 2>/dev/null
+    grep -F "\"bead\":\"$CHILD_ID\"" "$KNOWLEDGE_FILE" 2>/dev/null
   done | jq -r '"\(.type | ascii_upcase): \(.content)"' 2>/dev/null
   exit 0
 fi
 
-# Build input (optionally include archive)
-INPUT_FILES=("$KNOWLEDGE_FILE")
-$INCLUDE_ARCHIVE && [[ -f "$ARCHIVE_FILE" ]] && INPUT_FILES+=("$ARCHIVE_FILE")
+# Build input: archive first so tail -N returns the newest entries from knowledge.jsonl
+if $INCLUDE_ARCHIVE && [[ -f "$ARCHIVE_FILE" ]]; then
+  INPUT_FILES=("$ARCHIVE_FILE" "$KNOWLEDGE_FILE")
+else
+  INPUT_FILES=("$KNOWLEDGE_FILE")
+fi
 
 # Recent mode
 if [[ "$RECENT" -gt 0 ]]; then
@@ -130,7 +133,10 @@ if command -v sqlite3 &>/dev/null; then
   # Auto-build DB on first use if it doesn't exist but JSONL does
   if [[ ! -f "$DB_PATH" ]] && [[ -f "$JSONL_PATH" ]] && [[ -f "$SCRIPT_DIR/knowledge-db.sh" ]]; then
     echo "Building knowledge DB from JSONL..." >&2
-    bash "$SCRIPT_DIR/knowledge-db.sh" sync 2>/dev/null || true
+    # Source the library and call kb_sync directly (knowledge-db.sh only defines
+    # functions; running it as a subprocess with "sync" would be a no-op).
+    source "$SCRIPT_DIR/knowledge-db.sh"
+    kb_sync "$DB_PATH" "$MEMORY_DIR" 2>/dev/null || true
   fi
 
   if [[ -f "$DB_PATH" ]] && [[ -f "$SCRIPT_DIR/knowledge-db.sh" ]]; then

@@ -32,10 +32,10 @@ config.local.toml
 
 # Beads / Dolt files (added by bd init)
 .dolt/
-*.db
 .beads-credential-key
 
 # Runtime data (SQLite DB and WAL files)
 data/
+data/*.db
 *.db-shm
 *.db-wal

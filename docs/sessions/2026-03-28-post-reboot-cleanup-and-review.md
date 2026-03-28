@@ -27,23 +27,27 @@ Post-reboot recovery session. Investigated pre-reboot state via session JSONL fi
 ## Key Findings
 
 ### Pre-Reboot State (from session JSONL analysis)
+
 - Pre-reboot session file: `~/.claude/projects/-home-jmagar-workspace-syslog-mcp/8b8891e1-1046-422d-9754-29bb16651e3e.jsonl`
 - Last action before reboot: created PR `jmagar/syslog-mcp#1` at 2026-03-28T01:59
 - All compile-error fixes were already applied to the working tree — none were lost
 
 ### Compile Errors Fixed (pre-reboot, verified post-reboot)
+
 - `src/config.rs:1` — Added missing `Format` trait import for `figment`
 - `src/db.rs:1` — Removed unused `NaiveDateTime` import; `src/db.rs:217` — added `l.` table alias to ambiguous column refs
 - `src/mcp.rs:14,106,112` — Removed unused imports (`tokio_stream::StreamExt`, `tracing::info`); removed unused `let id` in `handle_mcp_post`; prefixed unused `_state` param in `handle_sse`
 - `src/syslog.rs:210` — Updated `syslog_loose::parse_message()` to new API: added `syslog_loose::Variant::Either` argument; `src/syslog.rs:221-231` — removed stale `IncompleteDate` match (API now returns `DateTime<FixedOffset>` directly)
 
 ### /simplify Findings Fixed
+
 - `src/mcp.rs:16` — Removed unused `tracing::error` import (warning)
 - `src/db.rs:125-155` — Removed dead `insert_log()` function (all writes go through `insert_logs_batch`)
 - `src/db.rs:254` — Removed final `idx += 1` in `tail_logs` (value assigned, never read)
 - `src/mcp.rs:30` — Changed `#[allow(dead_code)]` to `#[expect(dead_code, reason = "...")]` on `jsonrpc` field (linter applied)
 
 ### /beagle-rust Findings Fixed
+
 | Finding | Severity | Location | Fix |
 |---------|----------|----------|-----|
 | `thiserror`, `uuid`, `axum-extra`, `tower` unused deps | Minor | `Cargo.toml:13-14,40-41` | Removed all four |
@@ -115,7 +119,7 @@ cargo test           # 0 tests (no tests exist yet)
 
 - **Removed `warn!` parse-failure log lines** — Syslog messages that fail to parse no longer produce a warning log. Since `syslog_loose` never actually fails (it's a lossy parser), this was dead code. If for some reason silent parse failures become a concern, restore the warning by checking for empty/default fields on the result.
 - **Removed `thiserror` dep** — If future code needs `#[derive(thiserror::Error)]`, re-add to Cargo.toml.
-- **Rollback**: `git checkout src/ Cargo.toml` restores all pre-session state.
+- **Rollback**: `git checkout src/ Cargo.toml && git clean -f config/mcporter.json scripts/smoke-test.sh docs/sessions/2026-03-28-post-reboot-cleanup-and-review.md` restores all pre-session state (tracked files reverted, new files removed).
 
 ---
 

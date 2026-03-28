@@ -110,7 +110,7 @@ kb_insert() {
     --arg bead "$BEAD" \
     '[$key, $type, $content, $source, $tags_text, $ts, $bead] | @csv' > "$TMPFILE"
 
-  sqlite3 "$DB_PATH" ".mode csv" ".import ${TMPFILE} knowledge" 2>/dev/null
+  sqlite3 "$DB_PATH" ".mode csv" ".import \"${TMPFILE}\" knowledge" 2>/dev/null
   local RC=$?
 
   rm -f "$TMPFILE"
@@ -198,8 +198,10 @@ kb_sync() {
       for (( i=0; i<ROW_COUNT; i++ )); do
         local ISSUE_ID COMMENT_TEXT PREFIX TYPE CONTENT SLUG KEY
 
-        ISSUE_ID=$(echo "$COMMENT_JSON" | jq -r ".[$i].issue_id // empty" 2>/dev/null)
-        COMMENT_TEXT=$(echo "$COMMENT_JSON" | jq -r ".[$i].text // empty" 2>/dev/null)
+        # Single jq call extracts both fields to avoid two subprocess spawns per row
+        local ROW_FIELDS
+        ROW_FIELDS=$(echo "$COMMENT_JSON" | jq -r ".[$i] | [(.issue_id // empty), (.text // empty)] | join(\"\u0001\")" 2>/dev/null)
+        IFS=$'\001' read -r ISSUE_ID COMMENT_TEXT <<< "$ROW_FIELDS"
         [[ -z "$COMMENT_TEXT" ]] && continue
 
         PREFIX=""
@@ -256,16 +258,14 @@ _kb_sync_jsonl() {
   tail -n +"$(( SKIP + 1 ))" "$JSONL_FILE" | while IFS= read -r LINE; do
     [[ -z "$LINE" ]] && continue
 
-    local KEY TYPE CONTENT SOURCE TAGS_TEXT TS BEAD
-    KEY=$(echo "$LINE" | jq -r '.key // empty' 2>/dev/null)
-    [[ -z "$KEY" ]] && continue
+    # Single jq invocation extracts all fields (avoids 7 subprocess spawns per line)
+    local FIELDS
+    FIELDS=$(echo "$LINE" | jq -r '[.key // empty, .type // "", .content // "", .source // "", ((.tags // []) | join(" ")), (.ts // 0 | tostring), .bead // ""] | join("\u0001")' 2>/dev/null)
+    [[ -z "$FIELDS" ]] && continue
 
-    TYPE=$(echo "$LINE" | jq -r '.type // ""' 2>/dev/null)
-    CONTENT=$(echo "$LINE" | jq -r '.content // ""' 2>/dev/null)
-    SOURCE=$(echo "$LINE" | jq -r '.source // ""' 2>/dev/null)
-    TAGS_TEXT=$(echo "$LINE" | jq -r '(.tags // []) | join(" ")' 2>/dev/null)
-    TS=$(echo "$LINE" | jq -r '.ts // 0' 2>/dev/null)
-    BEAD=$(echo "$LINE" | jq -r '.bead // ""' 2>/dev/null)
+    local KEY TYPE CONTENT SOURCE TAGS_TEXT TS BEAD
+    IFS=$'\001' read -r KEY TYPE CONTENT SOURCE TAGS_TEXT TS BEAD <<< "$FIELDS"
+    [[ -z "$KEY" ]] && continue
 
     kb_insert "$DB_PATH" "$KEY" "$TYPE" "$CONTENT" "$SOURCE" "$TAGS_TEXT" "$TS" "$BEAD"
   done

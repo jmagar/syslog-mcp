@@ -34,12 +34,12 @@ POST http://<host>:3100/mcp               (direct)
 
 ## Config
 
-Environment variables (prefix `SYSLOG_MCP__`, double underscore for nesting):
+Environment variables (prefix `SYSLOG_MCP_`, double underscore for nesting within sections):
 ```bash
-SYSLOG_MCP__SYSLOG__UDP_BIND=0.0.0.0:1514
-SYSLOG_MCP__STORAGE__DB_PATH=/data/syslog.db
-SYSLOG_MCP__STORAGE__RETENTION_DAYS=90
-SYSLOG_MCP__MCP__BIND=0.0.0.0:3100
+SYSLOG_MCP_SYSLOG__UDP_BIND=0.0.0.0:1514
+SYSLOG_MCP_STORAGE__DB_PATH=/data/syslog.db
+SYSLOG_MCP_STORAGE__RETENTION_DAYS=90
+SYSLOG_MCP_MCP__BIND=0.0.0.0:3100
 ```
 
 Or edit `config.toml`.

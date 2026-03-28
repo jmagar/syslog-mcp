@@ -17,11 +17,23 @@ HEALTH_URL="${MCP_URL%/mcp}/health"
 SYSLOG_HOST="${SYSLOG_HOST:-127.0.0.1}"
 SYSLOG_PORT="${SYSLOG_PORT:-1514}"
 SKIP_SEED=0
-MCPORTER_ARGS=""
+MCPORTER_CONFIG="config/mcporter.json"
+_MCPORTER_CONFIG_TMPFILE=""
+
+# Clean up temp config on exit
+trap '[[ -n "$_MCPORTER_CONFIG_TMPFILE" ]] && rm -f "$_MCPORTER_CONFIG_TMPFILE"' EXIT
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --url) MCP_URL="$2"; HEALTH_URL="${MCP_URL%/mcp}/health"; shift 2 ;;
+        --url)
+            [[ -z "${2:-}" ]] && { echo "Error: --url requires a value"; exit 1; }
+            MCP_URL="$2"; HEALTH_URL="${MCP_URL%/mcp}/health"; shift 2
+            # Create a temp mcporter config pointing at the custom URL so both
+            # health checks and mcporter tool calls target the same server.
+            _MCPORTER_CONFIG_TMPFILE=$(mktemp /tmp/mcporter-XXXXXX.json)
+            printf '{"mcpServers":{"syslog-mcp":{"url":"%s","transport":"http"}}}' "$MCP_URL" > "$_MCPORTER_CONFIG_TMPFILE"
+            MCPORTER_CONFIG="$_MCPORTER_CONFIG_TMPFILE"
+            ;;
         --skip-seed) SKIP_SEED=1; shift ;;
         *) echo "Unknown arg: $1"; exit 1 ;;
     esac
@@ -43,7 +55,7 @@ fail() { echo -e "${COLOR_RED}FAIL${COLOR_RESET}  $1"; ERRORS+=("$1"); (( FAIL++
 # Run mcporter call and return output (exits non-zero on tool error)
 mcp_call() {
     local tool="$1"; shift
-    mcporter call --config config/mcporter.json "syslog-mcp.${tool}" "$@" 2>&1
+    mcporter call --config "$MCPORTER_CONFIG" "syslog-mcp.${tool}" "$@" 2>&1
 }
 
 # Extract JSON field from output
@@ -96,7 +108,7 @@ HEALTH_STATUS=$(json_get "$HEALTH" "['status']")
 assert_eq "Health endpoint responds" "$HEALTH_STATUS" "ok"
 
 # 1b: mcporter can reach server and lists all 6 tools
-TOOL_LIST=$(mcporter list syslog-mcp --config config/mcporter.json 2>&1)
+TOOL_LIST=$(mcporter list syslog-mcp --config "$MCPORTER_CONFIG" 2>&1)
 TOOL_COUNT=$(echo "$TOOL_LIST" | grep -c "^  function " || true)
 if [[ "$TOOL_COUNT" -eq 6 ]]; then
     pass "mcporter lists 6 tools ($TOOL_COUNT found)"
@@ -247,8 +259,8 @@ PHRASE_COUNT=$(echo "$SEARCH_PHRASE" | python3 -c "import sys,json; d=json.load(
 assert_gte "search_logs(phrase query): finds matching logs" "$PHRASE_COUNT" 1
 
 # limit=0 should not crash (returns 0, not error)
-SEARCH_ZERO=$(mcp_call search_logs "limit=1" 2>&1)
-assert_no_error "search_logs(limit=1): no error" "$SEARCH_ZERO"
+SEARCH_ZERO=$(mcp_call search_logs "limit=0" 2>&1)
+assert_no_error "search_logs(limit=0): no error" "$SEARCH_ZERO"
 
 # ── Tool 5: get_errors ───────────────────────────────────────────────────────
 echo ""
