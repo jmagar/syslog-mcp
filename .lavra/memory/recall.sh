@@ -30,11 +30,32 @@ TOPIC_ID=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --type) TYPE_FILTER="$2"; shift 2 ;;
-    --recent) RECENT="$2"; shift 2 ;;
+    --type)
+      if [[ -z "$2" || "$2" == --* ]]; then
+        echo "Error: --type requires a value" >&2
+        exit 1
+      fi
+      TYPE_FILTER="$2"
+      shift 2
+      ;;
+    --recent)
+      if [[ -z "$2" || "$2" == --* ]]; then
+        echo "Error: --recent requires a value" >&2
+        exit 1
+      fi
+      RECENT="$2"
+      shift 2
+      ;;
     --stats) SHOW_STATS=true; shift ;;
     --all) INCLUDE_ARCHIVE=true; shift ;;
-    --topic) TOPIC_ID="$2"; shift 2 ;;
+    --topic)
+      if [[ -z "$2" || "$2" == --* ]]; then
+        echo "Error: --topic requires a value" >&2
+        exit 1
+      fi
+      TOPIC_ID="$2"
+      shift 2
+      ;;
     *) QUERY="$1"; shift ;;
   esac
 done
@@ -83,12 +104,12 @@ if [[ -n "$TOPIC_ID" ]]; then
 fi
 
 # Build input (optionally include archive)
-INPUT_FILES="$KNOWLEDGE_FILE"
-$INCLUDE_ARCHIVE && [[ -f "$ARCHIVE_FILE" ]] && INPUT_FILES="$ARCHIVE_FILE $KNOWLEDGE_FILE"
+INPUT_FILES=("$KNOWLEDGE_FILE")
+$INCLUDE_ARCHIVE && [[ -f "$ARCHIVE_FILE" ]] && INPUT_FILES+=("$ARCHIVE_FILE")
 
 # Recent mode
 if [[ "$RECENT" -gt 0 ]]; then
-  cat $INPUT_FILES | tail -"$RECENT" | jq -r '"\(.type | ascii_upcase): \(.content)"' 2>/dev/null
+  cat "${INPUT_FILES[@]}" | tail -"$RECENT" | jq -r '"\(.type | ascii_upcase): \(.content)"' 2>/dev/null
   exit 0
 fi
 
@@ -104,6 +125,13 @@ USED_FTS5=false
 if command -v sqlite3 &>/dev/null; then
   DB_PATH="$MEMORY_DIR/knowledge.db"
   SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+  JSONL_PATH="$KNOWLEDGE_FILE"
+
+  # Auto-build DB on first use if it doesn't exist but JSONL does
+  if [[ ! -f "$DB_PATH" ]] && [[ -f "$JSONL_PATH" ]] && [[ -f "$SCRIPT_DIR/knowledge-db.sh" ]]; then
+    echo "Building knowledge DB from JSONL..." >&2
+    bash "$SCRIPT_DIR/knowledge-db.sh" sync 2>/dev/null || true
+  fi
 
   if [[ -f "$DB_PATH" ]] && [[ -f "$SCRIPT_DIR/knowledge-db.sh" ]]; then
     source "$SCRIPT_DIR/knowledge-db.sh"
@@ -136,10 +164,10 @@ fi
 
 if [[ "$USED_FTS5" = false ]]; then
   # Grep fallback (use -F for fixed-string matching to prevent regex metachar issues)
-  RESULTS=$(grep -iF "$QUERY" $INPUT_FILES 2>/dev/null)
+  RESULTS=$(grep -iF "$QUERY" "${INPUT_FILES[@]}" 2>/dev/null)
 
   if [[ -n "$TYPE_FILTER" ]]; then
-    RESULTS=$(echo "$RESULTS" | jq -r "select(.type == \"$TYPE_FILTER\")" 2>/dev/null)
+    RESULTS=$(echo "$RESULTS" | jq --arg type "$TYPE_FILTER" 'select(.type == $type)' 2>/dev/null)
   fi
 
   echo "$RESULTS" | jq -rs '
