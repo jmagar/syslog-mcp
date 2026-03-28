@@ -6,6 +6,13 @@ All notable changes to syslog-mcp are documented here.
 
 ---
 
+## [0.1.4] — 2026-03-28
+
+### Added
+- Session docs for syslog host onboarding (tootie, dookie, squirts, steamy-wsl, vivobook-wsl) and systemd service cleanup
+
+---
+
 ## [0.1.3] — 2026-03-28
 
 ### Fixed
@@ -67,7 +74,9 @@ All notable changes to syslog-mcp are documented here.
 
 ---
 
-[Unreleased]: https://github.com/jmagar/syslog-mcp/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/jmagar/syslog-mcp/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/jmagar/syslog-mcp/compare/v0.1.3...v0.1.4
+[0.1.3]: https://github.com/jmagar/syslog-mcp/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/jmagar/syslog-mcp/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/jmagar/syslog-mcp/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/jmagar/syslog-mcp/releases/tag/v0.1.0
