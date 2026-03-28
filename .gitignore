@@ -20,8 +20,18 @@ desktop.ini
 *.pem
 *.cert
 
+# Docs (generated, session-specific)
+docs/sessions
+docs/reports
+docs/superpowers
+
 # Logs
 *.log
 
 # Config overrides (keep example, ignore local)
 config.local.toml
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
