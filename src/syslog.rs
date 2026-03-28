@@ -204,16 +204,25 @@ async fn flush_batch(
     let pool = Arc::clone(pool);
     let batch_to_write = std::mem::take(batch);
     let count = batch_to_write.len();
-    match tokio::task::spawn_blocking(move || db::insert_logs_batch(&pool, &batch_to_write))
-        .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))
-        .and_then(|r| r)
+    match tokio::task::spawn_blocking(move || {
+        // Return the batch back on error so the caller can retain it for the next flush
+        match db::insert_logs_batch(&pool, &batch_to_write) {
+            Ok(n) => Ok(n),
+            Err(e) => Err((e, batch_to_write)),
+        }
+    })
+    .await
     {
-        Ok(n) => {
+        Ok(Ok(n)) => {
             debug!(count = n, "Flushed log batch");
         }
+        Ok(Err((e, failed_batch))) => {
+            error!(error = %e, count, "Failed to flush log batch — retaining for next flush");
+            *batch = failed_batch;
+        }
         Err(e) => {
-            error!(error = %e, count, "Failed to flush log batch — batch discarded");
+            // spawn_blocking panicked — batch is unrecoverable
+            error!(error = %e, count, "spawn_blocking panicked during flush — batch discarded");
         }
     }
 }

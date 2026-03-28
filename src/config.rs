@@ -25,7 +25,11 @@ pub struct StorageConfig {
     pub db_path: PathBuf,
     /// Connection pool size
     pub pool_size: u32,
-    /// Days to retain logs (0 = forever)
+    /// Days to retain logs before automatic deletion.
+    ///
+    /// Set to `0` to disable purging entirely (logs kept forever).
+    /// When non-zero, an hourly background task deletes logs older than this many days.
+    /// Validated at startup: the `if retention_days > 0` guard in `main.rs` enforces this.
     pub retention_days: u32,
     /// WAL mode (recommended for concurrent reads)
     pub wal_mode: bool,

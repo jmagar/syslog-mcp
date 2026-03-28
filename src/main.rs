@@ -32,20 +32,28 @@ async fn main() -> Result<()> {
     syslog::start(config.syslog.clone(), pool.clone()).await?;
 
     // Start retention purge task
-    let purge_pool = pool.clone();
     let retention_days = config.storage.retention_days;
-    if retention_days > 0 {
-        tokio::spawn(async move {
+    let purge_handle = if retention_days > 0 {
+        let purge_pool = pool.clone();
+        let handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(3600));
             loop {
                 interval.tick().await;
-                if let Err(e) = db::purge_old_logs(&purge_pool, retention_days) {
+                let pool = Arc::clone(&purge_pool);
+                if let Err(e) = tokio::task::spawn_blocking(move || db::purge_old_logs(&pool, retention_days))
+                    .await
+                    .map_err(|e| anyhow::anyhow!("spawn_blocking error: {e}"))
+                    .and_then(|r| r)
+                {
                     tracing::error!(error = %e, "Failed to purge old logs");
                 }
             }
         });
         info!(retention_days, "Log retention purge task started (hourly)");
-    }
+        Some(handle)
+    } else {
+        None
+    };
 
     // Build and start MCP HTTP server
     let state = mcp::AppState {
@@ -68,6 +76,11 @@ async fn main() -> Result<()> {
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
+
+    if let Some(handle) = purge_handle {
+        handle.abort();
+        let _ = handle.await;
+    }
 
     Ok(())
 }

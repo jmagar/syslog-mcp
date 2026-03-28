@@ -154,16 +154,20 @@ pub fn insert_logs_batch(
             stmt.execute(params![ts, host, facility, severity, app, pid, msg, raw])?;
         }
 
-        // Batch upsert hosts
+        // Batch upsert hosts — group by hostname to avoid one upsert per log entry
+        let mut host_counts: std::collections::HashMap<&str, i64> = std::collections::HashMap::new();
+        for entry in entries {
+            *host_counts.entry(entry.1.as_str()).or_insert(0) += 1;
+        }
         let mut host_stmt = tx.prepare_cached(
             "INSERT INTO hosts (hostname, log_count)
-             VALUES (?1, 1)
+             VALUES (?1, ?2)
              ON CONFLICT(hostname) DO UPDATE SET
                  last_seen = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-                 log_count = log_count + 1",
+                 log_count = log_count + excluded.log_count",
         )?;
-        for entry in entries {
-            host_stmt.execute(params![entry.1])?;
+        for (hostname, count) in &host_counts {
+            host_stmt.execute(params![hostname, count])?;
         }
     }
 
@@ -185,7 +189,7 @@ pub fn search_logs(pool: &DbPool, params: &SearchParams) -> Result<Vec<LogEntry>
              JOIN logs_fts ON logs_fts.rowid = l.id
              WHERE logs_fts MATCH ?1",
         );
-        let mut bindings: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(query.clone())];
+        let mut bindings: Vec<Box<dyn rusqlite::types::ToSql + '_>> = vec![Box::new(query.as_str())];
         let mut idx = 2;
 
         append_filters(&mut sql, &mut bindings, &mut idx, params);
@@ -200,7 +204,7 @@ pub fn search_logs(pool: &DbPool, params: &SearchParams) -> Result<Vec<LogEntry>
                     l.app_name, l.process_id, l.message, l.received_at
              FROM logs l WHERE 1=1",
         );
-        let mut bindings: Vec<Box<dyn rusqlite::types::ToSql>> = vec![];
+        let mut bindings: Vec<Box<dyn rusqlite::types::ToSql + '_>> = vec![];
         let mut idx = 1;
 
         append_filters(&mut sql, &mut bindings, &mut idx, params);
@@ -339,20 +343,20 @@ pub fn get_stats(pool: &DbPool) -> Result<serde_json::Value> {
 
 // --- helpers ---
 
-fn append_filters(
+fn append_filters<'a>(
     sql: &mut String,
-    bindings: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+    bindings: &mut Vec<Box<dyn rusqlite::types::ToSql + 'a>>,
     idx: &mut usize,
-    params: &SearchParams,
+    params: &'a SearchParams,
 ) {
     if let Some(ref h) = params.hostname {
         sql.push_str(&format!(" AND l.hostname = ?{}", *idx));
-        bindings.push(Box::new(h.clone()));
+        bindings.push(Box::new(h.as_str()));
         *idx += 1;
     }
     if let Some(ref s) = params.severity {
         sql.push_str(&format!(" AND l.severity = ?{}", *idx));
-        bindings.push(Box::new(s.clone()));
+        bindings.push(Box::new(s.as_str()));
         *idx += 1;
     }
     if let Some(ref levels) = params.severity_in {
@@ -364,24 +368,24 @@ fn append_filters(
                 .collect();
             sql.push_str(&format!(" AND l.severity IN ({})", placeholders.join(", ")));
             for level in levels {
-                bindings.push(Box::new(level.clone()));
+                bindings.push(Box::new(level.as_str()));
                 *idx += 1;
             }
         }
     }
     if let Some(ref a) = params.app_name {
         sql.push_str(&format!(" AND l.app_name = ?{}", *idx));
-        bindings.push(Box::new(a.clone()));
+        bindings.push(Box::new(a.as_str()));
         *idx += 1;
     }
     if let Some(ref from) = params.from {
         sql.push_str(&format!(" AND l.timestamp >= ?{}", *idx));
-        bindings.push(Box::new(from.clone()));
+        bindings.push(Box::new(from.as_str()));
         *idx += 1;
     }
     if let Some(ref to) = params.to {
         sql.push_str(&format!(" AND l.timestamp <= ?{}", *idx));
-        bindings.push(Box::new(to.clone()));
+        bindings.push(Box::new(to.as_str()));
         *idx += 1;
     }
 }
