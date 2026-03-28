@@ -9,10 +9,6 @@ use tracing::{debug, error, info, warn};
 use crate::config::SyslogConfig;
 use crate::db::{self, DbPool};
 
-/// Syslog severity levels (RFC 5424)
-const SEVERITIES: &[&str] = &[
-    "emerg", "alert", "crit", "err", "warning", "notice", "info", "debug",
-];
 
 /// Syslog facility names (RFC 5424)
 const FACILITIES: &[&str] = &[
@@ -85,7 +81,7 @@ async fn udp_listener(bind: &str, max_size: usize, tx: mpsc::Sender<ParsedLog>) 
                 debug!(src = %addr, len, "UDP syslog received");
 
                 if tx.capacity() == 0 {
-                    warn!("syslog write channel full — backpressure applied");
+                    warn!(src = %addr, "syslog write channel full — backpressure applied");
                 }
                 if tx.send(parse_syslog(&raw)).await.is_err() {
                     error!("Write channel closed");
@@ -217,8 +213,13 @@ async fn flush_batch(
             debug!(count = n, "Flushed log batch");
         }
         Ok(Err((e, failed_batch))) => {
-            error!(error = %e, count, "Failed to flush log batch — retaining for next flush");
-            *batch = failed_batch;
+            // Cap retained batch to prevent unbounded growth on persistent write failures
+            if failed_batch.len() < 1000 {
+                error!(error = %e, count, "Failed to flush log batch — retaining for next flush");
+                *batch = failed_batch;
+            } else {
+                error!(error = %e, count, "Failed to flush log batch — batch too large to retain, discarding");
+            }
         }
         Err(e) => {
             // spawn_blocking panicked — batch is unrecoverable
@@ -234,7 +235,7 @@ fn parse_syslog(raw: &str) -> ParsedLog {
     let severity_num = msg.severity.map(|s| s as u8).unwrap_or(6); // default to info
     let facility_num = msg.facility.map(|f| f as u8);
 
-    let severity = SEVERITIES
+    let severity = db::SEVERITY_LEVELS
         .get(severity_num as usize)
         .unwrap_or(&"info")
         .to_string();

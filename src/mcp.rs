@@ -94,12 +94,7 @@ pub fn router(state: AppState) -> Router {
 
 /// Health check
 async fn health(State(state): State<AppState>) -> impl IntoResponse {
-    let pool = Arc::clone(&state.pool);
-    let result = tokio::task::spawn_blocking(move || db::get_stats(&pool))
-        .await
-        .map_err(|e| anyhow::anyhow!("Task join error: {e}"))
-        .and_then(|r| r);
-    match result {
+    match run_db(&state.pool, db::get_stats).await {
         Ok(stats) => Json(json!({ "status": "ok", "stats": stats })).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -339,6 +334,18 @@ fn tool_definitions() -> Vec<Value> {
     ]
 }
 
+/// Run a blocking db operation on the threadpool, converting join errors to anyhow.
+async fn run_db<F, T>(pool: &Arc<DbPool>, f: F) -> anyhow::Result<T>
+where
+    F: FnOnce(&DbPool) -> anyhow::Result<T> + Send + 'static,
+    T: Send + 'static,
+{
+    let pool = Arc::clone(pool);
+    tokio::task::spawn_blocking(move || f(&pool))
+        .await
+        .map_err(|e| anyhow::anyhow!("Task join error: {e}"))?
+}
+
 /// Execute a tool by name
 async fn execute_tool(state: &AppState, name: &str, args: Value) -> anyhow::Result<Value> {
     match name {
@@ -353,10 +360,7 @@ async fn execute_tool(state: &AppState, name: &str, args: Value) -> anyhow::Resu
                 to: args.get("to").and_then(|v| v.as_str()).map(String::from),
                 limit: args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32),
             };
-            let pool = Arc::clone(&state.pool);
-            let results = tokio::task::spawn_blocking(move || db::search_logs(&pool, &params))
-                .await
-                .map_err(|e| anyhow::anyhow!("Task join error: {e}"))??;
+            let results = run_db(&state.pool, move |pool| db::search_logs(pool, &params)).await?;
             Ok(json!({
                 "count": results.len(),
                 "logs": results
@@ -367,12 +371,10 @@ async fn execute_tool(state: &AppState, name: &str, args: Value) -> anyhow::Resu
             let hostname = args.get("hostname").and_then(|v| v.as_str()).map(String::from);
             let app_name = args.get("app_name").and_then(|v| v.as_str()).map(String::from);
             let n = args.get("n").and_then(|v| v.as_u64()).unwrap_or(50) as u32;
-            let pool = Arc::clone(&state.pool);
-            let results = tokio::task::spawn_blocking(move || {
-                db::tail_logs(&pool, hostname.as_deref(), app_name.as_deref(), n)
+            let results = run_db(&state.pool, move |pool| {
+                db::tail_logs(pool, hostname.as_deref(), app_name.as_deref(), n)
             })
-            .await
-            .map_err(|e| anyhow::anyhow!("Task join error: {e}"))??;
+            .await?;
             Ok(json!({
                 "count": results.len(),
                 "logs": results
@@ -382,22 +384,17 @@ async fn execute_tool(state: &AppState, name: &str, args: Value) -> anyhow::Resu
         "get_errors" => {
             let from = args.get("from").and_then(|v| v.as_str()).map(String::from);
             let to = args.get("to").and_then(|v| v.as_str()).map(String::from);
-            let pool = Arc::clone(&state.pool);
-            let results = tokio::task::spawn_blocking(move || {
-                db::get_error_summary(&pool, from.as_deref(), to.as_deref())
+            let results = run_db(&state.pool, move |pool| {
+                db::get_error_summary(pool, from.as_deref(), to.as_deref())
             })
-            .await
-            .map_err(|e| anyhow::anyhow!("Task join error: {e}"))??;
+            .await?;
             Ok(json!({
                 "summary": results
             }))
         }
 
         "list_hosts" => {
-            let pool = Arc::clone(&state.pool);
-            let results = tokio::task::spawn_blocking(move || db::list_hosts(&pool))
-                .await
-                .map_err(|e| anyhow::anyhow!("Task join error: {e}"))??;
+            let results = run_db(&state.pool, db::list_hosts).await?;
             Ok(json!({
                 "hosts": results
             }))
@@ -429,7 +426,7 @@ async fn execute_tool(state: &AppState, name: &str, args: Value) -> anyhow::Resu
 
             // Slice SEVERITY_LEVELS up to and including sev_threshold — lower index = more severe,
             // so levels[0..=threshold] gives everything at or above the requested minimum.
-            let severity_levels: Vec<String> = SEVERITY_LEVELS[..=sev_threshold as usize]
+            let severity_levels: Vec<String> = db::SEVERITY_LEVELS[..=sev_threshold as usize]
                 .iter()
                 .map(|&s| s.to_string())
                 .collect();
@@ -459,10 +456,7 @@ async fn execute_tool(state: &AppState, name: &str, args: Value) -> anyhow::Resu
                 limit: Some(limit + 1),
             };
 
-            let pool = Arc::clone(&state.pool);
-            let mut results = tokio::task::spawn_blocking(move || db::search_logs(&pool, &search))
-                .await
-                .map_err(|e| anyhow::anyhow!("Task join error: {e}"))??;
+            let mut results = run_db(&state.pool, move |pool| db::search_logs(pool, &search)).await?;
             let truncated = results.len() > limit as usize;
             results.truncate(limit as usize);
 
@@ -501,20 +495,13 @@ async fn execute_tool(state: &AppState, name: &str, args: Value) -> anyhow::Resu
         }
 
         "get_stats" => {
-            let pool = Arc::clone(&state.pool);
-            let stats = tokio::task::spawn_blocking(move || db::get_stats(&pool))
-                .await
-                .map_err(|e| anyhow::anyhow!("Task join error: {e}"))??;
-            Ok(stats)
+            Ok(run_db(&state.pool, db::get_stats).await?)
         }
 
         _ => Err(anyhow::anyhow!("Unknown tool: {name}")),
     }
 }
 
-/// Ordered severity levels, most severe first (index = numeric value).
-const SEVERITY_LEVELS: &[&str] = &["emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"];
-
 fn severity_to_num(s: &str) -> Option<u8> {
-    SEVERITY_LEVELS.iter().position(|&l| l == s).map(|i| i as u8)
+    db::SEVERITY_LEVELS.iter().position(|&l| l == s).map(|i| i as u8)
 }

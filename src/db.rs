@@ -318,19 +318,22 @@ pub fn purge_old_logs(pool: &DbPool, retention_days: u32) -> Result<usize> {
 
 /// Get database stats
 pub fn get_stats(pool: &DbPool) -> Result<serde_json::Value> {
-    let conn = pool.get()?;
+    let mut conn = pool.get()?;
 
-    let total_logs: i64 = conn.query_row("SELECT COUNT(*) FROM logs", [], |r| r.get(0))?;
-    let total_hosts: i64 = conn.query_row("SELECT COUNT(*) FROM hosts", [], |r| r.get(0))?;
-    let oldest: Option<String> =
-        conn.query_row("SELECT MIN(timestamp) FROM logs", [], |r| r.get(0)).ok();
-    let newest: Option<String> =
-        conn.query_row("SELECT MAX(timestamp) FROM logs", [], |r| r.get(0)).ok();
-
-    // DB file size
+    // PRAGMA queries can't run inside a transaction, so read them first
     let page_count: i64 = conn.query_row("PRAGMA page_count", [], |r| r.get(0))?;
     let page_size: i64 = conn.query_row("PRAGMA page_size", [], |r| r.get(0))?;
     let db_size_mb = (page_count * page_size) as f64 / 1_048_576.0;
+
+    // Deferred read transaction ensures the log stats form a consistent snapshot
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Deferred)?;
+    let total_logs: i64 = tx.query_row("SELECT COUNT(*) FROM logs", [], |r| r.get(0))?;
+    let total_hosts: i64 = tx.query_row("SELECT COUNT(*) FROM hosts", [], |r| r.get(0))?;
+    let oldest: Option<String> =
+        tx.query_row("SELECT MIN(timestamp) FROM logs", [], |r| r.get(0)).ok();
+    let newest: Option<String> =
+        tx.query_row("SELECT MAX(timestamp) FROM logs", [], |r| r.get(0)).ok();
+    tx.finish()?;
 
     Ok(serde_json::json!({
         "total_logs": total_logs,
@@ -340,6 +343,10 @@ pub fn get_stats(pool: &DbPool) -> Result<serde_json::Value> {
         "db_size_mb": format!("{db_size_mb:.2}"),
     }))
 }
+
+/// Syslog severity level names ordered by numeric value (0=emerg, 7=debug).
+/// Used by both the MCP layer (for threshold filtering) and the syslog parser (for decoding).
+pub const SEVERITY_LEVELS: &[&str] = &["emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"];
 
 // --- helpers ---
 
