@@ -1,0 +1,46 @@
+[package]
+name = "syslog-mcp"
+version = "0.1.0"
+edition = "2021"
+description = "Syslog receiver + MCP server for homelab log intelligence"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP / MCP transport
+axum = { version = "0.8", features = ["ws"] }
+axum-extra = { version = "0.10", features = ["typed-header"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+
+# SQLite
+rusqlite = { version = "0.32", features = ["bundled", "vtab"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.25"
+
+# Syslog parsing
+syslog_loose = "0.21"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Config
+figment = { version = "0.10", features = ["toml", "env"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Utils
+uuid = { version = "1", features = ["v4"] }
+thiserror = "2"
+anyhow = "1"
+
+# SSE support
+tokio-stream = "0.1"
+futures = "0.3"

@@ -1,0 +1,27 @@
+services:
+  syslog-mcp:
+    build: .
+    container_name: syslog-mcp
+    restart: unless-stopped
+    ports:
+      - "1514:1514/udp"    # Syslog UDP
+      - "1514:1514/tcp"    # Syslog TCP
+      - "3100:3100/tcp"    # MCP HTTP
+    volumes:
+      - ./data:/data
+      - ./config.toml:/etc/syslog-mcp/config.toml:ro
+    environment:
+      - RUST_LOG=info
+      - SYSLOG_MCP__STORAGE__DB_PATH=/data/syslog.db
+    # Needed if redirecting privileged port 514 -> 1514 inside container
+    # cap_add:
+    #   - NET_BIND_SERVICE
+    networks:
+      - default
+
+    labels:
+      - "swag=syslog-mcp"  # For your SWAG reverse proxy
+
+networks:
+  default:
+    name: syslog-mcp
