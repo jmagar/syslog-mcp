@@ -57,8 +57,10 @@ SYSLOG_MCP_STORAGE__DB_PATH=/data/syslog.db
 SYSLOG_MCP_STORAGE__RETENTION_DAYS=90
 SYSLOG_MCP_MCP__BIND=0.0.0.0:3100
 
-# NOTE: README and Dockerfile use SYSLOG_MCP__ (double underscore) — this is a bug;
-# those vars are silently ignored, but defaults happen to be correct so it doesn't matter
+# NOTE: README and Dockerfile previously used SYSLOG_MCP__ (double underscore prefix) — this
+# was a bug; those vars were silently ignored but defaults happened to be correct.
+# .env.example also had this bug and has been corrected. Always use SYSLOG_MCP_ (single
+# underscore) as the prefix; __ is only the nesting separator between section and key.
 ```
 
 ## Key Files
@@ -70,12 +72,14 @@ SYSLOG_MCP_MCP__BIND=0.0.0.0:3100
 | `SETUP.md` | Per-host syslog forwarding (rsyslog, UniFi, ATT router, WSL) |
 | `src/db.rs` | Schema definition, FTS5 table, all SQL queries |
 | `src/mcp.rs` | All 6 MCP tool implementations |
+| `config/mcporter.json` | mcporter config (HTTP transport to localhost:3100) |
+| `scripts/smoke-test.sh` | Live smoke test — all 6 MCP tools via mcporter, strict 25-assertion PASS/FAIL |
 
 ## Gotchas
 
 - **Port 1514 not 514** — avoids needing root; use iptables PREROUTING to redirect 514→1514 for devices that can't be reconfigured (see SETUP.md)
 - **Cargo.lock is gitignored** — intentional for this project; add it back if reproducible builds become important
-- **FTS5 query syntax** — `search_logs` uses SQLite FTS5: `error AND nginx`, `"disk full"`, `kern OR syslog`; invalid FTS5 syntax returns a db error
+- **FTS5 query syntax** — `search_logs` uses SQLite FTS5: `error AND nginx`, `"disk full"`, `kern OR syslog`; invalid FTS5 syntax returns a db error. **Hyphen is the FTS5 NOT operator** — to search for hyphenated terms, use phrase syntax: `"smoke-test"` not `smoke-test`
 - **WAL mode** — SQLite runs in WAL mode; if copying the DB file, also copy `.db-wal` and `.db-shm`, or the copy will be corrupt
 - **SSE proxy** — nginx/SWAG must set `proxy_buffering off`, `chunked_transfer_encoding off`, and `proxy_http_version 1.1` for SSE (`GET /sse`) to stream correctly
 - **Data volume** — DB lives in `./data/` (bind mount); `*.db` is gitignored so the database files won't be committed
@@ -83,6 +87,15 @@ SYSLOG_MCP_MCP__BIND=0.0.0.0:3100
 ## Testing MCP Tools
 
 ```bash
+# Full smoke test (requires server running)
+bash scripts/smoke-test.sh
+
+# Using mcporter (project config at config/mcporter.json)
+mcporter list syslog-mcp --config config/mcporter.json
+mcporter call --config config/mcporter.json syslog-mcp.get_stats
+mcporter call --config config/mcporter.json syslog-mcp.tail_logs n=10
+mcporter call --config config/mcporter.json syslog-mcp.search_logs query=error limit=5
+
 # Health check
 curl http://localhost:3100/health
 
