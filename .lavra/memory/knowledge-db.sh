@@ -56,6 +56,18 @@ CREATE TRIGGER IF NOT EXISTS knowledge_ai AFTER INSERT ON knowledge BEGIN
   INSERT INTO knowledge_fts(rowid, content, tags_text, type, key)
   VALUES (new.rowid, new.content, new.tags_text, new.type, new.key);
 END;
+
+CREATE TRIGGER IF NOT EXISTS knowledge_au AFTER UPDATE ON knowledge BEGIN
+  INSERT INTO knowledge_fts(knowledge_fts, rowid, content, tags_text, type, key)
+  VALUES ('delete', old.rowid, old.content, old.tags_text, old.type, old.key);
+  INSERT INTO knowledge_fts(rowid, content, tags_text, type, key)
+  VALUES (new.rowid, new.content, new.tags_text, new.type, new.key);
+END;
+
+CREATE TRIGGER IF NOT EXISTS knowledge_ad AFTER DELETE ON knowledge BEGIN
+  INSERT INTO knowledge_fts(knowledge_fts, rowid, content, tags_text, type, key)
+  VALUES ('delete', old.rowid, old.content, old.tags_text, old.type, old.key);
+END;
 SQL
 }
 
@@ -74,7 +86,7 @@ kb_insert() {
     return 1
   fi
 
-  # Check for duplicate key (sanitize key for safe SQL literal)
+  # Sanitize key once and use it consistently for both duplicate check and INSERT
   local SAFE_KEY
   SAFE_KEY=$(echo "$KEY" | tr -cd 'a-zA-Z0-9_-')
   local EXISTS
@@ -89,7 +101,7 @@ kb_insert() {
   TMPFILE=$(mktemp "${TMPDIR:-/tmp}/kb-insert.XXXXXX")
 
   jq -nr \
-    --arg key "$KEY" \
+    --arg key "$SAFE_KEY" \
     --arg type "$TYPE" \
     --arg content "$CONTENT" \
     --arg source "$SOURCE" \
@@ -98,7 +110,7 @@ kb_insert() {
     --arg bead "$BEAD" \
     '[$key, $type, $content, $source, $tags_text, $ts, $bead] | @csv' > "$TMPFILE"
 
-  sqlite3 "$DB_PATH" ".mode csv" ".import '$TMPFILE' knowledge" 2>/dev/null
+  sqlite3 "$DB_PATH" ".mode csv" ".import ${TMPFILE} knowledge" 2>/dev/null
   local RC=$?
 
   rm -f "$TMPFILE"
@@ -143,14 +155,18 @@ kb_search() {
     return 0
   fi
 
+  # Escape any single quotes in the FTS query before embedding in SQL
+  local SAFE_FTS_QUERY
+  SAFE_FTS_QUERY="${FTS_QUERY//\'/\'\'}"
+
   # BM25 weights: content=-10, tags_text=-5, type=-2, key=-1
   sqlite3 -separator '|' "$DB_PATH" <<SQL
 SELECT k.type, k.content, k.bead, k.tags_text
 FROM knowledge_fts fts
 JOIN knowledge k ON k.rowid = fts.rowid
-WHERE knowledge_fts MATCH '$FTS_QUERY'
+WHERE knowledge_fts MATCH '${SAFE_FTS_QUERY}'
 ORDER BY bm25(knowledge_fts, -10.0, -5.0, -2.0, -1.0)
-LIMIT $TOP_N;
+LIMIT ${TOP_N};
 SQL
 }
 
@@ -208,18 +224,18 @@ kb_sync() {
     DB_COUNT=$(sqlite3 "$DB_PATH" "SELECT count(*) FROM knowledge;" 2>/dev/null || echo "0")
   fi
 
-  # Incremental import from JSONL files
-  _kb_sync_jsonl "$DB_PATH" "$MEMORY_DIR/knowledge.jsonl" "$DB_COUNT"
-  _kb_sync_jsonl "$DB_PATH" "$MEMORY_DIR/knowledge.archive.jsonl" "$DB_COUNT"
+  # Incremental import from JSONL files (per-file offset, not global count)
+  _kb_sync_jsonl "$DB_PATH" "$MEMORY_DIR/knowledge.jsonl"
+  _kb_sync_jsonl "$DB_PATH" "$MEMORY_DIR/knowledge.archive.jsonl"
 }
 
 # Import tail of a JSONL file, skipping lines likely already in SQLite.
-# $3 = current DB row count (used to compute how many lines to skip).
-# kb_insert already deduplicates on key, so re-importing a few lines is safe.
+# Uses a per-file row count (rows whose source_file matches this file) to
+# compute the skip offset. kb_insert deduplicates on key, so re-importing
+# a few lines is safe.
 _kb_sync_jsonl() {
   local DB_PATH="$1"
   local JSONL_FILE="$2"
-  local DB_COUNT="$3"
 
   [[ ! -f "$JSONL_FILE" ]] && return 0
 
@@ -227,8 +243,14 @@ _kb_sync_jsonl() {
   FILE_LINES=$(wc -l < "$JSONL_FILE" 2>/dev/null | tr -d ' ')
   [[ "$FILE_LINES" -eq 0 ]] && return 0
 
-  # How many lines to import: difference + 50 margin for safety
-  local SKIP=$(( DB_COUNT - 50 ))
+  # Compute per-file row count by counting rows whose source matches this file
+  local SAFE_FILE_PATH
+  SAFE_FILE_PATH="${JSONL_FILE//\'/\'\'}"
+  local FILE_DB_COUNT
+  FILE_DB_COUNT=$(sqlite3 "$DB_PATH" "SELECT count(*) FROM knowledge WHERE source='${SAFE_FILE_PATH}';" 2>/dev/null || echo "0")
+
+  # How many lines to skip: per-file count minus 50-line margin for safety
+  local SKIP=$(( FILE_DB_COUNT - 50 ))
   [[ "$SKIP" -lt 0 ]] && SKIP=0
 
   tail -n +"$(( SKIP + 1 ))" "$JSONL_FILE" | while IFS= read -r LINE; do
