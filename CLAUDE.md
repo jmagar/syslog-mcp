@@ -9,6 +9,8 @@ cargo build                      # debug build
 cargo build --release            # release build
 cargo run                        # run locally (reads config.toml)
 cargo test                       # test suite
+cargo clippy                     # lint (must pass before committing)
+cargo fmt                        # format (enforced by CI)
 docker compose up -d             # production deployment
 docker compose down              # stop
 docker compose logs -f           # follow logs
@@ -56,6 +58,11 @@ SYSLOG_MCP_SYSLOG__UDP_BIND=0.0.0.0:1514
 SYSLOG_MCP_STORAGE__DB_PATH=/data/syslog.db
 SYSLOG_MCP_STORAGE__RETENTION_DAYS=90
 SYSLOG_MCP_MCP__BIND=0.0.0.0:3100
+SYSLOG_MCP_STORAGE__POOL_SIZE=4
+SYSLOG_MCP_STORAGE__WAL_MODE=true
+
+# Log verbosity (set to debug or trace for development)
+RUST_LOG=info
 
 # NOTE: README and Dockerfile previously used SYSLOG_MCP__ (double underscore prefix) — this
 # was a bug; those vars were silently ignored but defaults happened to be correct.
@@ -74,6 +81,8 @@ SYSLOG_MCP_MCP__BIND=0.0.0.0:3100
 | `src/mcp.rs` | All 6 MCP tool implementations |
 | `config/mcporter.json` | mcporter config (HTTP transport to localhost:3100) |
 | `scripts/smoke-test.sh` | Live smoke test — all 6 MCP tools via mcporter, strict 25-assertion PASS/FAIL |
+| `CHANGELOG.md` | Version history; updated by `quick-push` on each release |
+| `.lavra/memory/recall.sh` | Query the local knowledge DB: `bash .lavra/memory/recall.sh <keyword>` |
 
 ## Gotchas
 

@@ -6,6 +6,23 @@ All notable changes to syslog-mcp are documented here.
 
 ---
 
+## [0.1.5] — 2026-03-28
+
+### Fixed
+- `syslog.rs`: Normalize stored timestamps to UTC (`dt.with_timezone(&Utc)`) — mixed-offset sources no longer misorder SQLite rows or break retention purges
+- `smoke-test.sh`: `--url` flag now creates a temp mcporter config so health checks and tool calls always target the same server; guard `$2` dereference under `set -u`; fix `limit=0` boundary test that was silently passing `limit=1`
+- `recall.sh`: Fix `--all --recent` ordering (archive first → newest entries last in `tail`); use `grep -F` for literal bead matching; fix auto-build to `source + kb_sync` (subprocess call was a no-op)
+- `knowledge.jsonl`: Strip embedded shell command fragments from `content` and `bead` fields
+
+### Changed
+- `knowledge-db.sh`: Quoted temp file path in `sqlite3 .import`; consolidated 7→1 jq invocations per JSONL line and 2→1 per beads-import row
+- `.gitignore`: Narrow `*.db` to `data/*.db` to avoid hiding fixture files
+- `README.md` / `CLAUDE.md`: Correct env var prefix `SYSLOG_MCP__` → `SYSLOG_MCP_`
+- `docker-compose.yml`: Switch network from internal `syslog-mcp` to external `jakenet`
+- Session docs: blank lines after subsection headings; complete rollback command
+
+---
+
 ## [0.1.4] — 2026-03-28
 
 ### Added

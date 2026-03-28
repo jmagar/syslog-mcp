@@ -17,11 +17,11 @@ services:
     # cap_add:
     #   - NET_BIND_SERVICE
     networks:
-      - default
+      - jakenet
 
     labels:
       - "swag=syslog-mcp"  # For your SWAG reverse proxy
 
 networks:
-  default:
-    name: syslog-mcp
+  jakenet:
+    external: true
