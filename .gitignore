@@ -1,0 +1,27 @@
+# Rust
+/target/
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.cert
+
+# Logs
+*.log
+
+# Config overrides (keep example, ignore local)
+config.local.toml
