@@ -1,4 +1,5 @@
 # Session: Build, Run, and Proxy Debug
+
 **Date:** 2026-03-28
 **Branch:** `chore/add-lavra-project-config`
 **Working Directory:** `/home/jmagar/workspace/syslog-mcp`

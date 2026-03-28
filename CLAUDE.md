@@ -87,7 +87,7 @@ RUST_LOG=info
 ## Gotchas
 
 - **Port 1514 not 514** — avoids needing root; use iptables PREROUTING to redirect 514→1514 for devices that can't be reconfigured (see SETUP.md)
-- **Cargo.lock is gitignored** — intentional for this project; add it back if reproducible builds become important
+- **Cargo.lock is tracked** — binary crates should commit Cargo.lock for reproducible builds (Cargo docs guidance)
 - **FTS5 query syntax** — `search_logs` uses SQLite FTS5: `error AND nginx`, `"disk full"`, `kern OR syslog`; invalid FTS5 syntax returns a db error. **Hyphen is the FTS5 NOT operator** — to search for hyphenated terms, use phrase syntax: `"smoke-test"` not `smoke-test`
 - **WAL mode** — SQLite runs in WAL mode; if copying the DB file, also copy `.db-wal` and `.db-shm`, or the copy will be corrupt
 - **SSE proxy** — nginx/SWAG must set `proxy_buffering off`, `chunked_transfer_encoding off`, and `proxy_http_version 1.1` for SSE (`GET /sse`) to stream correctly

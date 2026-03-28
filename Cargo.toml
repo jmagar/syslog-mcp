@@ -2,6 +2,7 @@
 name = "syslog-mcp"
 version = "0.1.5"
 edition = "2021"
+rust-version = "1.86"
 description = "Syslog receiver + MCP server for homelab log intelligence"
 
 [dependencies]
