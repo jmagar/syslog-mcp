@@ -83,12 +83,23 @@ pub fn router(state: AppState) -> Router {
         .route("/mcp", post(handle_mcp_post))
         .route("/sse", get(handle_sse))
         .route("/health", get(health))
+        .fallback(|| async {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "not_found"})),
+            )
+        })
         .with_state(state)
 }
 
 /// Health check
 async fn health(State(state): State<AppState>) -> impl IntoResponse {
-    match db::get_stats(&state.pool) {
+    let pool = Arc::clone(&state.pool);
+    let result = tokio::task::spawn_blocking(move || db::get_stats(&pool))
+        .await
+        .map_err(|e| anyhow::anyhow!("Task join error: {e}"))
+        .and_then(|r| r);
+    match result {
         Ok(stats) => Json(json!({ "status": "ok", "stats": stats })).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -149,6 +160,15 @@ async fn dispatch(state: &AppState, req: &JsonRpcRequest) -> JsonRpcResponse {
                 .get("name")
                 .and_then(|n| n.as_str())
                 .unwrap_or("");
+
+            if tool_name.is_empty() {
+                return JsonRpcResponse::error(
+                    id,
+                    -32602,
+                    "Missing required parameter: name".into(),
+                );
+            }
+
             let arguments = params
                 .get("arguments")
                 .cloned()
@@ -160,7 +180,8 @@ async fn dispatch(state: &AppState, req: &JsonRpcRequest) -> JsonRpcResponse {
                     json!({
                         "content": [{
                             "type": "text",
-                            "text": serde_json::to_string_pretty(&result).unwrap_or_default()
+                            "text": serde_json::to_string_pretty(&result)
+                                .unwrap_or_else(|e| format!("serialization error: {e}"))
                         }]
                     }),
                 ),
@@ -272,28 +293,36 @@ fn tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "correlate_events",
-            "description": "Search for related events across multiple hosts within a time window. Useful for debugging cascading failures — finds events on all hosts within ±N minutes of a reference timestamp.",
+            "description": "Search for related events across multiple hosts within a time window. Useful for debugging cascading failures — finds events on all hosts within ±N minutes of a reference timestamp. Results are grouped by host and ordered by time.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "reference_time": {
                         "type": "string",
-                        "description": "Center timestamp for correlation window (ISO 8601)"
+                        "description": "Center timestamp for correlation window (ISO 8601, e.g. '2025-01-15T14:30:00Z')"
                     },
                     "window_minutes": {
                         "type": "integer",
-                        "description": "Minutes before and after reference_time to search (default 5)",
+                        "description": "Minutes before and after reference_time to search (default 5, max 60)",
                         "default": 5
                     },
                     "severity_min": {
                         "type": "string",
                         "enum": ["emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"],
-                        "description": "Minimum severity to include (default 'warning')",
+                        "description": "Minimum severity to include (default 'warning'). 'warning' returns warning/err/crit/alert/emerg. 'debug' returns everything.",
                         "default": "warning"
+                    },
+                    "hostname": {
+                        "type": "string",
+                        "description": "Optional: limit correlation to a specific host"
                     },
                     "query": {
                         "type": "string",
-                        "description": "Optional FTS query to narrow results"
+                        "description": "Optional FTS query to narrow results (FTS5 syntax)"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max total events to return (default 500, max 2000)"
                     }
                 },
                 "required": ["reference_time"]
@@ -318,12 +347,16 @@ async fn execute_tool(state: &AppState, name: &str, args: Value) -> anyhow::Resu
                 query: args.get("query").and_then(|v| v.as_str()).map(String::from),
                 hostname: args.get("hostname").and_then(|v| v.as_str()).map(String::from),
                 severity: args.get("severity").and_then(|v| v.as_str()).map(String::from),
+                severity_in: None,
                 app_name: args.get("app_name").and_then(|v| v.as_str()).map(String::from),
                 from: args.get("from").and_then(|v| v.as_str()).map(String::from),
                 to: args.get("to").and_then(|v| v.as_str()).map(String::from),
                 limit: args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32),
             };
-            let results = db::search_logs(&state.pool, &params)?;
+            let pool = Arc::clone(&state.pool);
+            let results = tokio::task::spawn_blocking(move || db::search_logs(&pool, &params))
+                .await
+                .map_err(|e| anyhow::anyhow!("Task join error: {e}"))??;
             Ok(json!({
                 "count": results.len(),
                 "logs": results
@@ -331,10 +364,15 @@ async fn execute_tool(state: &AppState, name: &str, args: Value) -> anyhow::Resu
         }
 
         "tail_logs" => {
-            let hostname = args.get("hostname").and_then(|v| v.as_str());
-            let app_name = args.get("app_name").and_then(|v| v.as_str());
+            let hostname = args.get("hostname").and_then(|v| v.as_str()).map(String::from);
+            let app_name = args.get("app_name").and_then(|v| v.as_str()).map(String::from);
             let n = args.get("n").and_then(|v| v.as_u64()).unwrap_or(50) as u32;
-            let results = db::tail_logs(&state.pool, hostname, app_name, n)?;
+            let pool = Arc::clone(&state.pool);
+            let results = tokio::task::spawn_blocking(move || {
+                db::tail_logs(&pool, hostname.as_deref(), app_name.as_deref(), n)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("Task join error: {e}"))??;
             Ok(json!({
                 "count": results.len(),
                 "logs": results
@@ -342,16 +380,24 @@ async fn execute_tool(state: &AppState, name: &str, args: Value) -> anyhow::Resu
         }
 
         "get_errors" => {
-            let from = args.get("from").and_then(|v| v.as_str());
-            let to = args.get("to").and_then(|v| v.as_str());
-            let results = db::get_error_summary(&state.pool, from, to)?;
+            let from = args.get("from").and_then(|v| v.as_str()).map(String::from);
+            let to = args.get("to").and_then(|v| v.as_str()).map(String::from);
+            let pool = Arc::clone(&state.pool);
+            let results = tokio::task::spawn_blocking(move || {
+                db::get_error_summary(&pool, from.as_deref(), to.as_deref())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("Task join error: {e}"))??;
             Ok(json!({
                 "summary": results
             }))
         }
 
         "list_hosts" => {
-            let results = db::list_hosts(&state.pool)?;
+            let pool = Arc::clone(&state.pool);
+            let results = tokio::task::spawn_blocking(move || db::list_hosts(&pool))
+                .await
+                .map_err(|e| anyhow::anyhow!("Task join error: {e}"))??;
             Ok(json!({
                 "hosts": results
             }))
@@ -366,40 +412,61 @@ async fn execute_tool(state: &AppState, name: &str, args: Value) -> anyhow::Resu
             let window = args
                 .get("window_minutes")
                 .and_then(|v| v.as_u64())
-                .unwrap_or(5) as i64;
+                .unwrap_or(5)
+                .min(60) as i64;
 
             let severity_min = args
                 .get("severity_min")
                 .and_then(|v| v.as_str())
                 .unwrap_or("warning");
 
+            // Validate severity_min before using it
+            let sev_threshold = severity_to_num(severity_min)
+                .ok_or_else(|| anyhow::anyhow!(
+                    "Invalid severity_min '{}'. Must be one of: emerg, alert, crit, err, warning, notice, info, debug",
+                    severity_min
+                ))?;
+
+            // Slice SEVERITY_LEVELS up to and including sev_threshold — lower index = more severe,
+            // so levels[0..=threshold] gives everything at or above the requested minimum.
+            let severity_levels: Vec<String> = SEVERITY_LEVELS[..=sev_threshold as usize]
+                .iter()
+                .map(|&s| s.to_string())
+                .collect();
+
             // Parse reference time and compute window
             let ref_dt = chrono::DateTime::parse_from_rfc3339(reference_time)
-                .or_else(|_| chrono::DateTime::parse_from_str(reference_time, "%Y-%m-%dT%H:%M:%S%.fZ"))
-                .map_err(|e| anyhow::anyhow!("Invalid reference_time: {e}"))?;
+                .map_err(|e| anyhow::anyhow!("Invalid reference_time '{}': {e}", reference_time))?;
 
             let from = (ref_dt - chrono::Duration::minutes(window)).to_rfc3339();
             let to = (ref_dt + chrono::Duration::minutes(window)).to_rfc3339();
 
-            // Map severity to numeric for filtering
-            let sev_threshold = severity_to_num(severity_min);
+            let limit = args
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(500)
+                .min(2000) as u32;
 
             let search = SearchParams {
                 query: args.get("query").and_then(|v| v.as_str()).map(String::from),
-                hostname: None,
+                hostname: args.get("hostname").and_then(|v| v.as_str()).map(String::from),
                 severity: None,
+                severity_in: Some(severity_levels),
                 app_name: None,
                 from: Some(from.clone()),
                 to: Some(to.clone()),
-                limit: Some(500),
+                // Fetch one extra to detect truncation without a separate COUNT query
+                limit: Some(limit + 1),
             };
 
-            let mut results = db::search_logs(&state.pool, &search)?;
+            let pool = Arc::clone(&state.pool);
+            let mut results = tokio::task::spawn_blocking(move || db::search_logs(&pool, &search))
+                .await
+                .map_err(|e| anyhow::anyhow!("Task join error: {e}"))??;
+            let truncated = results.len() > limit as usize;
+            results.truncate(limit as usize);
 
-            // Filter by severity threshold
-            results.retain(|log| severity_to_num(&log.severity) <= sev_threshold);
-
-            // Group by hostname for readability
+            // Group by hostname, preserving time order within each host
             let mut by_host: std::collections::BTreeMap<String, Vec<&db::LogEntry>> =
                 std::collections::BTreeMap::new();
             for log in &results {
@@ -423,14 +490,21 @@ async fn execute_tool(state: &AppState, name: &str, args: Value) -> anyhow::Resu
             Ok(json!({
                 "reference_time": reference_time,
                 "window_minutes": window,
+                "window_from": from,
+                "window_to": to,
                 "severity_min": severity_min,
                 "total_events": results.len(),
+                "truncated": truncated,
+                "hosts_count": grouped.len(),
                 "hosts": grouped
             }))
         }
 
         "get_stats" => {
-            let stats = db::get_stats(&state.pool)?;
+            let pool = Arc::clone(&state.pool);
+            let stats = tokio::task::spawn_blocking(move || db::get_stats(&pool))
+                .await
+                .map_err(|e| anyhow::anyhow!("Task join error: {e}"))??;
             Ok(stats)
         }
 
@@ -438,16 +512,9 @@ async fn execute_tool(state: &AppState, name: &str, args: Value) -> anyhow::Resu
     }
 }
 
-fn severity_to_num(s: &str) -> u8 {
-    match s {
-        "emerg" => 0,
-        "alert" => 1,
-        "crit" => 2,
-        "err" => 3,
-        "warning" => 4,
-        "notice" => 5,
-        "info" => 6,
-        "debug" => 7,
-        _ => 7,
-    }
+/// Ordered severity levels, most severe first (index = numeric value).
+const SEVERITY_LEVELS: &[&str] = &["emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"];
+
+fn severity_to_num(s: &str) -> Option<u8> {
+    SEVERITY_LEVELS.iter().position(|&l| l == s).map(|i| i as u8)
 }

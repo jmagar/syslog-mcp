@@ -42,8 +42,10 @@ pub struct SearchParams {
     pub query: Option<String>,
     /// Filter by hostname
     pub hostname: Option<String>,
-    /// Filter by severity (emerg, alert, crit, err, warning, notice, info, debug)
+    /// Filter by severity (exact match: emerg, alert, crit, err, warning, notice, info, debug)
     pub severity: Option<String>,
+    /// Filter by one of a set of severity levels (for threshold queries)
+    pub severity_in: Option<Vec<String>>,
     /// Filter by app name
     pub app_name: Option<String>,
     /// Start of time range (ISO 8601)
@@ -191,7 +193,7 @@ pub fn search_logs(pool: &DbPool, params: &SearchParams) -> Result<Vec<LogEntry>
 
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(bindings.iter().map(|b| b.as_ref())), map_row)?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     } else {
         let mut sql = String::from(
             "SELECT l.id, l.timestamp, l.hostname, l.facility, l.severity,
@@ -206,7 +208,7 @@ pub fn search_logs(pool: &DbPool, params: &SearchParams) -> Result<Vec<LogEntry>
 
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(bindings.iter().map(|b| b.as_ref())), map_row)?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 }
 
@@ -237,7 +239,7 @@ pub fn tail_logs(pool: &DbPool, hostname: Option<&str>, app_name: Option<&str>, 
 
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(rusqlite::params_from_iter(bindings.iter().map(|b| b.as_ref())), map_row)?;
-    Ok(rows.filter_map(|r| r.ok()).collect())
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 /// Get error/warning summary per host in a time window
@@ -264,7 +266,7 @@ pub fn get_error_summary(pool: &DbPool, from: Option<&str>, to: Option<&str>) ->
         }))
     })?;
 
-    Ok(rows.filter_map(|r| r.ok()).collect())
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 /// List all known hosts with stats
@@ -283,7 +285,7 @@ pub fn list_hosts(pool: &DbPool) -> Result<Vec<serde_json::Value>> {
         }))
     })?;
 
-    Ok(rows.filter_map(|r| r.ok()).collect())
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 /// Purge logs older than N days
@@ -352,6 +354,20 @@ fn append_filters(
         sql.push_str(&format!(" AND l.severity = ?{}", *idx));
         bindings.push(Box::new(s.clone()));
         *idx += 1;
+    }
+    if let Some(ref levels) = params.severity_in {
+        if !levels.is_empty() {
+            let placeholders: Vec<String> = levels
+                .iter()
+                .enumerate()
+                .map(|(i, _)| format!("?{}", *idx + i))
+                .collect();
+            sql.push_str(&format!(" AND l.severity IN ({})", placeholders.join(", ")));
+            for level in levels {
+                bindings.push(Box::new(level.clone()));
+                *idx += 1;
+            }
+        }
     }
     if let Some(ref a) = params.app_name {
         sql.push_str(&format!(" AND l.app_name = ?{}", *idx));

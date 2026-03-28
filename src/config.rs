@@ -68,6 +68,17 @@ impl Config {
             .merge(Toml::file("config.toml"))
             .merge(Env::prefixed("SYSLOG_MCP_").split("__"))
             .extract()?;
+
+        if config.storage.pool_size == 0 {
+            return Err(anyhow::anyhow!("storage.pool_size must be > 0"));
+        }
+        config.syslog.udp_bind.parse::<std::net::SocketAddr>()
+            .map_err(|e| anyhow::anyhow!("Invalid syslog.udp_bind '{}': {}", config.syslog.udp_bind, e))?;
+        config.syslog.tcp_bind.parse::<std::net::SocketAddr>()
+            .map_err(|e| anyhow::anyhow!("Invalid syslog.tcp_bind '{}': {}", config.syslog.tcp_bind, e))?;
+        config.mcp.bind.parse::<std::net::SocketAddr>()
+            .map_err(|e| anyhow::anyhow!("Invalid mcp.bind '{}': {}", config.mcp.bind, e))?;
+
         Ok(config)
     }
 }

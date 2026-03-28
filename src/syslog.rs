@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::mpsc;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::config::SyslogConfig;
 use crate::db::{self, DbPool};
@@ -84,6 +84,9 @@ async fn udp_listener(bind: &str, max_size: usize, tx: mpsc::Sender<ParsedLog>) 
                 let raw = String::from_utf8_lossy(&buf[..len]).to_string();
                 debug!(src = %addr, len, "UDP syslog received");
 
+                if tx.capacity() == 0 {
+                    warn!("syslog write channel full — backpressure applied");
+                }
                 if tx.send(parse_syslog(&raw)).await.is_err() {
                     error!("Write channel closed");
                     break;
@@ -111,12 +114,24 @@ async fn tcp_listener(bind: &str, tx: mpsc::Sender<ParsedLog>) -> Result<()> {
                     let reader = BufReader::new(stream);
                     let mut lines = reader.lines();
 
-                    while let Ok(Some(line)) = lines.next_line().await {
-                        if line.is_empty() {
-                            continue;
-                        }
-                        if tx.send(parse_syslog(&line)).await.is_err() {
-                            break;
+                    loop {
+                        match lines.next_line().await {
+                            Ok(Some(line)) => {
+                                if line.is_empty() {
+                                    continue;
+                                }
+                                if tx.capacity() == 0 {
+                                    warn!(peer = %addr, "syslog write channel full — backpressure applied");
+                                }
+                                if tx.send(parse_syslog(&line)).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Ok(None) => break, // clean EOF
+                            Err(e) => {
+                                error!(peer = %addr, error = %e, "TCP syslog read error");
+                                break;
+                            }
                         }
                     }
                     info!(peer = %addr, "TCP syslog connection closed");
@@ -124,6 +139,7 @@ async fn tcp_listener(bind: &str, tx: mpsc::Sender<ParsedLog>) -> Result<()> {
             }
             Err(e) => {
                 error!(error = %e, "TCP accept error");
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
             }
         }
     }
@@ -162,7 +178,7 @@ async fn batch_writer(mut rx: mpsc::Receiver<ParsedLog>, pool: Arc<DbPool>) {
                         None => {
                             // Channel closed, flush remaining
                             if !batch.is_empty() {
-                                flush_batch(&pool, &mut batch);
+                                flush_batch(&pool, &mut batch).await;
                             }
                             info!("Write channel closed, exiting batch writer");
                             return;
@@ -176,24 +192,30 @@ async fn batch_writer(mut rx: mpsc::Receiver<ParsedLog>, pool: Arc<DbPool>) {
         }
 
         if !batch.is_empty() {
-            flush_batch(&pool, &mut batch);
+            flush_batch(&pool, &mut batch).await;
         }
     }
 }
 
-fn flush_batch(
-    pool: &DbPool,
+async fn flush_batch(
+    pool: &Arc<DbPool>,
     batch: &mut Vec<db::LogBatchEntry>,
 ) {
-    match db::insert_logs_batch(pool, batch) {
+    let pool = Arc::clone(pool);
+    let batch_to_write = std::mem::take(batch);
+    let count = batch_to_write.len();
+    match tokio::task::spawn_blocking(move || db::insert_logs_batch(&pool, &batch_to_write))
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))
+        .and_then(|r| r)
+    {
         Ok(n) => {
             debug!(count = n, "Flushed log batch");
         }
         Err(e) => {
-            error!(error = %e, count = batch.len(), "Failed to flush log batch");
+            error!(error = %e, count, "Failed to flush log batch — batch discarded");
         }
     }
-    batch.clear();
 }
 
 /// Parse a raw syslog message (RFC 3164 / RFC 5424 / loose)
