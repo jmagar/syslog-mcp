@@ -284,6 +284,41 @@ fn cef_ext_value(extensions: &str, key: &str) -> Option<String> {
     }
 }
 
+/// Extract hostname, app_name, and message from a reconstructed CEF syslog body.
+///
+/// `text` is `app_name_fragment + " " + message_body` as produced by syslog_loose
+/// when parsing a UniFi CEF message. The function finds the embedded `CEF:` block,
+/// parses the pipe-delimited header, and extracts extension fields.
+///
+/// Returns `(hostname, app_name, message)`:
+/// - hostname  : `UNIFIdeviceName` extension value; falls back to CEF Device Product (field 2)
+/// - app_name  : CEF event name (field 5, e.g. "Test Syslog", "Admin Made Config Changes")
+/// - message   : `msg` extension value; falls back to the full CEF string
+fn extract_cef_fields(text: &str) -> (Option<String>, Option<String>, Option<String>) {
+    let cef_pos = match text.find("CEF:") {
+        Some(p) => p,
+        None => return (None, None, None),
+    };
+
+    let cef_str = &text[cef_pos..];
+    // CEF header has exactly 8 pipe-delimited fields; splitn keeps the rest in field 7
+    let parts: Vec<&str> = cef_str.splitn(8, '|').collect();
+    if parts.len() < 8 {
+        return (None, None, None);
+    }
+
+    let event_name = parts[5].to_string();
+    let extensions = parts[7];
+
+    let hostname = cef_ext_value(extensions, "UNIFIdeviceName")
+        .or_else(|| Some(parts[2].to_string())); // fallback: CEF Device Product
+
+    let message = cef_ext_value(extensions, "msg")
+        .unwrap_or_else(|| cef_str.to_string());
+
+    (hostname, Some(event_name), Some(message))
+}
+
 /// Parse a raw syslog message (RFC 3164 / RFC 5424 / loose)
 fn parse_syslog(raw: &str) -> ParsedLog {
     let msg = syslog_loose::parse_message(raw, syslog_loose::Variant::Either);
@@ -372,6 +407,41 @@ mod tests {
     fn test_cef_ext_value_missing_key() {
         let ext = "UNIFIdeviceModel=UCGMAX";
         assert_eq!(cef_ext_value(ext, "nonexistent"), None);
+    }
+
+    #[test]
+    fn test_extract_cef_fields_test_syslog() {
+        let text = "The Mothership CEF:0|Ubiquiti|UniFi OS|5.1.5|1|Test Syslog|1|UNIFIhost=Host UNIFIdeviceName=The Mothership UNIFIdeviceModel=UCGMAX UNIFIdeviceIp=76.213.118.20 UNIFIdeviceMac=9C:05:D6:CA:81:3B UNIFIdeviceVersion=5.1.5 msg=Test Syslog";
+        let (hostname, app_name, message) = extract_cef_fields(text);
+        assert_eq!(hostname, Some("The Mothership".to_string()));
+        assert_eq!(app_name, Some("Test Syslog".to_string()));
+        assert_eq!(message, Some("Test Syslog".to_string()));
+    }
+
+    #[test]
+    fn test_extract_cef_fields_config_change() {
+        let text = "The Mothership CEF:0|Ubiquiti|UniFi OS|5.1.5|1005|Admin Made Config Changes|2|UNIFIhost=Host UNIFIdeviceName=The Mothership UNIFIdeviceModel=UCGMAX UNIFIdeviceIp=76.213.118.20 UNIFIdeviceMac=9C:05:D6:CA:81:3B UNIFIdeviceVersion=5.1.5 msg=Jacob Magar changed Syslog Settings CEF Logging setting from \"undefined\" to \"enabled\". Source IP: 76.213.118.20";
+        let (hostname, app_name, message) = extract_cef_fields(text);
+        assert_eq!(hostname, Some("The Mothership".to_string()));
+        assert_eq!(app_name, Some("Admin Made Config Changes".to_string()));
+        assert!(message.unwrap().starts_with("Jacob Magar changed Syslog Settings"));
+    }
+
+    #[test]
+    fn test_extract_cef_fields_no_cef() {
+        let (hostname, app_name, message) = extract_cef_fields("normal syslog message");
+        assert_eq!(hostname, None);
+        assert_eq!(app_name, None);
+        assert_eq!(message, None);
+    }
+
+    #[test]
+    fn test_extract_cef_fields_fallback_hostname() {
+        // When UNIFIdeviceName is absent, fall back to CEF Device Product (field 2)
+        let text = "CEF:0|Ubiquiti|UniFi OS|5.1.5|1|Test|1|msg=hello";
+        let (hostname, app_name, _) = extract_cef_fields(text);
+        assert_eq!(hostname, Some("UniFi OS".to_string()));
+        assert_eq!(app_name, Some("Test".to_string()));
     }
 
     #[test]
