@@ -250,6 +250,40 @@ fn looks_like_timestamp(s: &str) -> bool {
     b.len() >= 19 && b[4] == b'-' && b[7] == b'-' && b[10] == b'T'
 }
 
+/// Extract a single value from a CEF extension string (`key1=val1 key2=val2 …`).
+///
+/// Values may contain spaces; the next `WORD=` boundary (a space followed by a word
+/// containing no spaces and then `=`) terminates the current value.
+fn cef_ext_value(extensions: &str, key: &str) -> Option<String> {
+    let needle = format!("{key}=");
+    let start = extensions.find(needle.as_str())? + needle.len();
+    let rest = &extensions[start..];
+
+    let mut end = rest.len();
+    let bytes = rest.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b' ' {
+            let after = &rest[i + 1..];
+            if let Some(eq) = after.find('=') {
+                // It's a key boundary only if there are no spaces before the '='
+                if !after[..eq].contains(' ') {
+                    end = i;
+                    break;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    let value = rest[..end].trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
 /// Parse a raw syslog message (RFC 3164 / RFC 5424 / loose)
 fn parse_syslog(raw: &str) -> ParsedLog {
     let msg = syslog_loose::parse_message(raw, syslog_loose::Variant::Either);
@@ -310,5 +344,42 @@ mod tests {
         assert!(!looks_like_timestamp("unknown"));
         assert!(!looks_like_timestamp(""));
         assert!(!looks_like_timestamp("192.168.1.1"));
+    }
+
+    #[test]
+    fn test_cef_ext_value_simple() {
+        let ext = "UNIFIdeviceModel=UCGMAX UNIFIdeviceIp=76.213.118.20";
+        assert_eq!(cef_ext_value(ext, "UNIFIdeviceModel"), Some("UCGMAX".to_string()));
+        assert_eq!(cef_ext_value(ext, "UNIFIdeviceIp"), Some("76.213.118.20".to_string()));
+    }
+
+    #[test]
+    fn test_cef_ext_value_with_spaces_in_value() {
+        let ext = "UNIFIdeviceName=The Mothership UNIFIdeviceModel=UCGMAX";
+        assert_eq!(
+            cef_ext_value(ext, "UNIFIdeviceName"),
+            Some("The Mothership".to_string())
+        );
+    }
+
+    #[test]
+    fn test_cef_ext_value_last_field() {
+        let ext = "UNIFIdeviceVersion=5.1.5 msg=Test Syslog";
+        assert_eq!(cef_ext_value(ext, "msg"), Some("Test Syslog".to_string()));
+    }
+
+    #[test]
+    fn test_cef_ext_value_missing_key() {
+        let ext = "UNIFIdeviceModel=UCGMAX";
+        assert_eq!(cef_ext_value(ext, "nonexistent"), None);
+    }
+
+    #[test]
+    fn test_cef_ext_value_long_msg() {
+        let ext = "UNIFIdeviceVersion=5.1.5 msg=Jacob Magar changed Syslog Settings CEF Logging setting from \"undefined\" to \"enabled\". Source IP: 76.213.118.20";
+        assert_eq!(
+            cef_ext_value(ext, "msg"),
+            Some("Jacob Magar changed Syslog Settings CEF Logging setting from \"undefined\" to \"enabled\". Source IP: 76.213.118.20".to_string())
+        );
     }
 }
