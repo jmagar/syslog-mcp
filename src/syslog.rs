@@ -9,12 +9,11 @@ use tracing::{debug, error, info, warn};
 use crate::config::SyslogConfig;
 use crate::db::{self, DbPool};
 
-
 /// Syslog facility names (RFC 5424)
 const FACILITIES: &[&str] = &[
-    "kern", "user", "mail", "daemon", "auth", "syslog", "lpr", "news",
-    "uucp", "cron", "authpriv", "ftp", "ntp", "audit", "alert", "clock",
-    "local0", "local1", "local2", "local3", "local4", "local5", "local6", "local7",
+    "kern", "user", "mail", "daemon", "auth", "syslog", "lpr", "news", "uucp", "cron", "authpriv",
+    "ftp", "ntp", "audit", "alert", "clock", "local0", "local1", "local2", "local3", "local4",
+    "local5", "local6", "local7",
 ];
 
 /// Parsed syslog message ready for storage
@@ -208,10 +207,7 @@ async fn batch_writer(mut rx: mpsc::Receiver<ParsedLog>, pool: Arc<DbPool>) {
     }
 }
 
-async fn flush_batch(
-    pool: &Arc<DbPool>,
-    batch: &mut Vec<db::LogBatchEntry>,
-) {
+async fn flush_batch(pool: &Arc<DbPool>, batch: &mut Vec<db::LogBatchEntry>) {
     let pool = Arc::clone(pool);
     let batch_to_write = std::mem::take(batch);
     let count = batch_to_write.len();
@@ -310,20 +306,22 @@ fn extract_cef_fields(text: &str) -> (Option<String>, Option<String>, Option<Str
     let event_name = parts[5].to_string();
     let extensions = parts[7];
 
-    let hostname = cef_ext_value(extensions, "UNIFIdeviceName")
-        .or_else(|| Some(parts[2].to_string())); // fallback: CEF Device Product
+    let hostname =
+        cef_ext_value(extensions, "UNIFIdeviceName").or_else(|| Some(parts[2].to_string())); // fallback: CEF Device Product
 
-    let message = cef_ext_value(extensions, "msg")
-        .unwrap_or_else(|| cef_str.to_string());
+    let message = cef_ext_value(extensions, "msg").unwrap_or_else(|| cef_str.to_string());
 
     (hostname, Some(event_name), Some(message))
 }
 
-/// Parse a raw syslog message (RFC 3164 / RFC 5424 / loose)
+/// Parse a raw syslog message (RFC 3164 / RFC 5424 / loose).
+///
+/// Handles UniFi CEF messages where the hostname field contains a timestamp
+/// and the real device name is embedded in the CEF extension `UNIFIdeviceName`.
 fn parse_syslog(raw: &str) -> ParsedLog {
     let msg = syslog_loose::parse_message(raw, syslog_loose::Variant::Either);
 
-    let severity_num = msg.severity.map(|s| s as u8).unwrap_or(6); // default to info
+    let severity_num = msg.severity.map(|s| s as u8).unwrap_or(6); // default info
     let facility_num = msg.facility.map(|f| f as u8);
 
     let severity = db::SEVERITY_LEVELS
@@ -338,16 +336,37 @@ fn parse_syslog(raw: &str) -> ParsedLog {
         .map(|dt| dt.with_timezone(&Utc).to_rfc3339())
         .unwrap_or_else(|| Utc::now().to_rfc3339());
 
-    let hostname = msg
-        .hostname
-        .map(|h| h.to_string())
-        .unwrap_or_else(|| "unknown".to_string());
-
-    let app_name = msg.appname.map(|a| a.to_string());
+    let raw_hostname = msg.hostname.map(|h| h.to_string()).unwrap_or_default();
+    let raw_app_name = msg.appname.map(|a| a.to_string());
     let process_id = msg.procid.map(|p| match p {
         syslog_loose::ProcId::PID(n) => n.to_string(),
         syslog_loose::ProcId::Name(s) => s.to_string(),
     });
+    let raw_message = msg.msg.to_string();
+
+    // Reconstruct the full message text (syslog_loose splits "The Mothership CEF:…" across
+    // app_name and message when parsing UniFi RFC 5424 messages)
+    let full_text = match &raw_app_name {
+        Some(app) => format!("{app} {raw_message}"),
+        None => raw_message.clone(),
+    };
+
+    let (hostname, app_name, message) =
+        if looks_like_timestamp(&raw_hostname) && full_text.contains("CEF:") {
+            let (h, a, m) = extract_cef_fields(&full_text);
+            (
+                h.unwrap_or_else(|| raw_hostname.clone()),
+                a.or(raw_app_name),
+                m.unwrap_or(raw_message),
+            )
+        } else {
+            let hostname = if raw_hostname.is_empty() {
+                "unknown".to_string()
+            } else {
+                raw_hostname
+            };
+            (hostname, raw_app_name, raw_message)
+        };
 
     ParsedLog {
         timestamp,
@@ -356,7 +375,7 @@ fn parse_syslog(raw: &str) -> ParsedLog {
         severity,
         app_name,
         process_id,
-        message: msg.msg.to_string(),
+        message,
         raw: raw.to_string(),
     }
 }
@@ -382,10 +401,37 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_syslog_unifi_cef_hostname() {
+        // Real-world UniFi OS RFC 5424 message: timestamp in hostname field, device name split
+        // across app_name ("The") and message body ("Mothership CEF:0|...")
+        let raw = "<14>1 2026-03-29T02:52:21+00:00 2026-03-29T02:52:21.587Z The - - - Mothership CEF:0|Ubiquiti|UniFi OS|5.1.5|1|Test Syslog|1|UNIFIhost=Host UNIFIdeviceName=The Mothership UNIFIdeviceModel=UCGMAX UNIFIdeviceIp=76.213.118.20 UNIFIdeviceMac=9C:05:D6:CA:81:3B UNIFIdeviceVersion=5.1.5 msg=Test Syslog";
+        let parsed = parse_syslog(raw);
+        assert_eq!(parsed.hostname, "The Mothership");
+        assert_eq!(parsed.app_name.as_deref(), Some("Test Syslog"));
+        assert_eq!(parsed.message, "Test Syslog");
+    }
+
+    #[test]
+    fn test_parse_syslog_normal_unaffected() {
+        // Standard RFC 3164 message must still parse correctly
+        let raw = "<34>Oct 11 22:14:15 mymachine su: 'su root' failed for lonvick on /dev/pts/8";
+        let parsed = parse_syslog(raw);
+        assert_eq!(parsed.hostname, "mymachine");
+        assert_eq!(parsed.app_name.as_deref(), Some("su"));
+        assert!(parsed.message.contains("su root"));
+    }
+
+    #[test]
     fn test_cef_ext_value_simple() {
         let ext = "UNIFIdeviceModel=UCGMAX UNIFIdeviceIp=76.213.118.20";
-        assert_eq!(cef_ext_value(ext, "UNIFIdeviceModel"), Some("UCGMAX".to_string()));
-        assert_eq!(cef_ext_value(ext, "UNIFIdeviceIp"), Some("76.213.118.20".to_string()));
+        assert_eq!(
+            cef_ext_value(ext, "UNIFIdeviceModel"),
+            Some("UCGMAX".to_string())
+        );
+        assert_eq!(
+            cef_ext_value(ext, "UNIFIdeviceIp"),
+            Some("76.213.118.20".to_string())
+        );
     }
 
     #[test]
@@ -424,7 +470,9 @@ mod tests {
         let (hostname, app_name, message) = extract_cef_fields(text);
         assert_eq!(hostname, Some("The Mothership".to_string()));
         assert_eq!(app_name, Some("Admin Made Config Changes".to_string()));
-        assert!(message.unwrap().starts_with("Jacob Magar changed Syslog Settings"));
+        assert!(message
+            .unwrap()
+            .starts_with("Jacob Magar changed Syslog Settings"));
     }
 
     #[test]
