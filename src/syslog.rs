@@ -243,6 +243,13 @@ async fn flush_batch(
     }
 }
 
+/// Returns true if `s` looks like an ISO 8601 timestamp (YYYY-MM-DDTHH:…).
+/// UniFi OS incorrectly puts a timestamp in the syslog hostname field.
+fn looks_like_timestamp(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() >= 19 && b[4] == b'-' && b[7] == b'-' && b[10] == b'T'
+}
+
 /// Parse a raw syslog message (RFC 3164 / RFC 5424 / loose)
 fn parse_syslog(raw: &str) -> ParsedLog {
     let msg = syslog_loose::parse_message(raw, syslog_loose::Variant::Either);
@@ -282,5 +289,26 @@ fn parse_syslog(raw: &str) -> ParsedLog {
         process_id,
         message: msg.msg.to_string(),
         raw: raw.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_looks_like_timestamp_true() {
+        assert!(looks_like_timestamp("2026-03-29T02:52:21.587Z"));
+        assert!(looks_like_timestamp("2026-03-29T02:52:21+00:00"));
+        assert!(looks_like_timestamp("2024-01-01T00:00:00Z"));
+    }
+
+    #[test]
+    fn test_looks_like_timestamp_false() {
+        assert!(!looks_like_timestamp("The Mothership"));
+        assert!(!looks_like_timestamp("dookie"));
+        assert!(!looks_like_timestamp("unknown"));
+        assert!(!looks_like_timestamp(""));
+        assert!(!looks_like_timestamp("192.168.1.1"));
     }
 }
