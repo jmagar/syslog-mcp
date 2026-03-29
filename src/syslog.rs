@@ -252,7 +252,13 @@ fn looks_like_timestamp(s: &str) -> bool {
 /// containing no spaces and then `=`) terminates the current value.
 fn cef_ext_value(extensions: &str, key: &str) -> Option<String> {
     let needle = format!("{key}=");
-    let start = extensions.find(needle.as_str())? + needle.len();
+    // Match only at the start of the string or after a space (word boundary)
+    let start = if extensions.starts_with(needle.as_str()) {
+        needle.len()
+    } else {
+        let spaced = format!(" {needle}");
+        extensions.find(spaced.as_str())? + spaced.len()
+    };
     let rest = &extensions[start..];
 
     let mut end = rest.len();
@@ -499,5 +505,29 @@ mod tests {
             cef_ext_value(ext, "msg"),
             Some("Jacob Magar changed Syslog Settings CEF Logging setting from \"undefined\" to \"enabled\". Source IP: 76.213.118.20".to_string())
         );
+    }
+
+    #[test]
+    fn test_cef_ext_value_no_substring_match() {
+        // "name" must not match inside "UNIFIdeviceName"
+        let ext = "UNIFIdeviceName=The Mothership UNIFIdeviceModel=UCGMAX";
+        assert_eq!(cef_ext_value(ext, "name"), None);
+    }
+
+    #[test]
+    fn test_cef_ext_value_empty_value() {
+        // Empty value after key= returns None
+        let ext = "key= nextkey=val";
+        assert_eq!(cef_ext_value(ext, "key"), None);
+    }
+
+    #[test]
+    fn test_extract_cef_fields_malformed() {
+        // Fewer than 8 pipe-delimited fields returns (None, None, None)
+        let text = "CEF:0|Ubiquiti|UniFi OS|5.1.5";
+        let (hostname, app_name, message) = extract_cef_fields(text);
+        assert_eq!(hostname, None);
+        assert_eq!(app_name, None);
+        assert_eq!(message, None);
     }
 }
