@@ -64,9 +64,7 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
     }
 
     let manager = SqliteConnectionManager::file(&config.db_path);
-    let pool = Pool::builder()
-        .max_size(config.pool_size)
-        .build(manager)?;
+    let pool = Pool::builder().max_size(config.pool_size).build(manager)?;
 
     // Initialize schema
     let conn = pool.get()?;
@@ -135,12 +133,8 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
     Ok(pool)
 }
 
-
 /// Batch insert for higher throughput
-pub fn insert_logs_batch(
-    pool: &DbPool,
-    entries: &[LogBatchEntry],
-) -> Result<usize> {
+pub fn insert_logs_batch(pool: &DbPool, entries: &[LogBatchEntry]) -> Result<usize> {
     let mut conn = pool.get()?;
     let tx = conn.transaction()?;
 
@@ -155,7 +149,8 @@ pub fn insert_logs_batch(
         }
 
         // Batch upsert hosts — group by hostname to avoid one upsert per log entry
-        let mut host_counts: std::collections::HashMap<&str, i64> = std::collections::HashMap::new();
+        let mut host_counts: std::collections::HashMap<&str, i64> =
+            std::collections::HashMap::new();
         for entry in entries {
             *host_counts.entry(entry.1.as_str()).or_insert(0) += 1;
         }
@@ -189,14 +184,18 @@ pub fn search_logs(pool: &DbPool, params: &SearchParams) -> Result<Vec<LogEntry>
              JOIN logs_fts ON logs_fts.rowid = l.id
              WHERE logs_fts MATCH ?1",
         );
-        let mut bindings: Vec<Box<dyn rusqlite::types::ToSql + '_>> = vec![Box::new(query.as_str())];
+        let mut bindings: Vec<Box<dyn rusqlite::types::ToSql + '_>> =
+            vec![Box::new(query.as_str())];
         let mut idx = 2;
 
         append_filters(&mut sql, &mut bindings, &mut idx, params);
         sql.push_str(&format!(" ORDER BY l.timestamp DESC LIMIT {limit}"));
 
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(rusqlite::params_from_iter(bindings.iter().map(|b| b.as_ref())), map_row)?;
+        let rows = stmt.query_map(
+            rusqlite::params_from_iter(bindings.iter().map(|b| b.as_ref())),
+            map_row,
+        )?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     } else {
         let mut sql = String::from(
@@ -211,13 +210,21 @@ pub fn search_logs(pool: &DbPool, params: &SearchParams) -> Result<Vec<LogEntry>
         sql.push_str(&format!(" ORDER BY l.timestamp DESC LIMIT {limit}"));
 
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(rusqlite::params_from_iter(bindings.iter().map(|b| b.as_ref())), map_row)?;
+        let rows = stmt.query_map(
+            rusqlite::params_from_iter(bindings.iter().map(|b| b.as_ref())),
+            map_row,
+        )?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 }
 
 /// Get the N most recent logs for a host/service
-pub fn tail_logs(pool: &DbPool, hostname: Option<&str>, app_name: Option<&str>, n: u32) -> Result<Vec<LogEntry>> {
+pub fn tail_logs(
+    pool: &DbPool,
+    hostname: Option<&str>,
+    app_name: Option<&str>,
+    n: u32,
+) -> Result<Vec<LogEntry>> {
     let conn = pool.get()?;
     let n = n.min(500);
 
@@ -242,12 +249,19 @@ pub fn tail_logs(pool: &DbPool, hostname: Option<&str>, app_name: Option<&str>, 
     sql.push_str(&format!(" ORDER BY timestamp DESC LIMIT {n}"));
 
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(rusqlite::params_from_iter(bindings.iter().map(|b| b.as_ref())), map_row)?;
+    let rows = stmt.query_map(
+        rusqlite::params_from_iter(bindings.iter().map(|b| b.as_ref())),
+        map_row,
+    )?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 /// Get error/warning summary per host in a time window
-pub fn get_error_summary(pool: &DbPool, from: Option<&str>, to: Option<&str>) -> Result<Vec<serde_json::Value>> {
+pub fn get_error_summary(
+    pool: &DbPool,
+    from: Option<&str>,
+    to: Option<&str>,
+) -> Result<Vec<serde_json::Value>> {
     let conn = pool.get()?;
 
     let from = from.unwrap_or("1970-01-01T00:00:00Z");
@@ -292,7 +306,14 @@ pub fn list_hosts(pool: &DbPool) -> Result<Vec<serde_json::Value>> {
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-/// Purge logs older than N days
+/// Purge logs older than N days.
+///
+/// Uses chunked DELETEs (10 000 rows per iteration) so the WAL write lock is
+/// released between chunks, letting the batch writer proceed without timing out
+/// or overflowing its 1 000-entry cap.  After all chunks complete, an
+/// incremental FTS5 merge is issued instead of a full rebuild — `merge=500,250`
+/// processes at most a bounded number of index pages per call and holds the
+/// write lock for milliseconds rather than seconds.
 pub fn purge_old_logs(pool: &DbPool, retention_days: u32) -> Result<usize> {
     if retention_days == 0 {
         return Ok(0);
@@ -300,20 +321,36 @@ pub fn purge_old_logs(pool: &DbPool, retention_days: u32) -> Result<usize> {
 
     let conn = pool.get()?;
     let cutoff = Utc::now()
-        .checked_sub_signed(chrono::Duration::days(retention_days as i64))
-        .ok_or_else(|| anyhow::anyhow!("date arithmetic overflow for retention_days={retention_days}"))?
+        .checked_sub_signed(chrono::TimeDelta::days(retention_days as i64))
+        .ok_or_else(|| {
+            anyhow::anyhow!("date arithmetic overflow for retention_days={retention_days}")
+        })?
         .format("%Y-%m-%dT%H:%M:%SZ")
         .to_string();
 
-    let deleted = conn.execute("DELETE FROM logs WHERE timestamp < ?1", params![cutoff])?;
-
-    // Rebuild FTS index after large deletes
-    if deleted > 1000 {
-        conn.execute_batch("INSERT INTO logs_fts(logs_fts) VALUES('rebuild');")?;
+    // Chunked DELETE: each iteration removes at most 10 000 rows and returns
+    // quickly, releasing the write lock so the batch writer can proceed.
+    let mut total_deleted: usize = 0;
+    loop {
+        let chunk = conn.execute(
+            "DELETE FROM logs WHERE id IN (
+                 SELECT id FROM logs WHERE timestamp < ?1 LIMIT 10000
+             )",
+            params![cutoff],
+        )?;
+        total_deleted += chunk;
+        if chunk == 0 {
+            break;
+        }
     }
 
-    tracing::info!(deleted, cutoff = %cutoff, "Purged old logs");
-    Ok(deleted)
+    // Incremental FTS merge — much shorter write-lock duration than full rebuild.
+    if total_deleted > 0 {
+        conn.execute_batch("INSERT INTO logs_fts(logs_fts) VALUES('merge=500,250');")?;
+    }
+
+    tracing::info!(deleted = total_deleted, cutoff = %cutoff, "Purged old logs");
+    Ok(total_deleted)
 }
 
 /// Get database stats
@@ -331,16 +368,12 @@ pub fn get_stats(pool: &DbPool) -> Result<serde_json::Value> {
     let total_hosts: i64 = tx.query_row("SELECT COUNT(*) FROM hosts", [], |r| r.get(0))?;
     // MIN/MAX return a single nullable row; use get::<_, Option<_>> so NULL becomes
     // None while real query errors (e.g. missing table) still propagate via `?`.
-    let oldest: Option<String> = tx.query_row(
-        "SELECT MIN(timestamp) FROM logs",
-        [],
-        |r| r.get::<_, Option<String>>(0),
-    )?;
-    let newest: Option<String> = tx.query_row(
-        "SELECT MAX(timestamp) FROM logs",
-        [],
-        |r| r.get::<_, Option<String>>(0),
-    )?;
+    let oldest: Option<String> = tx.query_row("SELECT MIN(timestamp) FROM logs", [], |r| {
+        r.get::<_, Option<String>>(0)
+    })?;
+    let newest: Option<String> = tx.query_row("SELECT MAX(timestamp) FROM logs", [], |r| {
+        r.get::<_, Option<String>>(0)
+    })?;
     tx.finish()?;
 
     Ok(serde_json::json!({
@@ -354,7 +387,9 @@ pub fn get_stats(pool: &DbPool) -> Result<serde_json::Value> {
 
 /// Syslog severity level names ordered by numeric value (0=emerg, 7=debug).
 /// Used by both the MCP layer (for threshold filtering) and the syslog parser (for decoding).
-pub const SEVERITY_LEVELS: &[&str] = &["emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"];
+pub const SEVERITY_LEVELS: &[&str] = &[
+    "emerg", "alert", "crit", "err", "warning", "notice", "info", "debug",
+];
 
 // --- helpers ---
 
