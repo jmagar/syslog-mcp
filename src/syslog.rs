@@ -79,7 +79,7 @@ async fn udp_listener(bind: &str, max_size: usize, tx: mpsc::Sender<db::LogBatch
                     backpressure = false;
                 }
 
-                if tx.send(parse_syslog(&raw)).await.is_err() {
+                if tx.send(parse_syslog(&raw, addr.to_string())).await.is_err() {
                     error!("Write channel closed");
                     break;
                 }
@@ -132,7 +132,7 @@ async fn handle_tcp_connection(
                     info!(peer = %addr, "syslog write channel cleared — backpressure lifted");
                     backpressure = false;
                 }
-                if tx.send(parse_syslog(&line)).await.is_err() {
+                if tx.send(parse_syslog(&line, addr.to_string())).await.is_err() {
                     break;
                 }
             }
@@ -348,7 +348,10 @@ fn extract_cef_fields(text: &str) -> (Option<String>, Option<String>, Option<Str
 ///
 /// Handles UniFi CEF messages where the hostname field contains a timestamp
 /// and the real device name is embedded in the CEF extension `UNIFIdeviceName`.
-fn parse_syslog(raw: &str) -> db::LogBatchEntry {
+///
+/// `source_ip` is the actual network sender address (e.g. "192.168.1.10:514"),
+/// recorded separately from the hostname claimed in the message body.
+fn parse_syslog(raw: &str, source_ip: String) -> db::LogBatchEntry {
     let msg = syslog_loose::parse_message(raw, syslog_loose::Variant::Either);
 
     let severity_num = msg.severity.map(|s| s as u8).unwrap_or(6); // default info
@@ -411,6 +414,7 @@ fn parse_syslog(raw: &str) -> db::LogBatchEntry {
         process_id,
         message,
         raw: raw.to_string(),
+        source_ip,
     }
 }
 
@@ -439,7 +443,7 @@ mod tests {
         // Real-world UniFi OS RFC 5424 message: timestamp in hostname field, device name split
         // across app_name ("The") and message body ("Mothership CEF:0|...")
         let raw = "<14>1 2026-03-29T02:52:21+00:00 2026-03-29T02:52:21.587Z The - - - Mothership CEF:0|Ubiquiti|UniFi OS|5.1.5|1|Test Syslog|1|UNIFIhost=Host UNIFIdeviceName=The Mothership UNIFIdeviceModel=UCGMAX UNIFIdeviceIp=76.213.118.20 UNIFIdeviceMac=9C:05:D6:CA:81:3B UNIFIdeviceVersion=5.1.5 msg=Test Syslog";
-        let parsed = parse_syslog(raw);
+        let parsed = parse_syslog(raw, "192.168.1.1:514".to_string());
         assert_eq!(parsed.hostname, "The Mothership");
         assert_eq!(parsed.app_name.as_deref(), Some("Test Syslog"));
         assert_eq!(parsed.message, "Test Syslog");
@@ -449,7 +453,7 @@ mod tests {
     fn test_parse_syslog_normal_unaffected() {
         // Standard RFC 3164 message must still parse correctly
         let raw = "<34>Oct 11 22:14:15 mymachine su: 'su root' failed for lonvick on /dev/pts/8";
-        let parsed = parse_syslog(raw);
+        let parsed = parse_syslog(raw, "192.168.1.1:514".to_string());
         assert_eq!(parsed.hostname, "mymachine");
         assert_eq!(parsed.app_name.as_deref(), Some("su"));
         assert!(parsed.message.contains("su root"));
@@ -564,7 +568,7 @@ mod tests {
         // Verify parse_syslog handles a large input without panicking
         let big = "x".repeat(100_000);
         let raw = format!("<14>1 2026-01-01T00:00:00Z host app - - - {big}");
-        let parsed = parse_syslog(&raw);
+        let parsed = parse_syslog(&raw, "192.168.1.1:514".to_string());
         assert_eq!(parsed.hostname, "host");
         // message will be the big string — just verify no panic
         assert!(!parsed.message.is_empty());
@@ -575,7 +579,7 @@ mod tests {
         // CEF heuristic fires (timestamp hostname + "CEF:" in body) but body is malformed
         // (< 8 pipe fields). Should not panic and should fall back to raw fields.
         let raw = "<14>1 2026-01-01T00:00:00Z 2026-01-01T00:00:00Z App - - - body with CEF: but no pipes";
-        let parsed = parse_syslog(raw);
+        let parsed = parse_syslog(raw, "192.168.1.1:514".to_string());
         // Should fall back gracefully — no panic
         assert!(!parsed.hostname.is_empty());
     }
@@ -589,7 +593,7 @@ mod tests {
     #[test]
     fn test_parse_syslog_rfc3164_severity_facility() {
         let raw = "<34>Oct 11 22:14:15 mymachine su: test message";
-        let parsed = parse_syslog(raw);
+        let parsed = parse_syslog(raw, "192.168.1.1:514".to_string());
         // PRI 34 = (4 << 3) | 2 → facility=auth (index 4), severity=crit (index 2)
         assert_eq!(parsed.severity, "crit");
         assert_eq!(parsed.facility.as_deref(), Some("auth"));
@@ -603,7 +607,7 @@ mod tests {
     #[test]
     fn test_parse_syslog_rfc5424_with_structured_data() {
         let raw = "<165>1 2003-10-11T22:14:15.003Z mymachine su 77 - - test message body";
-        let parsed = parse_syslog(raw);
+        let parsed = parse_syslog(raw, "192.168.1.1:514".to_string());
         // PRI 165 = (20 << 3) | 5 → facility=local4 (index 20), severity=notice (index 5)
         assert_eq!(parsed.severity, "notice");
         assert_eq!(parsed.facility.as_deref(), Some("local4"));
@@ -617,7 +621,7 @@ mod tests {
     #[test]
     fn test_parse_syslog_missing_pri_defaults_to_info() {
         let raw = "Oct 11 22:14:15 myhost myapp: something happened";
-        let parsed = parse_syslog(raw);
+        let parsed = parse_syslog(raw, "192.168.1.1:514".to_string());
         assert_eq!(parsed.severity, "info");
     }
 
@@ -627,7 +631,7 @@ mod tests {
         // syslog_loose may not populate hostname for very bare messages.
         // We feed a minimal bare message without a recognisable hostname field.
         let raw = "just a plain log line with no syslog structure at all";
-        let parsed = parse_syslog(raw);
+        let parsed = parse_syslog(raw, "192.168.1.1:514".to_string());
         // hostname must never be empty
         assert!(!parsed.hostname.is_empty());
         // When syslog_loose returns no hostname the code inserts "unknown"
@@ -639,7 +643,7 @@ mod tests {
     /// Empty string input must not panic and must return a valid db::LogBatchEntry.
     #[test]
     fn test_parse_syslog_empty_string_no_panic() {
-        let parsed = parse_syslog("");
+        let parsed = parse_syslog("", "192.168.1.1:514".to_string());
         // timestamp must be non-empty RFC 3339
         assert!(!parsed.timestamp.is_empty());
         // severity must default to info
@@ -653,7 +657,7 @@ mod tests {
     #[test]
     fn test_parse_syslog_malformed_priority_no_panic() {
         let raw = "<999>Oct 11 22:14:15 myhost myapp: overflow priority";
-        let parsed = parse_syslog(raw);
+        let parsed = parse_syslog(raw, "192.168.1.1:514".to_string());
         // Must not panic; severity must be a known string (syslog_loose may or
         // may not extract a value, but SEVERITY_LEVELS.get() falls back to "info").
         assert!(!parsed.severity.is_empty());
@@ -666,7 +670,7 @@ mod tests {
     fn test_parse_syslog_timestamp_is_rfc3339() {
         // Message with a well-formed ISO timestamp
         let raw_with_ts = "<14>1 2024-06-15T12:34:56.789Z myhost myapp 42 - - hello";
-        let p1 = parse_syslog(raw_with_ts);
+        let p1 = parse_syslog(raw_with_ts, "192.168.1.1:514".to_string());
         // RFC 3339 ends with Z or +offset
         assert!(
             p1.timestamp.ends_with('Z') || p1.timestamp.contains('+'),
@@ -678,7 +682,7 @@ mod tests {
 
         // Message with no timestamp (syslog_loose fallback → Utc::now())
         let raw_no_ts = "just a plain line";
-        let p2 = parse_syslog(raw_no_ts);
+        let p2 = parse_syslog(raw_no_ts, "192.168.1.1:514".to_string());
         assert!(
             p2.timestamp.ends_with('Z') || p2.timestamp.contains('+'),
             "fallback timestamp not RFC 3339: {}",
@@ -691,7 +695,7 @@ mod tests {
     #[test]
     fn test_parse_syslog_rfc3164_severity_emerg() {
         let raw = "<0>Oct 11 22:14:15 myhost kernel: system halt";
-        let parsed = parse_syslog(raw);
+        let parsed = parse_syslog(raw, "192.168.1.1:514".to_string());
         assert_eq!(parsed.severity, "emerg");
         assert_eq!(parsed.facility.as_deref(), Some("kern"));
     }
@@ -700,7 +704,7 @@ mod tests {
     #[test]
     fn test_parse_syslog_rfc3164_severity_debug() {
         let raw = "<7>Oct 11 22:14:15 myhost kernel: verbose output";
-        let parsed = parse_syslog(raw);
+        let parsed = parse_syslog(raw, "192.168.1.1:514".to_string());
         assert_eq!(parsed.severity, "debug");
     }
 
@@ -714,7 +718,7 @@ mod tests {
             "CEF:0|Ubiquiti|UniFi OS|5.0|E|SomeEvent|5|",
             "UNIFIdeviceName=MyDevice msg=event occurred"
         );
-        let parsed = parse_syslog(raw);
+        let parsed = parse_syslog(raw, "192.168.1.1:514".to_string());
         // CEF branch should extract device name from UNIFIdeviceName
         assert_eq!(parsed.hostname, "MyDevice");
         assert_eq!(parsed.app_name.as_deref(), Some("SomeEvent"));
@@ -725,7 +729,7 @@ mod tests {
     #[test]
     fn test_parse_syslog_raw_field_preserved() {
         let raw = "<34>Oct 11 22:14:15 mymachine su: verbatim check";
-        let parsed = parse_syslog(raw);
+        let parsed = parse_syslog(raw, "192.168.1.1:514".to_string());
         assert_eq!(parsed.raw, raw);
     }
 }

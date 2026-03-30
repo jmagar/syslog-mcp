@@ -13,6 +13,11 @@ pub type DbPool = Pool<SqliteConnectionManager>;
 ///
 /// Replaces the former 8-tuple type alias; named fields prevent silent data corruption
 /// from positional swaps between structurally identical `String`/`Option<String>` fields.
+///
+/// `source_ip` records the actual network sender address (IP:port) independent of the
+/// hostname claimed in the syslog message body. Any LAN host can UDP-spoof an arbitrary
+/// hostname, so `source_ip` is the only trustworthy network identity for a log entry.
+/// Log content (hostname, message, app_name) is untrusted user-controlled data.
 #[derive(Debug, Clone)]
 pub struct LogBatchEntry {
     pub timestamp: String,
@@ -23,6 +28,9 @@ pub struct LogBatchEntry {
     pub process_id: Option<String>,
     pub message: String,
     pub raw: String,
+    /// Actual network sender address (IP:port). Separate from the claimed hostname
+    /// in the syslog message, which can be spoofed by any LAN device.
+    pub source_ip: String,
 }
 
 /// Error/warning summary entry (one row per hostname+severity)
@@ -65,6 +73,10 @@ pub struct LogEntry {
     pub process_id: Option<String>,
     pub message: String,
     pub received_at: String,
+    /// Actual network sender address (IP:port). Separate from the claimed hostname,
+    /// which can be spoofed by any LAN device via UDP. Empty string for legacy rows
+    /// inserted before this column was added.
+    pub source_ip: String,
 }
 
 /// Parameters for searching logs
@@ -120,7 +132,8 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
             process_id  TEXT,
             message     TEXT NOT NULL,
             raw         TEXT NOT NULL,
-            received_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            received_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+            source_ip   TEXT NOT NULL DEFAULT ''
         );
 
         CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON logs(timestamp);
@@ -161,6 +174,22 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
         ",
     )?;
 
+    // Migration: add source_ip column to existing databases that predate this column.
+    // ALTER TABLE ADD COLUMN is a no-op if the column already exists in SQLite ≥ 3.37,
+    // but older SQLite returns an error on duplicate columns, so we check first.
+    let col_exists: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('logs') WHERE name = 'source_ip'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
+    if !col_exists {
+        conn.execute_batch("ALTER TABLE logs ADD COLUMN source_ip TEXT NOT NULL DEFAULT ''")?;
+        tracing::info!("Migration: added source_ip column to logs table");
+    }
+
     tracing::info!(path = %config.db_path.display(), "Database initialized");
     Ok(pool)
 }
@@ -172,8 +201,8 @@ pub fn insert_logs_batch(pool: &DbPool, entries: &[LogBatchEntry]) -> Result<usi
 
     {
         let mut stmt = tx.prepare_cached(
-            "INSERT INTO logs (timestamp, hostname, facility, severity, app_name, process_id, message, raw)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO logs (timestamp, hostname, facility, severity, app_name, process_id, message, raw, source_ip)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         )?;
 
         for entry in entries {
@@ -185,7 +214,8 @@ pub fn insert_logs_batch(pool: &DbPool, entries: &[LogBatchEntry]) -> Result<usi
                 entry.app_name,
                 entry.process_id,
                 entry.message,
-                entry.raw
+                entry.raw,
+                entry.source_ip
             ])?;
         }
 
@@ -245,7 +275,7 @@ pub fn search_logs(pool: &DbPool, params: &SearchParams) -> Result<Vec<LogEntry>
 
         let mut sql = String::from(
             "SELECT l.id, l.timestamp, l.hostname, l.facility, l.severity,
-                    l.app_name, l.process_id, l.message, l.received_at
+                    l.app_name, l.process_id, l.message, l.received_at, l.source_ip
              FROM logs l
              JOIN logs_fts ON logs_fts.rowid = l.id
              WHERE logs_fts MATCH ?1",
@@ -271,7 +301,7 @@ pub fn search_logs(pool: &DbPool, params: &SearchParams) -> Result<Vec<LogEntry>
     } else {
         let mut sql = String::from(
             "SELECT l.id, l.timestamp, l.hostname, l.facility, l.severity,
-                    l.app_name, l.process_id, l.message, l.received_at
+                    l.app_name, l.process_id, l.message, l.received_at, l.source_ip
              FROM logs l WHERE 1=1",
         );
         let mut bindings: Vec<rusqlite::types::Value> = vec![];
@@ -301,7 +331,7 @@ pub fn tail_logs(
 
     let mut sql = String::from(
         "SELECT id, timestamp, hostname, facility, severity,
-                app_name, process_id, message, received_at
+                app_name, process_id, message, received_at, source_ip
          FROM logs WHERE 1=1",
     );
     let mut bindings: Vec<Box<dyn rusqlite::types::ToSql>> = vec![];
@@ -529,6 +559,7 @@ fn map_row(row: &rusqlite::Row) -> rusqlite::Result<LogEntry> {
         process_id: row.get(6)?,
         message: row.get(7)?,
         received_at: row.get(8)?,
+        source_ip: row.get(9)?,
     })
 }
 
@@ -560,6 +591,7 @@ mod tests {
             process_id: None,
             message: msg.to_string(),
             raw: msg.to_string(),
+            source_ip: "127.0.0.1:514".to_string(),
         }
     }
 
