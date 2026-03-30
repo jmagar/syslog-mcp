@@ -36,18 +36,22 @@ POST http://<host>:3100/mcp               (direct)
 
 ## Config
 
-Environment variables (prefix `SYSLOG_MCP_`, double underscore for nesting within sections):
+Environment variables use two prefixes — `SYSLOG_*` for the syslog listener, `SYSLOG_MCP_*` for the MCP server and storage:
 
 ```bash
-SYSLOG_MCP_SYSLOG__UDP_BIND=0.0.0.0:1514
-SYSLOG_MCP_STORAGE__DB_PATH=/data/syslog.db
-SYSLOG_MCP_STORAGE__RETENTION_DAYS=90   # logs older than this are permanently deleted hourly; set to 0 to keep forever
-SYSLOG_MCP_MCP__BIND=0.0.0.0:3100
+SYSLOG_HOST=0.0.0.0        # Syslog listener host
+SYSLOG_PORT=1514            # Syslog listener port (UDP + TCP)
+SYSLOG_MCP_HOST=0.0.0.0    # MCP HTTP server host
+SYSLOG_MCP_PORT=3100        # MCP HTTP server port
+SYSLOG_MCP_DB_PATH=/data/syslog.db
+SYSLOG_MCP_RETENTION_DAYS=90   # logs older than this are permanently deleted hourly; set to 0 to keep forever
 ```
 
-> **Warning:** `retention_days` defaults to 90. Logs older than 90 days are **permanently and irreversibly deleted hourly**. Set `SYSLOG_MCP_STORAGE__RETENTION_DAYS=0` to disable.
+See `.env.example` for the complete list.
 
-> **Note (Docker):** When running in Docker, `config.toml` is NOT read — the binary reads from CWD (`/`) and the TOML is copied to `/etc/syslog-mcp/` which is not CWD. Use environment variables (`SYSLOG_MCP_` prefix) or the `docker-compose.yml` environment block instead. Editing `config.toml` has no effect in Docker.
+> **Warning:** `retention_days` defaults to 90. Logs older than 90 days are **permanently and irreversibly deleted hourly**. Set `SYSLOG_MCP_RETENTION_DAYS=0` to disable.
+
+> **Note (Docker):** When running in Docker, `config.toml` is NOT read — the binary reads from CWD (`/`) and the TOML is at a different path. Use environment variables via `.env` instead.
 
 ## SSE Endpoint
 
@@ -81,10 +85,10 @@ The MCP endpoint is designed for **homelab-internal use**. It exposes your log d
 
 ### Authentication
 
-As of v0.1.6, optional Bearer token auth is supported. Set the `SYSLOG_MCP_MCP__API_TOKEN` env var to require a token on all requests:
+Optional Bearer token auth is supported. Set the `SYSLOG_MCP_API_TOKEN` env var to require a token on all requests:
 
 ```bash
-SYSLOG_MCP_MCP__API_TOKEN=your-secret-token
+SYSLOG_MCP_API_TOKEN=your-secret-token
 ```
 
 When set, every request must include:
@@ -103,7 +107,7 @@ CORS is restricted to `localhost:3100`. This is a browser-side restriction only 
 
 The SWAG config in [SETUP.md](SETUP.md) exposes the endpoint at `https://syslog-mcp.tootie.tv/mcp` with no auth layer at the proxy. If you use this config, you should either:
 
-- Set `SYSLOG_MCP_MCP__API_TOKEN` so the service enforces auth itself, **or**
+- Set `SYSLOG_MCP_API_TOKEN` so the service enforces auth itself, **or**
 - Add authentication at the SWAG layer (e.g. `auth_basic`, Authelia, or IP allowlist)
 
 **Do not expose this service to the public internet without one of the above in place.**
@@ -113,7 +117,7 @@ The SWAG config in [SETUP.md](SETUP.md) exposes the endpoint at `https://syslog-
 | Scenario | Recommendation |
 |----------|---------------|
 | LAN-only, no SWAG | No action required; trust your LAN |
-| Exposed via SWAG/reverse proxy | Set `SYSLOG_MCP_MCP__API_TOKEN` or add proxy-layer auth |
+| Exposed via SWAG/reverse proxy | Set `SYSLOG_MCP_API_TOKEN` or add proxy-layer auth |
 | Public internet exposure | Set token **and** add proxy-layer auth |
 
 ## Backup

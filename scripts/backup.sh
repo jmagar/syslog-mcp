@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-DB_PATH="${SYSLOG_MCP_STORAGE__DB_PATH:-./data/syslog.db}"
+DB_PATH="${SYSLOG_MCP_DB_PATH:-./data/syslog.db}"
 BACKUP_DIR="${1:-./backups}"
 TIMESTAMP=$(date -u +%Y-%m-%d-%H%M%S)
 BACKUP_FILE="${BACKUP_DIR}/syslog-${TIMESTAMP}.db"

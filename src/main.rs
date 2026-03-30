@@ -24,8 +24,8 @@ async fn main() -> Result<()> {
     // Load config
     let config = config::Config::load()?;
     info!(
-        syslog_bind = %config.syslog.udp_bind,
-        mcp_bind = %config.mcp.bind,
+        syslog_bind = %config.syslog.bind_addr(),
+        mcp_bind = %config.mcp.bind_addr(),
         db_path = %config.storage.db_path.display(),
         retention_days = config.storage.retention_days,
         auth_enabled = config.mcp.api_token.is_some(),
@@ -90,8 +90,9 @@ async fn main() -> Result<()> {
         )
         .layer(tower_http::trace::TraceLayer::new_for_http());
 
-    let listener = tokio::net::TcpListener::bind(&config.mcp.bind).await?;
-    info!(bind = %config.mcp.bind, "MCP server listening");
+    let mcp_bind = config.mcp.bind_addr();
+    let listener = tokio::net::TcpListener::bind(&mcp_bind).await?;
+    info!(bind = %mcp_bind, "MCP server listening");
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())

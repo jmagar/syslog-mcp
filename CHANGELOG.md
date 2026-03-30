@@ -2,6 +2,27 @@
 
 All notable changes to syslog-mcp are documented here.
 
+## [0.1.9] — 2026-03-30
+
+### Changed
+- **Breaking: env var rename** — dropped figment's nested `SYSLOG_MCP_SECTION__KEY` format for flat `SYSLOG_*` and `SYSLOG_MCP_*` prefixes. See `.env.example` for the new names.
+- `src/config.rs`: Replaced `figment` with `toml` crate + manual env var overlay — simpler, supports two prefixes
+- `src/config.rs`: Merged `udp_bind`/`tcp_bind` into `host` + `port` (UDP and TCP always share the same address)
+- `src/config.rs`: Renamed `flush_interval_ms` to `flush_interval`
+- `docker-compose.yml`: Host-side ports use `${SYSLOG_PORT}` and `${SYSLOG_MCP_PORT}` env vars
+- `docker-compose.yml`: Data volume uses `${SYSLOG_MCP_DATA_VOLUME}` (defaults to named volume `syslog-mcp-data`)
+- `docker-compose.yml`: Replaced `environment:` block with `env_file: .env`
+- `docker-compose.yml`: Removed SWAG labels; network uses `external: true`
+- `Dockerfile`: `SYSLOG_MCP_STORAGE__DB_PATH` → `SYSLOG_MCP_DB_PATH`
+- `Cargo.toml`: `figment` dependency replaced with `toml`
+
+### Added
+- `src/config.rs`: `SyslogConfig::bind_addr()` and `McpConfig::bind_addr()` helper methods
+- `src/config.rs`: `validate_host()` rejects host strings containing ports
+- `src/config.rs`: 2 new tests — `env_var_overrides_syslog_port`, `host_with_port_is_rejected`
+
+---
+
 ## [0.1.7] — 2026-03-30
 
 ### Fixed

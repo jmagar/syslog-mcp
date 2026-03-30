@@ -23,14 +23,16 @@ pub async fn start(config: SyslogConfig, pool: Arc<DbPool>) -> Result<()> {
     // Spawn the batched writer
     let writer_pool = pool.clone();
     let batch_size = config.batch_size;
-    let flush_interval = tokio::time::Duration::from_millis(config.flush_interval_ms);
+    let flush_interval = tokio::time::Duration::from_millis(config.flush_interval);
     tokio::spawn(async move {
         batch_writer(rx, writer_pool, batch_size, flush_interval).await;
     });
 
+    let bind_addr = config.bind_addr();
+
     // Spawn UDP listener
     let udp_tx = tx.clone();
-    let udp_bind = config.udp_bind.clone();
+    let udp_bind = bind_addr.clone();
     let max_size = config.max_message_size;
     tokio::spawn(async move {
         if let Err(e) = udp_listener(&udp_bind, max_size, udp_tx).await {
@@ -40,7 +42,7 @@ pub async fn start(config: SyslogConfig, pool: Arc<DbPool>) -> Result<()> {
 
     // Spawn TCP listener
     let tcp_tx = tx.clone();
-    let tcp_bind = config.tcp_bind.clone();
+    let tcp_bind = bind_addr.clone();
     let max_tcp_connections = config.max_tcp_connections;
     let tcp_idle_timeout_secs = config.tcp_idle_timeout_secs;
     tokio::spawn(async move {
@@ -49,11 +51,7 @@ pub async fn start(config: SyslogConfig, pool: Arc<DbPool>) -> Result<()> {
         }
     });
 
-    info!(
-        udp = %config.udp_bind,
-        tcp = %config.tcp_bind,
-        "Syslog listeners started"
-    );
+    info!(bind = %bind_addr, "Syslog listeners started");
 
     Ok(())
 }
