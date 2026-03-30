@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::State,
+    extract::{DefaultBodyLimit, State},
     http::StatusCode,
     middleware,
     response::{
@@ -99,6 +99,7 @@ pub fn router(state: AppState) -> Router {
         .merge(authenticated)
         .merge(unauthenticated)
         .fallback(|| async { (StatusCode::NOT_FOUND, Json(json!({"error": "not_found"}))) })
+        .layer(DefaultBodyLimit::max(65_536))
         .with_state(state)
 }
 
