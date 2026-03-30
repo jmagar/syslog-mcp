@@ -390,7 +390,6 @@ pub fn purge_old_logs(pool: &DbPool, retention_days: u32) -> Result<usize> {
         return Ok(0);
     }
 
-    let conn = pool.get()?;
     let cutoff = Utc::now()
         .checked_sub_signed(chrono::TimeDelta::days(retention_days as i64))
         .ok_or_else(|| {
@@ -399,10 +398,12 @@ pub fn purge_old_logs(pool: &DbPool, retention_days: u32) -> Result<usize> {
         .format("%Y-%m-%dT%H:%M:%SZ")
         .to_string();
 
-    // Chunked DELETE: each iteration removes at most 10 000 rows and returns
-    // quickly, releasing the write lock so the batch writer can proceed.
+    // Chunked DELETE: each iteration acquires a fresh connection from the pool
+    // and releases it (along with its write lock) before sleeping, giving the
+    // batch writer a window to acquire a connection between chunks.
     let mut total_deleted: usize = 0;
     loop {
+        let conn = pool.get()?;
         let chunk = conn.execute(
             "DELETE FROM logs WHERE id IN (
                  SELECT id FROM logs WHERE timestamp < ?1 LIMIT 10000
@@ -410,14 +411,17 @@ pub fn purge_old_logs(pool: &DbPool, retention_days: u32) -> Result<usize> {
             params![cutoff],
         )?;
         total_deleted += chunk;
+        drop(conn); // release back to pool before sleeping
         if chunk == 0 {
             break;
         }
+        std::thread::sleep(std::time::Duration::from_millis(50));
     }
 
     // Incremental FTS merge — much shorter write-lock duration than full rebuild.
     // Best-effort: a small/empty index may return an error; log and continue.
     if total_deleted > 0 {
+        let conn = pool.get()?;
         if let Err(e) = conn.execute_batch("INSERT INTO logs_fts(logs_fts) VALUES('merge=500,250');") {
             tracing::warn!(error = %e, "FTS merge skipped (non-fatal)");
         }
