@@ -45,7 +45,7 @@ SYSLOG_MCP_MCP__BIND=0.0.0.0:3100
 
 > **Warning:** `retention_days` defaults to 90. Logs older than 90 days are **permanently and irreversibly deleted hourly**. Set `SYSLOG_MCP_STORAGE__RETENTION_DAYS=0` to disable.
 
-Or edit `config.toml`.
+> **Note (Docker):** When running in Docker, `config.toml` is NOT read — the binary reads from CWD (`/`) and the TOML is copied to `/etc/syslog-mcp/` which is not CWD. Use environment variables (`SYSLOG_MCP_` prefix) or the `docker-compose.yml` environment block instead. Editing `config.toml` has no effect in Docker.
 
 ## Architecture
 
