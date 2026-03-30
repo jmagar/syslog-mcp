@@ -12,6 +12,14 @@ pub struct Config {
     pub mcp: McpConfig,
 }
 
+fn default_max_tcp_connections() -> usize {
+    512
+}
+
+fn default_tcp_idle_timeout_secs() -> u64 {
+    300
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyslogConfig {
     /// UDP listen address
@@ -20,6 +28,12 @@ pub struct SyslogConfig {
     pub tcp_bind: String,
     /// Max message size in bytes
     pub max_message_size: usize,
+    /// Maximum concurrent TCP connections (semaphore cap)
+    #[serde(default = "default_max_tcp_connections")]
+    pub max_tcp_connections: usize,
+    /// Idle timeout in seconds for TCP connections (per-read)
+    #[serde(default = "default_tcp_idle_timeout_secs")]
+    pub tcp_idle_timeout_secs: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,6 +78,8 @@ impl Default for Config {
                 udp_bind: "0.0.0.0:1514".into(),
                 tcp_bind: "0.0.0.0:1514".into(),
                 max_message_size: 8192,
+                max_tcp_connections: default_max_tcp_connections(),
+                tcp_idle_timeout_secs: default_tcp_idle_timeout_secs(),
             },
             storage: StorageConfig {
                 db_path: PathBuf::from("/data/syslog.db"),

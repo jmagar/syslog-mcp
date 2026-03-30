@@ -52,8 +52,10 @@ pub async fn start(config: SyslogConfig, pool: Arc<DbPool>) -> Result<()> {
     // Spawn TCP listener
     let tcp_tx = tx.clone();
     let tcp_bind = config.tcp_bind.clone();
+    let max_tcp_connections = config.max_tcp_connections;
+    let tcp_idle_timeout_secs = config.tcp_idle_timeout_secs;
     tokio::spawn(async move {
-        if let Err(e) = tcp_listener(&tcp_bind, tcp_tx, max_size).await {
+        if let Err(e) = tcp_listener(&tcp_bind, tcp_tx, max_size, max_tcp_connections, tcp_idle_timeout_secs).await {
             error!(error = %e, "TCP syslog listener failed");
         }
     });
@@ -109,6 +111,7 @@ async fn handle_tcp_connection(
     addr: std::net::SocketAddr,
     tx: mpsc::Sender<ParsedLog>,
     max_size: usize,
+    idle_timeout_secs: u64,
 ) {
     info!(peer = %addr, "TCP syslog connection accepted");
     // Limit total bytes readable from this connection to max_size to prevent OOM
@@ -121,11 +124,11 @@ async fn handle_tcp_connection(
     let mut backpressure = false;
 
     loop {
-        // Idle timeout: if no data arrives within 300s, drop the connection.
+        // Idle timeout: if no data arrives within idle_timeout_secs, drop the connection.
         // This is an idle (per-read) timeout, not a wall-clock timeout, so
         // persistent forwarders sending continuous messages are never killed.
         let next = tokio::time::timeout(
-            tokio::time::Duration::from_secs(300),
+            tokio::time::Duration::from_secs(idle_timeout_secs),
             lines.next_line(),
         );
         match next.await {
@@ -152,7 +155,7 @@ async fn handle_tcp_connection(
                 break;
             }
             Err(_) => {
-                warn!(peer = %addr, "TCP syslog connection timed out after 300s idle");
+                warn!(peer = %addr, idle_timeout_secs, "TCP syslog connection timed out");
                 break;
             }
         }
@@ -162,12 +165,19 @@ async fn handle_tcp_connection(
 
 /// TCP syslog receiver (newline-delimited, octet-counting).
 ///
-/// Caps concurrent connections at 512 via a semaphore; each connection is
-/// subject to a 300 s idle timeout (per read) to evict zombie connections.
-async fn tcp_listener(bind: &str, tx: mpsc::Sender<ParsedLog>, max_size: usize) -> Result<()> {
+/// Caps concurrent connections at `max_connections` via a semaphore; each
+/// connection is subject to an `idle_timeout_secs` idle timeout (per read)
+/// to evict zombie connections.
+async fn tcp_listener(
+    bind: &str,
+    tx: mpsc::Sender<ParsedLog>,
+    max_size: usize,
+    max_connections: usize,
+    idle_timeout_secs: u64,
+) -> Result<()> {
     let listener = TcpListener::bind(bind).await?;
-    info!(bind = %bind, "TCP syslog listener bound");
-    let sem = Arc::new(Semaphore::new(512));
+    info!(bind = %bind, max_connections, idle_timeout_secs, "TCP syslog listener bound");
+    let sem = Arc::new(Semaphore::new(max_connections));
 
     loop {
         match listener.accept().await {
@@ -179,7 +189,7 @@ async fn tcp_listener(bind: &str, tx: mpsc::Sender<ParsedLog>, max_size: usize) 
                 let tx = tx.clone();
                 tokio::spawn(async move {
                     let _permit = permit; // released automatically when task drops
-                    handle_tcp_connection(stream, addr, tx, max_size).await;
+                    handle_tcp_connection(stream, addr, tx, max_size, idle_timeout_secs).await;
                 });
             }
             Err(e) => {
