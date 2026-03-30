@@ -1,4 +1,7 @@
-use figment::{providers::{Env, Format, Serialized, Toml}, Figment};
+use figment::{
+    providers::{Env, Format, Serialized, Toml},
+    Figment,
+};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -41,6 +44,17 @@ pub struct McpConfig {
     pub bind: String,
     /// Server name exposed via MCP
     pub server_name: String,
+    /// Optional bearer token for authenticating MCP requests.
+    ///
+    /// When set, every request to `/mcp` and `/sse` must include:
+    ///   `Authorization: Bearer <token>`
+    /// Requests without a valid token receive HTTP 401.
+    ///
+    /// Leave unset (the default) to disable authentication — suitable for
+    /// deployments where access is already controlled by a reverse proxy (e.g. SWAG).
+    ///
+    /// Configure via env var: `SYSLOG_MCP_MCP__API_TOKEN=your-secret-token-here`
+    pub api_token: Option<String>,
 }
 
 impl Default for Config {
@@ -60,20 +74,19 @@ impl Default for Config {
             mcp: McpConfig {
                 bind: "0.0.0.0:3100".into(),
                 server_name: "syslog-mcp".into(),
+                api_token: None,
             },
         }
     }
 }
 
 fn parse_addr(field: &str, value: &str) -> anyhow::Result<()> {
-    use std::net::ToSocketAddrs;
-    // Use ToSocketAddrs so hostnames like "localhost:3100" are accepted,
-    // matching the trait Tokio's bind methods accept at runtime.
+    // Parse as a concrete SocketAddr (non-blocking, no DNS).
+    // All config addresses are IP:port (e.g. "0.0.0.0:1514") — hostname
+    // resolution is Tokio's job at bind time, not ours at config-load time.
     value
-        .to_socket_addrs()
-        .map_err(|e| anyhow::anyhow!("Invalid {field} address '{value}': {e}"))?
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("Invalid {field} address '{value}': resolved to no addresses"))?;
+        .parse::<std::net::SocketAddr>()
+        .map_err(|e| anyhow::anyhow!("Invalid {field} address '{value}': {e}"))?;
     Ok(())
 }
 
