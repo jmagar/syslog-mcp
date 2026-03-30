@@ -275,13 +275,30 @@ fn looks_like_timestamp(s: &str) -> bool {
 /// Values may contain spaces; the next `WORD=` boundary (a space followed by a word
 /// containing no spaces and then `=`) terminates the current value.
 fn cef_ext_value(extensions: &str, key: &str) -> Option<String> {
-    let needle = format!("{key}=");
-    // Match only at the start of the string or after a space (word boundary)
-    let start = if extensions.starts_with(needle.as_str()) {
-        needle.len()
+    // Match only at the start of the string or after a space (word boundary).
+    // Avoid format! allocations: check starts_with("key=") directly, then scan
+    // for " key=" using manual byte search on the raw string slice.
+    let key_eq_len = key.len() + 1; // length of "key="
+    let start = if extensions.starts_with(key)
+        && extensions.as_bytes().get(key.len()) == Some(&b'=')
+    {
+        key_eq_len
     } else {
-        let spaced = format!(" {needle}");
-        extensions.find(spaced.as_str())? + spaced.len()
+        // Find " key=" without allocating: search for ' ' then check the slice after it
+        let bytes = extensions.as_bytes();
+        let key_bytes = key.as_bytes();
+        let mut found = None;
+        let mut i = 0;
+        while i + key_eq_len < bytes.len() {
+            if bytes[i] == b' ' && bytes[i + 1..].starts_with(key_bytes)
+                && bytes.get(i + 1 + key.len()) == Some(&b'=')
+            {
+                found = Some(i + 1 + key_eq_len);
+                break;
+            }
+            i += 1;
+        }
+        found?
     };
     let rest = &extensions[start..];
 
