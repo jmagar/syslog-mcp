@@ -15,6 +15,8 @@ use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use subtle::ConstantTimeEq;
+
 use crate::config::McpConfig;
 use crate::db::{self, DbPool, SearchParams};
 
@@ -109,7 +111,11 @@ async fn require_auth(
             .get(axum::http::header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok());
         let provided = auth.and_then(|v| v.strip_prefix("Bearer "));
-        if provided != Some(expected.as_str()) {
+        let authorized = match provided {
+            Some(token) => token.as_bytes().ct_eq(expected.as_bytes()).unwrap_u8() == 1,
+            None => false,
+        };
+        if !authorized {
             return (
                 StatusCode::UNAUTHORIZED,
                 Json(json!({

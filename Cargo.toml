@@ -37,6 +37,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # Utils
 anyhow = "1"
+subtle = "2"
 
 # SSE support
 tokio-stream = "0.1"
