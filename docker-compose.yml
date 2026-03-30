@@ -38,4 +38,3 @@ services:
 networks:
   proxy:
     name: ${DOCKER_NETWORK:-syslog_mcp}
-    external: true
