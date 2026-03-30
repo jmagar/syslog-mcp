@@ -23,7 +23,14 @@ async fn main() -> Result<()> {
 
     // Load config
     let config = config::Config::load()?;
-    info!(config = ?config, "Configuration loaded");
+    info!(
+        syslog_bind = %config.syslog.udp_bind,
+        mcp_bind = %config.mcp.bind,
+        db_path = %config.storage.db_path.display(),
+        retention_days = config.storage.retention_days,
+        auth_enabled = config.mcp.api_token.is_some(),
+        "Configuration loaded"
+    );
 
     // Initialize database
     let pool = Arc::new(db::init_pool(&config.storage)?);
