@@ -18,10 +18,12 @@ RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/
 COPY --from=builder /app/target/release/syslog-mcp /usr/local/bin/syslog-mcp
 COPY config.toml /etc/syslog-mcp/config.toml
 
-RUN mkdir -p /data
+RUN groupadd --gid 10001 syslog && useradd --uid 10001 --gid syslog --no-create-home --shell /sbin/nologin syslog && mkdir -p /data && chown syslog:syslog /data
 
 ENV RUST_LOG=info
 ENV SYSLOG_MCP__STORAGE__DB_PATH=/data/syslog.db
+
+USER 10001:10001
 
 EXPOSE 1514/udp 1514/tcp 3100/tcp
 
