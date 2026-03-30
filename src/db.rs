@@ -71,6 +71,33 @@ pub struct StorageMetrics {
     pub free_disk_bytes: Option<u64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageRecovery {
+    pub logical_db_size_bytes: u64,
+    pub free_disk_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageEnforcementOutcome {
+    pub metrics: StorageMetrics,
+    pub recovery: StorageRecovery,
+    pub deleted_rows: usize,
+    pub write_blocked: bool,
+}
+
+pub trait DiskSpaceProbe {
+    fn free_bytes(&self, path: &Path) -> Result<u64>;
+}
+
+struct SystemDiskSpaceProbe;
+
+impl DiskSpaceProbe for SystemDiskSpaceProbe {
+    fn free_bytes(&self, path: &Path) -> Result<u64> {
+        let stats = rustix::fs::statvfs(path)?;
+        Ok(stats.f_bavail.saturating_mul(stats.f_bsize))
+    }
+}
+
 /// A parsed and stored log entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogEntry {
@@ -215,6 +242,14 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
 }
 
 pub fn get_storage_metrics(pool: &DbPool, config: &StorageConfig) -> Result<StorageMetrics> {
+    get_storage_metrics_with_probe(pool, config, &SystemDiskSpaceProbe)
+}
+
+pub fn get_storage_metrics_with_probe(
+    pool: &DbPool,
+    config: &StorageConfig,
+    probe: &impl DiskSpaceProbe,
+) -> Result<StorageMetrics> {
     let conn = pool.get()?;
     let page_count: i64 = conn.query_row("PRAGMA page_count", [], |r| r.get(0))?;
     let freelist_count: i64 = conn.query_row("PRAGMA freelist_count", [], |r| r.get(0))?;
@@ -223,12 +258,66 @@ pub fn get_storage_metrics(pool: &DbPool, config: &StorageConfig) -> Result<Stor
 
     let logical_db_size_bytes = ((page_count - freelist_count).max(0) * page_size).max(0) as u64;
     let physical_db_size_bytes = physical_db_size_bytes(&config.db_path)?;
-    let free_disk_bytes = free_disk_bytes(config.db_path.parent().unwrap_or_else(|| Path::new(".")));
+    let free_disk_bytes = probe
+        .free_bytes(config.db_path.parent().unwrap_or_else(|| Path::new(".")))
+        .ok();
 
     Ok(StorageMetrics {
         logical_db_size_bytes,
         physical_db_size_bytes,
         free_disk_bytes,
+    })
+}
+
+pub fn enforce_storage_budget(
+    pool: &DbPool,
+    config: &StorageConfig,
+) -> Result<StorageEnforcementOutcome> {
+    enforce_storage_budget_with_probe(pool, config, &SystemDiskSpaceProbe)
+}
+
+pub fn enforce_storage_budget_with_probe(
+    pool: &DbPool,
+    config: &StorageConfig,
+    probe: &impl DiskSpaceProbe,
+) -> Result<StorageEnforcementOutcome> {
+    let recovery = recovery_targets(config);
+    let mut deleted_rows = 0usize;
+
+    let mut metrics = get_storage_metrics_with_probe(pool, config, probe)?;
+    if !storage_limits_enabled(config) {
+        return Ok(StorageEnforcementOutcome {
+            metrics,
+            recovery,
+            deleted_rows,
+            write_blocked: false,
+        });
+    }
+
+    while exceeds_trigger(&metrics, config) || !within_recovery(&metrics, &recovery, config) {
+        let deleted = delete_oldest_logs_chunk(pool, 1)?;
+        if deleted.deleted_rows == 0 {
+            metrics = get_storage_metrics_with_probe(pool, config, probe)?;
+            let write_blocked = exceeds_trigger(&metrics, config);
+            return Ok(StorageEnforcementOutcome {
+                metrics,
+                recovery,
+                deleted_rows,
+                write_blocked,
+            });
+        }
+
+        deleted_rows += deleted.deleted_rows;
+        reconcile_hosts(pool, &deleted.hostnames)?;
+        checkpoint_wal_and_incremental_vacuum(pool)?;
+        metrics = get_storage_metrics_with_probe(pool, config, probe)?;
+    }
+
+    Ok(StorageEnforcementOutcome {
+        metrics,
+        recovery,
+        deleted_rows,
+        write_blocked: false,
     })
 }
 
@@ -607,6 +696,130 @@ fn append_filters(
     }
 }
 
+#[derive(Debug)]
+struct DeletedChunk {
+    deleted_rows: usize,
+    hostnames: Vec<String>,
+}
+
+fn delete_oldest_logs_chunk(pool: &DbPool, chunk_size: usize) -> Result<DeletedChunk> {
+    let conn = pool.get()?;
+    let mut stmt = conn.prepare(
+        "SELECT id, hostname FROM logs ORDER BY received_at ASC, id ASC LIMIT ?1",
+    )?;
+    let selected: Vec<(i64, String)> = stmt
+        .query_map([chunk_size as i64], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(stmt);
+
+    if selected.is_empty() {
+        return Ok(DeletedChunk {
+            deleted_rows: 0,
+            hostnames: Vec::new(),
+        });
+    }
+
+    let mut hostnames: Vec<String> = selected.iter().map(|(_, host)| host.clone()).collect();
+    hostnames.sort();
+    hostnames.dedup();
+
+    let ids: Vec<i64> = selected.iter().map(|(id, _)| *id).collect();
+    let placeholders = std::iter::repeat_n("?", ids.len()).collect::<Vec<_>>().join(", ");
+    let sql = format!("DELETE FROM logs WHERE id IN ({placeholders})");
+    let deleted_rows = conn.execute(&sql, rusqlite::params_from_iter(ids.iter()))?;
+
+    Ok(DeletedChunk {
+        deleted_rows,
+        hostnames,
+    })
+}
+
+fn reconcile_hosts(pool: &DbPool, hostnames: &[String]) -> Result<()> {
+    if hostnames.is_empty() {
+        return Ok(());
+    }
+
+    let mut conn = pool.get()?;
+    let tx = conn.transaction()?;
+    for hostname in hostnames {
+        let count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM logs WHERE hostname = ?1",
+            [hostname],
+            |row| row.get(0),
+        )?;
+
+        if count == 0 {
+            tx.execute("DELETE FROM hosts WHERE hostname = ?1", [hostname])?;
+            continue;
+        }
+
+        let first_seen: String = tx.query_row(
+            "SELECT MIN(received_at) FROM logs WHERE hostname = ?1",
+            [hostname],
+            |row| row.get(0),
+        )?;
+        let last_seen: String = tx.query_row(
+            "SELECT MAX(received_at) FROM logs WHERE hostname = ?1",
+            [hostname],
+            |row| row.get(0),
+        )?;
+        tx.execute(
+            "UPDATE hosts
+             SET first_seen = ?2, last_seen = ?3, log_count = ?4
+             WHERE hostname = ?1",
+            params![hostname, first_seen, last_seen, count],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+fn checkpoint_wal_and_incremental_vacuum(pool: &DbPool) -> Result<()> {
+    let conn = pool.get()?;
+    if let Err(e) = conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE);") {
+        tracing::warn!(error = %e, "WAL checkpoint skipped (non-fatal)");
+    }
+    if let Err(e) = conn.execute_batch("PRAGMA incremental_vacuum(1000);") {
+        tracing::warn!(error = %e, "incremental vacuum skipped (non-fatal)");
+    }
+    Ok(())
+}
+
+fn storage_limits_enabled(config: &StorageConfig) -> bool {
+    config.max_db_size_mb > 0 || config.min_free_disk_mb > 0
+}
+
+fn recovery_targets(config: &StorageConfig) -> StorageRecovery {
+    StorageRecovery {
+        logical_db_size_bytes: mb_to_bytes(config.recovery_db_size_mb),
+        free_disk_bytes: (config.min_free_disk_mb > 0)
+            .then(|| mb_to_bytes(config.recovery_free_disk_mb)),
+    }
+}
+
+fn exceeds_trigger(metrics: &StorageMetrics, config: &StorageConfig) -> bool {
+    (config.max_db_size_mb > 0
+        && metrics.logical_db_size_bytes > mb_to_bytes(config.max_db_size_mb))
+        || (config.min_free_disk_mb > 0
+            && metrics.free_disk_bytes.unwrap_or(0) < mb_to_bytes(config.min_free_disk_mb))
+}
+
+fn within_recovery(
+    metrics: &StorageMetrics,
+    recovery: &StorageRecovery,
+    config: &StorageConfig,
+) -> bool {
+    let db_ok = config.max_db_size_mb == 0
+        || metrics.logical_db_size_bytes <= recovery.logical_db_size_bytes;
+    let disk_ok = config.min_free_disk_mb == 0
+        || metrics.free_disk_bytes.unwrap_or(0) >= recovery.free_disk_bytes.unwrap_or(0);
+    db_ok && disk_ok
+}
+
+fn mb_to_bytes(mb: u64) -> u64 {
+    mb.saturating_mul(1_048_576)
+}
+
 fn physical_db_size_bytes(db_path: &Path) -> Result<u64> {
     let mut total = file_size_if_exists(db_path)?;
     total += file_size_if_exists(&db_path.with_extension(format!(
@@ -628,10 +841,6 @@ fn file_size_if_exists(path: &Path) -> Result<u64> {
     }
 }
 
-fn free_disk_bytes(path: &Path) -> Option<u64> {
-    let stats = rustix::fs::statvfs(path).ok()?;
-    Some(stats.f_bavail.saturating_mul(stats.f_bsize))
-}
 
 fn map_row(row: &rusqlite::Row) -> rusqlite::Result<LogEntry> {
     Ok(LogEntry {
@@ -688,6 +897,15 @@ mod tests {
             raw: msg.to_string(),
             source_ip: "127.0.0.1:514".to_string(),
         }
+    }
+
+    fn update_received_at(pool: &DbPool, message: &str, received_at: &str) {
+        let conn = pool.get().unwrap();
+        conn.execute(
+            "UPDATE logs SET received_at = ?1 WHERE message = ?2",
+            params![received_at, message],
+        )
+        .unwrap();
     }
 
     #[test]
@@ -891,6 +1109,127 @@ mod tests {
         // oldest_log and newest_log should be None on empty DB
         assert!(stats.oldest_log.is_none());
         assert!(stats.newest_log.is_none());
+    }
+
+    #[test]
+    fn test_enforce_storage_budget_deletes_by_received_at_until_recovery_target() {
+        let (pool, dir) = test_pool();
+        let large_old = "oldest-".repeat(350_000);
+        let large_new = "newest-".repeat(30_000);
+        let entries = vec![
+            make_entry("2026-01-01T00:00:01Z", "deleted-host", "info", &large_old),
+            make_entry("2026-01-01T00:00:02Z", "surviving-host", "info", &large_new),
+        ];
+        insert_logs_batch(&pool, &entries).unwrap();
+        update_received_at(&pool, &large_old, "2026-01-01T00:00:00Z");
+        update_received_at(&pool, &large_new, "2026-01-02T00:00:00Z");
+
+        let mut config = test_storage_config(dir.path().join("test.db"));
+        config.max_db_size_mb = 3;
+        config.recovery_db_size_mb = 2;
+
+        let outcome = enforce_storage_budget(&pool, &config).unwrap();
+        assert!(outcome.deleted_rows > 0);
+        assert!(outcome.metrics.logical_db_size_bytes <= outcome.recovery.logical_db_size_bytes);
+
+        let rows = tail_logs(&pool, None, None, 10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].message, large_new);
+    }
+
+    #[test]
+    fn test_enforce_storage_budget_reconciles_hosts_after_deletes() {
+        let (pool, dir) = test_pool();
+        let large_oldest = "delete-me-1-".repeat(150_000);
+        let large_older = "delete-me-2-".repeat(150_000);
+        let large_keep = "keep-me-".repeat(30_000);
+        let entries = vec![
+            make_entry("2026-01-01T00:00:01Z", "deleted-host", "info", &large_oldest),
+            make_entry("2026-01-01T00:00:02Z", "deleted-host", "info", &large_older),
+            make_entry("2026-01-01T00:00:03Z", "surviving-host", "info", &large_keep),
+        ];
+        insert_logs_batch(&pool, &entries).unwrap();
+        update_received_at(&pool, &large_oldest, "2026-01-01T00:00:00Z");
+        update_received_at(&pool, &large_older, "2026-01-01T00:00:01Z");
+        update_received_at(&pool, &large_keep, "2026-01-02T00:00:00Z");
+
+        let mut config = test_storage_config(dir.path().join("test.db"));
+        config.max_db_size_mb = 3;
+        config.recovery_db_size_mb = 2;
+
+        enforce_storage_budget(&pool, &config).unwrap();
+
+        let hosts = list_hosts(&pool).unwrap();
+        assert!(hosts.iter().all(|host| host.hostname != "deleted-host"));
+        let surviving = hosts.iter().find(|host| host.hostname == "surviving-host").unwrap();
+        assert_eq!(surviving.log_count, 1);
+    }
+
+    #[derive(Clone)]
+    struct FakeDiskSpaceProbe {
+        values: std::sync::Arc<std::sync::Mutex<Vec<u64>>>,
+    }
+
+    impl FakeDiskSpaceProbe {
+        fn new(values: Vec<u64>) -> Self {
+            Self {
+                values: std::sync::Arc::new(std::sync::Mutex::new(values)),
+            }
+        }
+    }
+
+    impl DiskSpaceProbe for FakeDiskSpaceProbe {
+        fn free_bytes(&self, _path: &Path) -> Result<u64> {
+            let mut values = self.values.lock().unwrap();
+            let value = if values.len() > 1 {
+                values.remove(0)
+            } else {
+                *values.first().unwrap_or(&0)
+            };
+            Ok(value)
+        }
+    }
+
+    #[test]
+    fn test_enforce_storage_budget_recovers_when_free_disk_threshold_is_breached() {
+        let (pool, dir) = test_pool();
+        let entries = vec![
+            make_entry("2026-01-01T00:00:01Z", "deleted-host", "info", "older"),
+            make_entry("2026-01-01T00:00:02Z", "surviving-host", "info", "newer"),
+        ];
+        insert_logs_batch(&pool, &entries).unwrap();
+        update_received_at(&pool, "older", "2026-01-01T00:00:00Z");
+        update_received_at(&pool, "newer", "2026-01-02T00:00:00Z");
+
+        let mut config = test_storage_config(dir.path().join("test.db"));
+        config.max_db_size_mb = 0;
+        config.recovery_db_size_mb = 0;
+        config.min_free_disk_mb = 512;
+        config.recovery_free_disk_mb = 768;
+
+        let probe = FakeDiskSpaceProbe::new(vec![
+            64 * 1_048_576,
+            900 * 1_048_576,
+        ]);
+        let outcome = enforce_storage_budget_with_probe(&pool, &config, &probe).unwrap();
+
+        assert!(outcome.deleted_rows > 0);
+        assert!(outcome.metrics.free_disk_bytes.unwrap() >= outcome.recovery.free_disk_bytes.unwrap());
+    }
+
+    #[test]
+    fn test_enforce_storage_budget_is_noop_when_limits_disabled() {
+        let (pool, dir) = test_pool();
+        let config = test_storage_config(dir.path().join("test.db"));
+        let mut disabled = config.clone();
+        disabled.max_db_size_mb = 0;
+        disabled.recovery_db_size_mb = 0;
+        disabled.min_free_disk_mb = 0;
+        disabled.recovery_free_disk_mb = 0;
+
+        let outcome = enforce_storage_budget(&pool, &disabled).unwrap();
+        assert_eq!(outcome.deleted_rows, 0);
+        assert!(!outcome.write_blocked);
     }
 
     #[test]
