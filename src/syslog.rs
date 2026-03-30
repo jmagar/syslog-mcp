@@ -1,7 +1,7 @@
 use anyhow::Result;
 use chrono::Utc;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::{mpsc, Semaphore};
 use tracing::{debug, error, info, warn};
@@ -111,7 +111,12 @@ async fn handle_tcp_connection(
     max_size: usize,
 ) {
     info!(peer = %addr, "TCP syslog connection accepted");
-    let reader = BufReader::new(stream);
+    // Limit total bytes readable from this connection to max_size to prevent OOM
+    // from a single connection sending an arbitrarily large line with no newline.
+    // Homelab syslog devices typically send one message per TCP connection (or
+    // reconnect per message), so a per-connection budget of max_size bytes is safe.
+    let limited = stream.take(max_size as u64);
+    let reader = BufReader::new(limited);
     let mut lines = reader.lines();
     let mut backpressure = false;
 
@@ -119,15 +124,6 @@ async fn handle_tcp_connection(
         match lines.next_line().await {
             Ok(Some(line)) => {
                 if line.is_empty() {
-                    continue;
-                }
-                if line.len() > max_size {
-                    warn!(
-                        peer = %addr,
-                        len = line.len(),
-                        max = max_size,
-                        "TCP syslog line exceeds max_message_size — dropped"
-                    );
                     continue;
                 }
                 // Log backpressure only on state transitions.
