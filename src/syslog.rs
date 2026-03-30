@@ -16,22 +16,9 @@ const FACILITIES: &[&str] = &[
     "local5", "local6", "local7",
 ];
 
-/// Parsed syslog message ready for storage
-#[derive(Debug)]
-struct ParsedLog {
-    timestamp: String,
-    hostname: String,
-    facility: Option<String>,
-    severity: String,
-    app_name: Option<String>,
-    process_id: Option<String>,
-    message: String,
-    raw: String,
-}
-
 /// Start syslog listeners (UDP + TCP) and the write batcher
 pub async fn start(config: SyslogConfig, pool: Arc<DbPool>) -> Result<()> {
-    let (tx, rx) = mpsc::channel::<ParsedLog>(10_000);
+    let (tx, rx) = mpsc::channel::<db::LogBatchEntry>(10_000);
 
     // Spawn the batched writer
     let writer_pool = pool.clone();
@@ -70,7 +57,7 @@ pub async fn start(config: SyslogConfig, pool: Arc<DbPool>) -> Result<()> {
 }
 
 /// UDP syslog receiver
-async fn udp_listener(bind: &str, max_size: usize, tx: mpsc::Sender<ParsedLog>) -> Result<()> {
+async fn udp_listener(bind: &str, max_size: usize, tx: mpsc::Sender<db::LogBatchEntry>) -> Result<()> {
     let socket = UdpSocket::bind(bind).await?;
     info!(bind = %bind, "UDP syslog listener bound");
 
@@ -109,7 +96,7 @@ async fn udp_listener(bind: &str, max_size: usize, tx: mpsc::Sender<ParsedLog>) 
 async fn handle_tcp_connection(
     stream: tokio::net::TcpStream,
     addr: std::net::SocketAddr,
-    tx: mpsc::Sender<ParsedLog>,
+    tx: mpsc::Sender<db::LogBatchEntry>,
     max_size: usize,
     idle_timeout_secs: u64,
 ) {
@@ -170,7 +157,7 @@ async fn handle_tcp_connection(
 /// to evict zombie connections.
 async fn tcp_listener(
     bind: &str,
-    tx: mpsc::Sender<ParsedLog>,
+    tx: mpsc::Sender<db::LogBatchEntry>,
     max_size: usize,
     max_connections: usize,
     idle_timeout_secs: u64,
@@ -202,7 +189,7 @@ async fn tcp_listener(
 }
 
 /// Batch writer — collects messages and writes in batches for throughput
-async fn batch_writer(mut rx: mpsc::Receiver<ParsedLog>, pool: Arc<DbPool>) {
+async fn batch_writer(mut rx: mpsc::Receiver<db::LogBatchEntry>, pool: Arc<DbPool>) {
     let batch_size = 100;
     let flush_interval = tokio::time::Duration::from_millis(500);
 
@@ -217,16 +204,7 @@ async fn batch_writer(mut rx: mpsc::Receiver<ParsedLog>, pool: Arc<DbPool>) {
                 msg = rx.recv() => {
                     match msg {
                         Some(parsed) => {
-                            batch.push((
-                                parsed.timestamp,
-                                parsed.hostname,
-                                parsed.facility,
-                                parsed.severity,
-                                parsed.app_name,
-                                parsed.process_id,
-                                parsed.message,
-                                parsed.raw,
-                            ));
+                            batch.push(parsed);
                             if batch.len() >= batch_size {
                                 break;
                             }
@@ -370,7 +348,7 @@ fn extract_cef_fields(text: &str) -> (Option<String>, Option<String>, Option<Str
 ///
 /// Handles UniFi CEF messages where the hostname field contains a timestamp
 /// and the real device name is embedded in the CEF extension `UNIFIdeviceName`.
-fn parse_syslog(raw: &str) -> ParsedLog {
+fn parse_syslog(raw: &str) -> db::LogBatchEntry {
     let msg = syslog_loose::parse_message(raw, syslog_loose::Variant::Either);
 
     let severity_num = msg.severity.map(|s| s as u8).unwrap_or(6); // default info
@@ -424,7 +402,7 @@ fn parse_syslog(raw: &str) -> ParsedLog {
             (hostname, raw_app_name, raw_message)
         };
 
-    ParsedLog {
+    db::LogBatchEntry {
         timestamp,
         hostname,
         facility,
@@ -658,7 +636,7 @@ mod tests {
         assert!(parsed.hostname == "unknown" || !parsed.hostname.is_empty());
     }
 
-    /// Empty string input must not panic and must return a valid ParsedLog.
+    /// Empty string input must not panic and must return a valid db::LogBatchEntry.
     #[test]
     fn test_parse_syslog_empty_string_no_panic() {
         let parsed = parse_syslog("");
@@ -671,7 +649,7 @@ mod tests {
     }
 
     /// Malformed priority `<999>` is out of the 0-191 valid PRI range.
-    /// parse_syslog must not panic and must still return a usable ParsedLog.
+    /// parse_syslog must not panic and must still return a usable db::LogBatchEntry.
     #[test]
     fn test_parse_syslog_malformed_priority_no_panic() {
         let raw = "<999>Oct 11 22:14:15 myhost myapp: overflow priority";

@@ -9,17 +9,21 @@ use crate::config::StorageConfig;
 
 pub type DbPool = Pool<SqliteConnectionManager>;
 
-/// Tuple form of a log entry for batch insertion
-pub type LogBatchEntry = (
-    String,         // timestamp
-    String,         // hostname
-    Option<String>, // facility
-    String,         // severity
-    Option<String>, // app_name
-    Option<String>, // process_id
-    String,         // message
-    String,         // raw
-);
+/// Named struct for a log entry used in batch insertion and the syslog parse pipeline.
+///
+/// Replaces the former 8-tuple type alias; named fields prevent silent data corruption
+/// from positional swaps between structurally identical `String`/`Option<String>` fields.
+#[derive(Debug, Clone)]
+pub struct LogBatchEntry {
+    pub timestamp: String,
+    pub hostname: String,
+    pub facility: Option<String>,
+    pub severity: String,
+    pub app_name: Option<String>,
+    pub process_id: Option<String>,
+    pub message: String,
+    pub raw: String,
+}
 
 /// Error/warning summary entry (one row per hostname+severity)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -172,15 +176,24 @@ pub fn insert_logs_batch(pool: &DbPool, entries: &[LogBatchEntry]) -> Result<usi
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )?;
 
-        for (ts, host, facility, severity, app, pid, msg, raw) in entries {
-            stmt.execute(params![ts, host, facility, severity, app, pid, msg, raw])?;
+        for entry in entries {
+            stmt.execute(params![
+                entry.timestamp,
+                entry.hostname,
+                entry.facility,
+                entry.severity,
+                entry.app_name,
+                entry.process_id,
+                entry.message,
+                entry.raw
+            ])?;
         }
 
         // Batch upsert hosts — group by hostname to avoid one upsert per log entry
         let mut host_counts: std::collections::HashMap<&str, i64> =
             std::collections::HashMap::new();
         for entry in entries {
-            *host_counts.entry(entry.1.as_str()).or_insert(0) += 1;
+            *host_counts.entry(entry.hostname.as_str()).or_insert(0) += 1;
         }
         let mut host_stmt = tx.prepare_cached(
             "INSERT INTO hosts (hostname, log_count)
@@ -534,16 +547,16 @@ mod tests {
     }
 
     fn make_entry(ts: &str, host: &str, severity: &str, msg: &str) -> LogBatchEntry {
-        (
-            ts.to_string(),
-            host.to_string(),
-            None,
-            severity.to_string(),
-            None,
-            None,
-            msg.to_string(),
-            msg.to_string(),
-        )
+        LogBatchEntry {
+            timestamp: ts.to_string(),
+            hostname: host.to_string(),
+            facility: None,
+            severity: severity.to_string(),
+            app_name: None,
+            process_id: None,
+            message: msg.to_string(),
+            raw: msg.to_string(),
+        }
     }
 
     #[test]
