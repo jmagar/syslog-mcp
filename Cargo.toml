@@ -38,6 +38,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Utils
 anyhow = "1"
 subtle = "2"
+rustix = { version = "0.38", features = ["fs"] }
 
 # SSE support
 tokio-stream = "0.1"

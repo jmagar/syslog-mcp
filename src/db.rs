@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::Path;
 
 use anyhow::Result;
 use chrono::Utc;
@@ -63,6 +64,13 @@ pub struct DbStats {
     pub db_size_mb: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageMetrics {
+    pub logical_db_size_bytes: u64,
+    pub physical_db_size_bytes: u64,
+    pub free_disk_bytes: Option<u64>,
+}
+
 /// A parsed and stored log entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogEntry {
@@ -114,6 +122,15 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
 
     // Initialize schema
     let conn = pool.get()?;
+
+    let auto_vacuum_mode: i64 = conn.query_row("PRAGMA auto_vacuum", [], |r| r.get(0))?;
+    if auto_vacuum_mode != 2 {
+        conn.execute_batch("PRAGMA auto_vacuum=INCREMENTAL;")?;
+        let page_count: i64 = conn.query_row("PRAGMA page_count", [], |r| r.get(0))?;
+        if page_count > 0 {
+            conn.execute_batch("VACUUM;")?;
+        }
+    }
 
     if config.wal_mode {
         conn.execute_batch("PRAGMA journal_mode=WAL;")?;
@@ -195,6 +212,24 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
 
     tracing::info!(path = %config.db_path.display(), "Database initialized");
     Ok(pool)
+}
+
+pub fn get_storage_metrics(pool: &DbPool, config: &StorageConfig) -> Result<StorageMetrics> {
+    let conn = pool.get()?;
+    let page_count: i64 = conn.query_row("PRAGMA page_count", [], |r| r.get(0))?;
+    let freelist_count: i64 = conn.query_row("PRAGMA freelist_count", [], |r| r.get(0))?;
+    let page_size: i64 = conn.query_row("PRAGMA page_size", [], |r| r.get(0))?;
+    drop(conn);
+
+    let logical_db_size_bytes = ((page_count - freelist_count).max(0) * page_size).max(0) as u64;
+    let physical_db_size_bytes = physical_db_size_bytes(&config.db_path)?;
+    let free_disk_bytes = free_disk_bytes(config.db_path.parent().unwrap_or_else(|| Path::new(".")));
+
+    Ok(StorageMetrics {
+        logical_db_size_bytes,
+        physical_db_size_bytes,
+        free_disk_bytes,
+    })
 }
 
 /// Batch insert for higher throughput
@@ -572,6 +607,32 @@ fn append_filters(
     }
 }
 
+fn physical_db_size_bytes(db_path: &Path) -> Result<u64> {
+    let mut total = file_size_if_exists(db_path)?;
+    total += file_size_if_exists(&db_path.with_extension(format!(
+        "{}-wal",
+        db_path.extension().and_then(|ext| ext.to_str()).unwrap_or_default()
+    )))?;
+    total += file_size_if_exists(&db_path.with_extension(format!(
+        "{}-shm",
+        db_path.extension().and_then(|ext| ext.to_str()).unwrap_or_default()
+    )))?;
+    Ok(total)
+}
+
+fn file_size_if_exists(path: &Path) -> Result<u64> {
+    match std::fs::metadata(path) {
+        Ok(metadata) => Ok(metadata.len()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn free_disk_bytes(path: &Path) -> Option<u64> {
+    let stats = rustix::fs::statvfs(path).ok()?;
+    Some(stats.f_bavail.saturating_mul(stats.f_bsize))
+}
+
 fn map_row(row: &rusqlite::Row) -> rusqlite::Result<LogEntry> {
     Ok(LogEntry {
         id: row.get(0)?,
@@ -590,17 +651,27 @@ fn map_row(row: &rusqlite::Row) -> rusqlite::Result<LogEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::StorageConfig;
+
+    fn test_storage_config(db_path: std::path::PathBuf) -> StorageConfig {
+        StorageConfig {
+            db_path,
+            pool_size: 1,
+            retention_days: 90,
+            wal_mode: false, // WAL not needed for tests
+            max_db_size_mb: 1024,
+            recovery_db_size_mb: 900,
+            min_free_disk_mb: 512,
+            recovery_free_disk_mb: 768,
+            cleanup_interval_secs: 60,
+        }
+    }
 
     /// Create an isolated test pool using a temp file (not :memory: — FTS5 needs file)
     fn test_pool() -> (DbPool, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db");
-        let config = StorageConfig {
-            db_path,
-            pool_size: 1,
-            retention_days: 90,
-            wal_mode: false, // WAL not needed for tests
-        };
+        let config = test_storage_config(db_path);
         let pool = init_pool(&config).unwrap();
         (pool, dir) // keep dir alive for test duration
     }
@@ -632,6 +703,50 @@ mod tests {
 
         let rows = tail_logs(&pool, None, None, 10).unwrap();
         assert_eq!(rows.len(), 3);
+    }
+
+    #[test]
+    fn test_storage_metrics_report_logical_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_storage_config(dir.path().join("metrics.db"));
+        let pool = init_pool(&config).unwrap();
+        insert_logs_batch(&pool, &[make_entry("2026-01-01T00:00:01Z", "host-a", "info", "hello")])
+            .unwrap();
+
+        let metrics = get_storage_metrics(&pool, &config).unwrap();
+        assert!(metrics.logical_db_size_bytes > 0);
+        assert!(metrics.physical_db_size_bytes >= metrics.logical_db_size_bytes);
+        assert!(metrics.free_disk_bytes.is_some());
+    }
+
+    #[test]
+    fn test_init_pool_enables_incremental_auto_vacuum() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_storage_config(dir.path().join("autovac.db"));
+        let pool = init_pool(&config).unwrap();
+        let conn = pool.get().unwrap();
+        let mode: i64 = conn.query_row("PRAGMA auto_vacuum", [], |r| r.get(0)).unwrap();
+        assert_eq!(mode, 2);
+    }
+
+    #[test]
+    fn test_init_pool_migrates_existing_db_to_incremental_auto_vacuum() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("legacy.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "PRAGMA auto_vacuum=NONE;
+             VACUUM;
+             CREATE TABLE legacy_probe(id INTEGER PRIMARY KEY);",
+        )
+        .unwrap();
+        drop(conn);
+
+        let config = test_storage_config(db_path);
+        let pool = init_pool(&config).unwrap();
+        let conn = pool.get().unwrap();
+        let mode: i64 = conn.query_row("PRAGMA auto_vacuum", [], |r| r.get(0)).unwrap();
+        assert_eq!(mode, 2);
     }
 
     #[test]
