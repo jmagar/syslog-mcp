@@ -263,6 +263,19 @@ async fn flush_batch(pool: &Arc<DbPool>, batch: &mut Vec<db::LogBatchEntry>) {
     }
 }
 
+/// Truncate a string to at most `max` bytes, respecting UTF-8 char boundaries.
+fn truncate(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    // Walk back from `max` to find a valid char boundary.
+    let mut end = max;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// Returns true if `s` looks like an ISO 8601 timestamp (YYYY-MM-DDTHH:…).
 /// UniFi OS incorrectly puts a timestamp in the syslog hostname field.
 fn looks_like_timestamp(s: &str) -> bool {
@@ -418,9 +431,9 @@ fn parse_syslog(raw: &str, source_ip: String) -> db::LogBatchEntry {
                 warn!(msg = preview, "CEF heuristic triggered but all fields are None — malformed CEF body, using raw fallback");
             }
             (
-                cef.hostname.unwrap_or_else(|| raw_hostname.clone()),
-                cef.app_name.or(raw_app_name),
-                cef.message.unwrap_or(raw_message),
+                truncate(&cef.hostname.unwrap_or_else(|| raw_hostname.clone()), 255).to_string(),
+                cef.app_name.or(raw_app_name).map(|s| truncate(&s, 128).to_string()),
+                truncate(&cef.message.unwrap_or(raw_message), 8192).to_string(),
             )
         } else {
             let hostname = if raw_hostname.is_empty() {
