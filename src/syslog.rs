@@ -3,7 +3,7 @@ use chrono::Utc;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::{TcpListener, UdpSocket};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Semaphore};
 use tracing::{debug, error, info, warn};
 
 use crate::config::SyslogConfig;
@@ -103,48 +103,74 @@ async fn udp_listener(bind: &str, max_size: usize, tx: mpsc::Sender<ParsedLog>) 
     Ok(())
 }
 
-/// TCP syslog receiver (newline-delimited, octet-counting)
+/// Per-connection handler for TCP syslog streams.
+async fn handle_tcp_connection(
+    stream: tokio::net::TcpStream,
+    addr: std::net::SocketAddr,
+    tx: mpsc::Sender<ParsedLog>,
+) {
+    info!(peer = %addr, "TCP syslog connection accepted");
+    let reader = BufReader::new(stream);
+    let mut lines = reader.lines();
+    let mut backpressure = false;
+
+    loop {
+        match lines.next_line().await {
+            Ok(Some(line)) => {
+                if line.is_empty() {
+                    continue;
+                }
+                // Log backpressure only on state transitions.
+                let at_capacity = tx.capacity() == 0;
+                if at_capacity && !backpressure {
+                    warn!(peer = %addr, "syslog write channel full — backpressure applied");
+                    backpressure = true;
+                } else if !at_capacity && backpressure {
+                    info!(peer = %addr, "syslog write channel cleared — backpressure lifted");
+                    backpressure = false;
+                }
+                if tx.send(parse_syslog(&line)).await.is_err() {
+                    break;
+                }
+            }
+            Ok(None) => break, // clean EOF
+            Err(e) => {
+                error!(peer = %addr, error = %e, "TCP syslog read error");
+                break;
+            }
+        }
+    }
+    info!(peer = %addr, "TCP syslog connection closed");
+}
+
+/// TCP syslog receiver (newline-delimited, octet-counting).
+///
+/// Caps concurrent connections at 512 via a semaphore; each connection is
+/// subject to a 300 s idle/total timeout to evict zombie connections.
 async fn tcp_listener(bind: &str, tx: mpsc::Sender<ParsedLog>) -> Result<()> {
     let listener = TcpListener::bind(bind).await?;
     info!(bind = %bind, "TCP syslog listener bound");
+    let sem = Arc::new(Semaphore::new(512));
 
     loop {
         match listener.accept().await {
             Ok((stream, addr)) => {
+                let permit = match Arc::clone(&sem).acquire_owned().await {
+                    Ok(p) => p,
+                    Err(_) => break, // semaphore closed — shouldn't happen
+                };
                 let tx = tx.clone();
                 tokio::spawn(async move {
-                    info!(peer = %addr, "TCP syslog connection accepted");
-                    let reader = BufReader::new(stream);
-                    let mut lines = reader.lines();
-                    let mut backpressure = false;
-
-                    loop {
-                        match lines.next_line().await {
-                            Ok(Some(line)) => {
-                                if line.is_empty() {
-                                    continue;
-                                }
-                                // Log backpressure only on state transitions.
-                                let at_capacity = tx.capacity() == 0;
-                                if at_capacity && !backpressure {
-                                    warn!(peer = %addr, "syslog write channel full — backpressure applied");
-                                    backpressure = true;
-                                } else if !at_capacity && backpressure {
-                                    info!(peer = %addr, "syslog write channel cleared — backpressure lifted");
-                                    backpressure = false;
-                                }
-                                if tx.send(parse_syslog(&line)).await.is_err() {
-                                    break;
-                                }
-                            }
-                            Ok(None) => break, // clean EOF
-                            Err(e) => {
-                                error!(peer = %addr, error = %e, "TCP syslog read error");
-                                break;
-                            }
-                        }
+                    let _permit = permit; // released automatically when task drops
+                    match tokio::time::timeout(
+                        tokio::time::Duration::from_secs(300),
+                        handle_tcp_connection(stream, addr, tx),
+                    )
+                    .await
+                    {
+                        Ok(()) => {}
+                        Err(_) => warn!(peer = %addr, "TCP syslog connection timed out after 300s"),
                     }
-                    info!(peer = %addr, "TCP syslog connection closed");
                 });
             }
             Err(e) => {
@@ -153,6 +179,7 @@ async fn tcp_listener(bind: &str, tx: mpsc::Sender<ParsedLog>) -> Result<()> {
             }
         }
     }
+    Ok(())
 }
 
 /// Batch writer — collects messages and writes in batches for throughput
