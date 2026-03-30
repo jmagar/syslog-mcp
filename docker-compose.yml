@@ -19,6 +19,13 @@ services:
     networks:
       - proxy
 
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3100/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
     labels:
       - "swag=syslog-mcp"  # For your SWAG reverse proxy
 
