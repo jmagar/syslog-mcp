@@ -85,12 +85,20 @@ impl JsonRpcResponse {
 
 /// Build the MCP router
 pub fn router(state: AppState) -> Router {
-    Router::new()
+    // Authenticated routes: /mcp and /sse require Bearer token when api_token is set
+    let authenticated = Router::new()
         .route("/mcp", post(handle_mcp_post))
         .route("/sse", get(handle_sse))
-        .route("/health", get(health))
+        .layer(middleware::from_fn_with_state(state.clone(), require_auth));
+
+    // Unauthenticated routes: /health must be accessible without credentials
+    // so Docker HEALTHCHECK, docker-compose health probes, and SWAG can reach it
+    let unauthenticated = Router::new().route("/health", get(health));
+
+    Router::new()
+        .merge(authenticated)
+        .merge(unauthenticated)
         .fallback(|| async { (StatusCode::NOT_FOUND, Json(json!({"error": "not_found"}))) })
-        .layer(middleware::from_fn_with_state(state.clone(), require_auth))
         .with_state(state)
 }
 
