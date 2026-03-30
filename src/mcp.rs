@@ -3,6 +3,7 @@ use std::sync::Arc;
 use axum::{
     extract::State,
     http::StatusCode,
+    middleware,
     response::{
         sse::{Event, Sse},
         IntoResponse, Json,
@@ -27,7 +28,10 @@ pub struct AppState {
 /// MCP JSON-RPC request
 #[derive(Debug, Deserialize)]
 struct JsonRpcRequest {
-    #[expect(dead_code, reason = "required by JSON-RPC 2.0 spec; serde needs the field for deserialization")]
+    #[expect(
+        dead_code,
+        reason = "required by JSON-RPC 2.0 spec; serde needs the field for deserialization"
+    )]
     jsonrpc: String,
     id: Option<Value>,
     method: String,
@@ -83,13 +87,37 @@ pub fn router(state: AppState) -> Router {
         .route("/mcp", post(handle_mcp_post))
         .route("/sse", get(handle_sse))
         .route("/health", get(health))
-        .fallback(|| async {
-            (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": "not_found"})),
-            )
-        })
+        .fallback(|| async { (StatusCode::NOT_FOUND, Json(json!({"error": "not_found"}))) })
+        .layer(middleware::from_fn_with_state(state.clone(), require_auth))
         .with_state(state)
+}
+
+/// Bearer-token authentication middleware.
+///
+/// When `config.api_token` is `Some(token)`, every request must carry:
+///   `Authorization: Bearer <token>`
+/// Requests with a missing or incorrect token receive HTTP 401.
+/// When `api_token` is `None` (the default), all requests pass through unchanged.
+async fn require_auth(
+    State(state): State<AppState>,
+    req: axum::extract::Request,
+    next: middleware::Next,
+) -> axum::response::Response {
+    if let Some(ref expected) = state.config.api_token {
+        let auth = req
+            .headers()
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok());
+        let provided = auth.and_then(|v| v.strip_prefix("Bearer "));
+        if provided != Some(expected.as_str()) {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error": "unauthorized"})),
+            )
+                .into_response();
+        }
+    }
+    next.run(req).await
 }
 
 /// Health check
@@ -117,9 +145,7 @@ async fn handle_mcp_post(
 async fn handle_sse(
     State(_state): State<AppState>,
 ) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
-    let stream = tokio_stream::once(Ok(Event::default()
-        .event("endpoint")
-        .data("/mcp")));
+    let stream = tokio_stream::once(Ok(Event::default().event("endpoint").data("/mcp")));
     Sse::new(stream)
 }
 
@@ -151,10 +177,7 @@ async fn dispatch(state: &AppState, req: &JsonRpcRequest) -> JsonRpcResponse {
 
         // --- Tool execution ---
         "tools/call" => {
-            let tool_name = params
-                .get("name")
-                .and_then(|n| n.as_str())
-                .unwrap_or("");
+            let tool_name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
 
             if tool_name.is_empty() {
                 return JsonRpcResponse::error(
@@ -164,10 +187,7 @@ async fn dispatch(state: &AppState, req: &JsonRpcRequest) -> JsonRpcResponse {
                 );
             }
 
-            let arguments = params
-                .get("arguments")
-                .cloned()
-                .unwrap_or(json!({}));
+            let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
 
             match execute_tool(state, tool_name, arguments).await {
                 Ok(result) => JsonRpcResponse::success(
@@ -352,10 +372,19 @@ async fn execute_tool(state: &AppState, name: &str, args: Value) -> anyhow::Resu
         "search_logs" => {
             let params = SearchParams {
                 query: args.get("query").and_then(|v| v.as_str()).map(String::from),
-                hostname: args.get("hostname").and_then(|v| v.as_str()).map(String::from),
-                severity: args.get("severity").and_then(|v| v.as_str()).map(String::from),
+                hostname: args
+                    .get("hostname")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                severity: args
+                    .get("severity")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
                 severity_in: None,
-                app_name: args.get("app_name").and_then(|v| v.as_str()).map(String::from),
+                app_name: args
+                    .get("app_name")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
                 from: args.get("from").and_then(|v| v.as_str()).map(String::from),
                 to: args.get("to").and_then(|v| v.as_str()).map(String::from),
                 limit: args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32),
@@ -368,8 +397,14 @@ async fn execute_tool(state: &AppState, name: &str, args: Value) -> anyhow::Resu
         }
 
         "tail_logs" => {
-            let hostname = args.get("hostname").and_then(|v| v.as_str()).map(String::from);
-            let app_name = args.get("app_name").and_then(|v| v.as_str()).map(String::from);
+            let hostname = args
+                .get("hostname")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let app_name = args
+                .get("app_name")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let n = args.get("n").and_then(|v| v.as_u64()).unwrap_or(50) as u32;
             let results = run_db(&state.pool, move |pool| {
                 db::tail_logs(pool, hostname.as_deref(), app_name.as_deref(), n)
@@ -450,7 +485,10 @@ async fn execute_tool(state: &AppState, name: &str, args: Value) -> anyhow::Resu
 
             let search = SearchParams {
                 query: args.get("query").and_then(|v| v.as_str()).map(String::from),
-                hostname: args.get("hostname").and_then(|v| v.as_str()).map(String::from),
+                hostname: args
+                    .get("hostname")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
                 severity: None,
                 severity_in: Some(severity_levels),
                 app_name: None,
@@ -460,7 +498,8 @@ async fn execute_tool(state: &AppState, name: &str, args: Value) -> anyhow::Resu
                 limit: Some(limit + 1),
             };
 
-            let mut results = run_db(&state.pool, move |pool| db::search_logs(pool, &search)).await?;
+            let mut results =
+                run_db(&state.pool, move |pool| db::search_logs(pool, &search)).await?;
             let truncated = results.len() > limit as usize;
             results.truncate(limit as usize);
 
@@ -468,10 +507,7 @@ async fn execute_tool(state: &AppState, name: &str, args: Value) -> anyhow::Resu
             let mut by_host: std::collections::BTreeMap<String, Vec<&db::LogEntry>> =
                 std::collections::BTreeMap::new();
             for log in &results {
-                by_host
-                    .entry(log.hostname.clone())
-                    .or_default()
-                    .push(log);
+                by_host.entry(log.hostname.clone()).or_default().push(log);
             }
 
             let grouped: Vec<Value> = by_host
@@ -498,14 +534,15 @@ async fn execute_tool(state: &AppState, name: &str, args: Value) -> anyhow::Resu
             }))
         }
 
-        "get_stats" => {
-            Ok(run_db(&state.pool, db::get_stats).await?)
-        }
+        "get_stats" => Ok(run_db(&state.pool, db::get_stats).await?),
 
         _ => Err(anyhow::anyhow!("Unknown tool: {name}")),
     }
 }
 
 fn severity_to_num(s: &str) -> Option<u8> {
-    db::SEVERITY_LEVELS.iter().position(|&l| l == s).map(|i| i as u8)
+    db::SEVERITY_LEVELS
+        .iter()
+        .position(|&l| l == s)
+        .map(|i| i as u8)
 }

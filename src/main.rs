@@ -40,10 +40,11 @@ async fn main() -> Result<()> {
             loop {
                 interval.tick().await;
                 let pool = Arc::clone(&purge_pool);
-                if let Err(e) = tokio::task::spawn_blocking(move || db::purge_old_logs(&pool, retention_days))
-                    .await
-                    .map_err(|e| anyhow::anyhow!("spawn_blocking error: {e}"))
-                    .and_then(|r| r)
+                if let Err(e) =
+                    tokio::task::spawn_blocking(move || db::purge_old_logs(&pool, retention_days))
+                        .await
+                        .map_err(|e| anyhow::anyhow!("spawn_blocking error: {e}"))
+                        .and_then(|r| r)
                 {
                     tracing::error!(error = %e, "Failed to purge old logs");
                 }
@@ -63,9 +64,21 @@ async fn main() -> Result<()> {
 
     let app = mcp::router(state)
         .layer(
+            // Restrict CORS to localhost origins only.
+            // MCP CLI clients (mcporter, curl) are not browser-based and ignore CORS entirely,
+            // so this restriction has zero effect on them. It only prevents a malicious
+            // webpage visited by a LAN user from silently exfiltrating the log database
+            // via a cross-origin browser fetch().
             tower_http::cors::CorsLayer::new()
-                .allow_origin(tower_http::cors::Any)
-                .allow_methods(tower_http::cors::Any)
+                .allow_origin([
+                    "http://localhost:3100"
+                        .parse::<axum::http::HeaderValue>()
+                        .expect("valid localhost origin"),
+                    "http://127.0.0.1:3100"
+                        .parse::<axum::http::HeaderValue>()
+                        .expect("valid 127.0.0.1 origin"),
+                ])
+                .allow_methods([axum::http::Method::POST, axum::http::Method::GET])
                 .allow_headers(tower_http::cors::Any),
         )
         .layer(tower_http::trace::TraceLayer::new_for_http());
