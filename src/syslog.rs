@@ -397,6 +397,10 @@ fn parse_syslog(raw: &str) -> ParsedLog {
     let (hostname, app_name, message) =
         if looks_like_timestamp(&raw_hostname) && full_text.contains("CEF:") {
             let (h, a, m) = extract_cef_fields(&full_text);
+            if h.is_none() && a.is_none() && m.is_none() {
+                let preview = &full_text[..full_text.len().min(200)];
+                warn!(msg = preview, "CEF heuristic triggered but all fields are None — malformed CEF body, using raw fallback");
+            }
             (
                 h.unwrap_or_else(|| raw_hostname.clone()),
                 a.or(raw_app_name),
@@ -577,5 +581,15 @@ mod tests {
         assert_eq!(parsed.hostname, "host");
         // message will be the big string — just verify no panic
         assert!(!parsed.message.is_empty());
+    }
+
+    #[test]
+    fn test_parse_syslog_cef_all_none_no_panic() {
+        // CEF heuristic fires (timestamp hostname + "CEF:" in body) but body is malformed
+        // (< 8 pipe fields). Should not panic and should fall back to raw fields.
+        let raw = "<14>1 2026-01-01T00:00:00Z 2026-01-01T00:00:00Z App - - - body with CEF: but no pipes";
+        let parsed = parse_syslog(raw);
+        // Should fall back gracefully — no panic
+        assert!(!parsed.hostname.is_empty());
     }
 }
