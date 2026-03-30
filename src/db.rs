@@ -61,7 +61,14 @@ pub struct DbStats {
     pub oldest_log: Option<String>,
     pub newest_log: Option<String>,
     /// Formatted as "X.XX" MB
-    pub db_size_mb: String,
+    pub logical_db_size_mb: String,
+    /// Formatted as "X.XX" MB
+    pub physical_db_size_mb: String,
+    /// Formatted as "X.XX" MB when available
+    pub free_disk_mb: Option<String>,
+    pub max_db_size_mb: u64,
+    pub min_free_disk_mb: u64,
+    pub write_blocked: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -601,13 +608,10 @@ pub fn purge_old_logs(pool: &DbPool, retention_days: u32) -> Result<usize> {
 }
 
 /// Get database stats
-pub fn get_stats(pool: &DbPool) -> Result<DbStats> {
+pub fn get_stats(pool: &DbPool, config: &StorageConfig) -> Result<DbStats> {
+    let metrics = get_storage_metrics(pool, config)?;
+    let write_blocked = exceeds_trigger(&metrics, config);
     let mut conn = pool.get()?;
-
-    // PRAGMA queries can't run inside a transaction, so read them first
-    let page_count: i64 = conn.query_row("PRAGMA page_count", [], |r| r.get(0))?;
-    let page_size: i64 = conn.query_row("PRAGMA page_size", [], |r| r.get(0))?;
-    let db_size_mb = (page_count * page_size) as f64 / 1_048_576.0;
 
     // Deferred read transaction ensures the log stats form a consistent snapshot
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Deferred)?;
@@ -628,7 +632,14 @@ pub fn get_stats(pool: &DbPool) -> Result<DbStats> {
         total_hosts,
         oldest_log: oldest,
         newest_log: newest,
-        db_size_mb: format!("{db_size_mb:.2}"),
+        logical_db_size_mb: format!("{:.2}", metrics.logical_db_size_bytes as f64 / 1_048_576.0),
+        physical_db_size_mb: format!("{:.2}", metrics.physical_db_size_bytes as f64 / 1_048_576.0),
+        free_disk_mb: metrics
+            .free_disk_bytes
+            .map(|bytes| format!("{:.2}", bytes as f64 / 1_048_576.0)),
+        max_db_size_mb: config.max_db_size_mb,
+        min_free_disk_mb: config.min_free_disk_mb,
+        write_blocked,
     })
 }
 
@@ -1102,13 +1113,14 @@ mod tests {
 
     #[test]
     fn test_get_stats_empty_db() {
-        let (pool, _dir) = test_pool();
-        let stats = get_stats(&pool).unwrap();
+        let (pool, dir) = test_pool();
+        let stats = get_stats(&pool, &test_storage_config(dir.path().join("test.db"))).unwrap();
         assert_eq!(stats.total_logs, 0);
         assert_eq!(stats.total_hosts, 0);
         // oldest_log and newest_log should be None on empty DB
         assert!(stats.oldest_log.is_none());
         assert!(stats.newest_log.is_none());
+        assert!(stats.free_disk_mb.is_some());
     }
 
     #[test]

@@ -98,6 +98,7 @@ async fn main() -> Result<()> {
     let state = mcp::AppState {
         pool: pool.clone(),
         config: config.mcp.clone(),
+        storage: config.storage.clone(),
     };
 
     let app = mcp::router(state)

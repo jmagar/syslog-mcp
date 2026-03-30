@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 
 use subtle::ConstantTimeEq;
 
-use crate::config::McpConfig;
+use crate::config::{McpConfig, StorageConfig};
 use crate::db::{self, DbPool, SearchParams};
 
 /// Shared app state
@@ -25,6 +25,7 @@ use crate::db::{self, DbPool, SearchParams};
 pub struct AppState {
     pub pool: Arc<DbPool>,
     pub config: McpConfig,
+    pub storage: StorageConfig,
 }
 
 /// MCP JSON-RPC request
@@ -380,7 +381,7 @@ fn tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "get_stats",
-            "description": "Get database statistics: total logs, total hosts, time range covered, and database file size.",
+            "description": "Get database statistics: total logs, total hosts, time range covered, logical and physical DB size, free disk, configured thresholds, and current write-block status.",
             "inputSchema": {
                 "type": "object",
                 "properties": {}
@@ -409,7 +410,7 @@ async fn execute_tool(state: &AppState, name: &str, args: Value) -> anyhow::Resu
         "get_errors" => tool_get_errors(&state.pool, args).await,
         "list_hosts" => tool_list_hosts(&state.pool, args).await,
         "correlate_events" => tool_correlate_events(&state.pool, args).await,
-        "get_stats" => tool_get_stats(&state.pool, args).await,
+        "get_stats" => tool_get_stats(state, args).await,
         _ => Err(anyhow::anyhow!("Unknown tool: {name}")),
     }
 }
@@ -580,8 +581,12 @@ async fn tool_correlate_events(pool: &Arc<DbPool>, args: Value) -> anyhow::Resul
     }))
 }
 
-async fn tool_get_stats(pool: &Arc<DbPool>, _args: Value) -> anyhow::Result<Value> {
-    let stats = run_db(pool, db::get_stats).await?;
+async fn tool_get_stats(state: &AppState, _args: Value) -> anyhow::Result<Value> {
+    let pool = Arc::clone(&state.pool);
+    let storage = state.storage.clone();
+    let stats = tokio::task::spawn_blocking(move || db::get_stats(&pool, &storage))
+        .await
+        .map_err(|e| anyhow::anyhow!("Task join error: {e}"))??;
     Ok(serde_json::to_value(&stats)?)
 }
 
@@ -605,5 +610,52 @@ fn parse_optional_timestamp(
             })?;
             Ok(Some(dt.with_timezone(&chrono::Utc).to_rfc3339()))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_storage_config(db_path: std::path::PathBuf) -> StorageConfig {
+        StorageConfig {
+            db_path,
+            pool_size: 1,
+            retention_days: 90,
+            wal_mode: false,
+            max_db_size_mb: 1024,
+            recovery_db_size_mb: 900,
+            min_free_disk_mb: 0,
+            recovery_free_disk_mb: 0,
+            cleanup_interval_secs: 60,
+        }
+    }
+
+    fn test_state() -> (AppState, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = test_storage_config(dir.path().join("mcp-test.db"));
+        let pool = Arc::new(db::init_pool(&storage).unwrap());
+        (
+            AppState {
+                pool,
+                config: McpConfig {
+                    host: "127.0.0.1".into(),
+                    port: 3100,
+                    server_name: "syslog-mcp".into(),
+                    api_token: None,
+                },
+                storage,
+            },
+            dir,
+        )
+    }
+
+    #[tokio::test]
+    async fn tool_get_stats_returns_storage_guard_fields() {
+        let (state, _dir) = test_state();
+        let value = tool_get_stats(&state, json!({})).await.unwrap();
+        assert!(value.get("logical_db_size_mb").is_some());
+        assert!(value.get("physical_db_size_mb").is_some());
+        assert!(value.get("write_blocked").is_some());
     }
 }
