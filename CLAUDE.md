@@ -92,6 +92,7 @@ RUST_LOG=info
 - **WAL mode** — SQLite runs in WAL mode; if copying the DB file, also copy `.db-wal` and `.db-shm`, or the copy will be corrupt
 - **SSE proxy** — nginx/SWAG must set `proxy_buffering off`, `chunked_transfer_encoding off`, and `proxy_http_version 1.1` for SSE (`GET /sse`) to stream correctly
 - **Data volume** — DB lives in `./data/` (bind mount); `*.db` is gitignored so the database files won't be committed
+- **Retention purge** — `retention_days` defaults to 90; logs older than 90 days are **permanently deleted hourly** with no recovery path. Set `SYSLOG_MCP_STORAGE__RETENTION_DAYS=0` to disable purging entirely.
 
 ## Testing MCP Tools
 

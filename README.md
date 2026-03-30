@@ -39,9 +39,11 @@ Environment variables (prefix `SYSLOG_MCP_`, double underscore for nesting withi
 ```bash
 SYSLOG_MCP_SYSLOG__UDP_BIND=0.0.0.0:1514
 SYSLOG_MCP_STORAGE__DB_PATH=/data/syslog.db
-SYSLOG_MCP_STORAGE__RETENTION_DAYS=90
+SYSLOG_MCP_STORAGE__RETENTION_DAYS=90   # logs older than this are permanently deleted hourly; set to 0 to keep forever
 SYSLOG_MCP_MCP__BIND=0.0.0.0:3100
 ```
+
+> **Warning:** `retention_days` defaults to 90. Logs older than 90 days are **permanently and irreversibly deleted hourly**. Set `SYSLOG_MCP_STORAGE__RETENTION_DAYS=0` to disable.
 
 Or edit `config.toml`.
 
