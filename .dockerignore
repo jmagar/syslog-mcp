@@ -1,0 +1,30 @@
+# Build artifacts (gigabytes of Rust cache)
+target/
+
+# Live database files
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Version control
+.git/
+
+# Documentation
+docs/
+
+# Environment files
+.env
+.env.*
+
+# Tooling directories
+.beads/
+.lavra/
+.omc/
+
+# Scripts (not needed in image)
+scripts/
+
+# Editor / OS noise
+.DS_Store
+*.swp
