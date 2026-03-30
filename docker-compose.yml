@@ -32,7 +32,10 @@ services:
           cpus: '1.0'
 
     labels:
-      - "swag=syslog-mcp"  # For your SWAG reverse proxy
+      - "swag=enable"
+      - "swag.url=syslog-mcp.tootie.tv"
+      - "swag.port=3100"
+      - "swag.proto=http"
 
 networks:
   proxy:

@@ -22,8 +22,10 @@ pub async fn start(config: SyslogConfig, pool: Arc<DbPool>) -> Result<()> {
 
     // Spawn the batched writer
     let writer_pool = pool.clone();
+    let batch_size = config.batch_size;
+    let flush_interval = tokio::time::Duration::from_millis(config.flush_interval_ms);
     tokio::spawn(async move {
-        batch_writer(rx, writer_pool).await;
+        batch_writer(rx, writer_pool, batch_size, flush_interval).await;
     });
 
     // Spawn UDP listener
@@ -150,7 +152,7 @@ async fn handle_tcp_connection(
     info!(peer = %addr, "TCP syslog connection closed");
 }
 
-/// TCP syslog receiver (newline-delimited, octet-counting).
+/// TCP syslog receiver (newline-delimited).
 ///
 /// Caps concurrent connections at `max_connections` via a semaphore; each
 /// connection is subject to an `idle_timeout_secs` idle timeout (per read)
@@ -165,10 +167,12 @@ async fn tcp_listener(
     let listener = TcpListener::bind(bind).await?;
     info!(bind = %bind, max_connections, idle_timeout_secs, "TCP syslog listener bound");
     let sem = Arc::new(Semaphore::new(max_connections));
+    let mut accept_backoff_ms: u64 = 100;
 
     loop {
         match listener.accept().await {
             Ok((stream, addr)) => {
+                accept_backoff_ms = 100; // reset on success
                 let permit = match Arc::clone(&sem).acquire_owned().await {
                     Ok(p) => p,
                     Err(_) => break, // semaphore closed — shouldn't happen
@@ -181,7 +185,10 @@ async fn tcp_listener(
             }
             Err(e) => {
                 error!(error = %e, "TCP accept error");
-                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                // Exponential backoff: double each time, cap at 5s, reset on success.
+                tokio::time::sleep(tokio::time::Duration::from_millis(accept_backoff_ms)).await;
+                accept_backoff_ms = (accept_backoff_ms * 2).min(5000);
+                continue;
             }
         }
     }
@@ -189,9 +196,12 @@ async fn tcp_listener(
 }
 
 /// Batch writer — collects messages and writes in batches for throughput
-async fn batch_writer(mut rx: mpsc::Receiver<db::LogBatchEntry>, pool: Arc<DbPool>) {
-    let batch_size = 100;
-    let flush_interval = tokio::time::Duration::from_millis(500);
+async fn batch_writer(
+    mut rx: mpsc::Receiver<db::LogBatchEntry>,
+    pool: Arc<DbPool>,
+    batch_size: usize,
+    flush_interval: tokio::time::Duration,
+) {
 
     let mut batch: Vec<db::LogBatchEntry> = Vec::with_capacity(batch_size);
 
@@ -252,6 +262,8 @@ async fn flush_batch(pool: &Arc<DbPool>, batch: &mut Vec<db::LogBatchEntry>) {
             if failed_batch.len() < 1000 {
                 error!(error = %e, count, "Failed to flush log batch — retaining for next flush");
                 *batch = failed_batch;
+                // Brief pause before the next flush attempt to avoid hammering a failing DB
+                tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
             } else {
                 error!(error = %e, count, "Failed to flush log batch — batch too large to retain, discarding");
             }
@@ -278,9 +290,23 @@ fn truncate(s: &str, max: usize) -> &str {
 
 /// Returns true if `s` looks like an ISO 8601 timestamp (YYYY-MM-DDTHH:…).
 /// UniFi OS incorrectly puts a timestamp in the syslog hostname field.
+///
+/// Validates separator positions AND digit positions to avoid false positives
+/// on strings that happen to have `-` and `T` at the right offsets.
 fn looks_like_timestamp(s: &str) -> bool {
     let b = s.as_bytes();
-    b.len() >= 19 && b[4] == b'-' && b[7] == b'-' && b[10] == b'T'
+    b.len() >= 19
+        && b[4] == b'-'
+        && b[7] == b'-'
+        && b[10] == b'T'
+        && b[0].is_ascii_digit()
+        && b[1].is_ascii_digit()
+        && b[2].is_ascii_digit()
+        && b[3].is_ascii_digit()
+        && b[5].is_ascii_digit()
+        && b[6].is_ascii_digit()
+        && b[8].is_ascii_digit()
+        && b[9].is_ascii_digit()
 }
 
 /// Extract a single value from a CEF extension string (`key1=val1 key2=val2 …`).

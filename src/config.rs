@@ -20,6 +20,14 @@ fn default_tcp_idle_timeout_secs() -> u64 {
     300
 }
 
+fn default_batch_size() -> usize {
+    100
+}
+
+fn default_flush_interval_ms() -> u64 {
+    500
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyslogConfig {
     /// UDP listen address
@@ -34,6 +42,12 @@ pub struct SyslogConfig {
     /// Idle timeout in seconds for TCP connections (per-read)
     #[serde(default = "default_tcp_idle_timeout_secs")]
     pub tcp_idle_timeout_secs: u64,
+    /// Batch writer: entries per flush
+    #[serde(default = "default_batch_size")]
+    pub batch_size: usize,
+    /// Batch writer: flush interval in milliseconds
+    #[serde(default = "default_flush_interval_ms")]
+    pub flush_interval_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,6 +94,8 @@ impl Default for Config {
                 max_message_size: 8192,
                 max_tcp_connections: default_max_tcp_connections(),
                 tcp_idle_timeout_secs: default_tcp_idle_timeout_secs(),
+                batch_size: default_batch_size(),
+                flush_interval_ms: default_flush_interval_ms(),
             },
             storage: StorageConfig {
                 db_path: PathBuf::from("/data/syslog.db"),
@@ -96,7 +112,7 @@ impl Default for Config {
     }
 }
 
-fn parse_addr(field: &str, value: &str) -> anyhow::Result<()> {
+fn validate_addr(field: &str, value: &str) -> anyhow::Result<()> {
     // Parse as a concrete SocketAddr (non-blocking, no DNS).
     // All config addresses are IP:port (e.g. "0.0.0.0:1514") — hostname
     // resolution is Tokio's job at bind time, not ours at config-load time.
@@ -117,9 +133,9 @@ impl Config {
         if config.storage.pool_size == 0 {
             return Err(anyhow::anyhow!("storage.pool_size must be > 0"));
         }
-        parse_addr("syslog.udp_bind", &config.syslog.udp_bind)?;
-        parse_addr("syslog.tcp_bind", &config.syslog.tcp_bind)?;
-        parse_addr("mcp.bind", &config.mcp.bind)?;
+        validate_addr("syslog.udp_bind", &config.syslog.udp_bind)?;
+        validate_addr("syslog.tcp_bind", &config.syslog.tcp_bind)?;
+        validate_addr("mcp.bind", &config.mcp.bind)?;
 
         Ok(config)
     }

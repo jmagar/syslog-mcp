@@ -11,7 +11,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use futures::stream::Stream;
+use futures_core::Stream;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -139,10 +139,23 @@ async fn require_auth(
     next.run(req).await
 }
 
-/// Health check
+/// Health check — lightweight probe that verifies DB connectivity without
+/// running COUNT(*) over the entire logs table.
 async fn health(State(state): State<AppState>) -> impl IntoResponse {
-    match run_db(&state.pool, db::get_stats).await {
-        Ok(stats) => Json(json!({ "status": "ok", "stats": stats })).into_response(),
+    let pool = Arc::clone(&state.pool);
+    match tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let conn = pool.get()?;
+        conn.query_row("SELECT 1", [], |_| Ok(()))?;
+        Ok(())
+    })
+    .await
+    {
+        Ok(Ok(())) => Json(json!({ "status": "ok" })).into_response(),
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "status": "error", "error": e.to_string() })),
+        )
+            .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "status": "error", "error": e.to_string() })),
@@ -485,7 +498,7 @@ async fn tool_correlate_events(pool: &Arc<DbPool>, args: Value) -> anyhow::Resul
         .unwrap_or("warning");
 
     // Validate severity_min before using it
-    let sev_threshold = severity_to_num(severity_min).ok_or_else(|| {
+    let sev_threshold = db::severity_to_num(severity_min).ok_or_else(|| {
         anyhow::anyhow!(
             "Invalid severity_min '{}'. Must be one of: emerg, alert, crit, err, warning, notice, info, debug",
             severity_min
@@ -538,8 +551,7 @@ async fn tool_correlate_events(pool: &Arc<DbPool>, args: Value) -> anyhow::Resul
     results.truncate(limit as usize);
 
     // Group by hostname, preserving time order within each host
-    let mut by_host: std::collections::BTreeMap<String, Vec<&db::LogEntry>> =
-        std::collections::BTreeMap::new();
+    let mut by_host: std::collections::BTreeMap<String, Vec<&db::LogEntry>> = Default::default();
     for log in &results {
         by_host.entry(log.hostname.clone()).or_default().push(log);
     }
@@ -571,13 +583,6 @@ async fn tool_correlate_events(pool: &Arc<DbPool>, args: Value) -> anyhow::Resul
 async fn tool_get_stats(pool: &Arc<DbPool>, _args: Value) -> anyhow::Result<Value> {
     let stats = run_db(pool, db::get_stats).await?;
     Ok(serde_json::to_value(&stats)?)
-}
-
-fn severity_to_num(s: &str) -> Option<u8> {
-    db::SEVERITY_LEVELS
-        .iter()
-        .position(|&l| l == s)
-        .map(|i| i as u8)
 }
 
 /// Parse an optional RFC3339 timestamp string and normalize it to UTC.

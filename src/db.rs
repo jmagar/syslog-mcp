@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use anyhow::Result;
 use chrono::Utc;
 use r2d2::Pool;
@@ -141,6 +143,7 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
         CREATE INDEX IF NOT EXISTS idx_logs_severity  ON logs(severity);
         CREATE INDEX IF NOT EXISTS idx_logs_app_name  ON logs(app_name);
         CREATE INDEX IF NOT EXISTS idx_logs_host_time ON logs(hostname, timestamp);
+        CREATE INDEX IF NOT EXISTS idx_logs_sev_time ON logs(severity, timestamp);
 
         -- FTS5 virtual table for full-text search on messages
         CREATE VIRTUAL TABLE IF NOT EXISTS logs_fts USING fts5(
@@ -220,8 +223,7 @@ pub fn insert_logs_batch(pool: &DbPool, entries: &[LogBatchEntry]) -> Result<usi
         }
 
         // Batch upsert hosts — group by hostname to avoid one upsert per log entry
-        let mut host_counts: std::collections::HashMap<&str, i64> =
-            std::collections::HashMap::new();
+        let mut host_counts: HashMap<&str, i64> = HashMap::new();
         for entry in entries {
             *host_counts.entry(entry.hostname.as_str()).or_insert(0) += 1;
         }
@@ -366,6 +368,7 @@ pub fn get_error_summary(
     let conn = pool.get()?;
 
     let from = from.unwrap_or("1970-01-01T00:00:00Z");
+    // Upper sentinel: any valid RFC 3339 timestamp will sort before this.
     let to = to.unwrap_or("9999-12-31T23:59:59Z");
 
     let mut stmt = conn.prepare(
@@ -431,12 +434,15 @@ pub fn purge_old_logs(pool: &DbPool, retention_days: u32) -> Result<usize> {
     // Chunked DELETE: each iteration acquires a fresh connection from the pool
     // and releases it (along with its write lock) before sleeping, giving the
     // batch writer a window to acquire a connection between chunks.
+    // Use received_at (server clock) instead of timestamp (device clock) so that
+    // a device with a misconfigured clock cannot cause its logs to be purged
+    // immediately (future timestamp) or retained forever (past timestamp).
     let mut total_deleted: usize = 0;
     loop {
         let conn = pool.get()?;
         let chunk = conn.execute(
             "DELETE FROM logs WHERE id IN (
-                 SELECT id FROM logs WHERE timestamp < ?1 LIMIT 10000
+                 SELECT id FROM logs WHERE received_at < ?1 LIMIT 10000
              )",
             params![cutoff],
         )?;
@@ -454,6 +460,15 @@ pub fn purge_old_logs(pool: &DbPool, retention_days: u32) -> Result<usize> {
         let conn = pool.get()?;
         if let Err(e) = conn.execute_batch("INSERT INTO logs_fts(logs_fts) VALUES('merge=500,250');") {
             tracing::warn!(error = %e, "FTS merge skipped (non-fatal)");
+        }
+    }
+
+    // Passive WAL checkpoint: attempt to move WAL pages into the main DB file
+    // without blocking writers. Prevents unbounded WAL growth between restarts.
+    {
+        let conn = pool.get()?;
+        if let Err(e) = conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE);") {
+            tracing::warn!(error = %e, "WAL checkpoint skipped (non-fatal)");
         }
     }
 
@@ -498,6 +513,15 @@ pub fn get_stats(pool: &DbPool) -> Result<DbStats> {
 pub const SEVERITY_LEVELS: &[&str] = &[
     "emerg", "alert", "crit", "err", "warning", "notice", "info", "debug",
 ];
+
+/// Convert a severity name to its numeric syslog level (0=emerg, 7=debug).
+/// Returns `None` for unrecognised names.
+pub fn severity_to_num(s: &str) -> Option<u8> {
+    SEVERITY_LEVELS
+        .iter()
+        .position(|&l| l == s)
+        .map(|i| i as u8)
+}
 
 // --- helpers ---
 
@@ -710,12 +734,20 @@ mod tests {
     fn test_purge_old_logs_removes_old() {
         let (pool, _dir) = test_pool();
         let entries = vec![
-            // Old entry — should be purged
             make_entry("2020-01-01T00:00:00Z", "host-a", "info", "old message"),
-            // Recent entry — should survive
             make_entry("2099-01-01T00:00:00Z", "host-a", "info", "future message"),
         ];
         insert_logs_batch(&pool, &entries).unwrap();
+
+        // Purge uses received_at (server clock), not timestamp (device clock).
+        // Backdate the first entry's received_at so it falls outside retention.
+        let conn = pool.get().unwrap();
+        conn.execute(
+            "UPDATE logs SET received_at = '2020-01-01T00:00:00Z' WHERE message = 'old message'",
+            [],
+        )
+        .unwrap();
+        drop(conn);
 
         let deleted = purge_old_logs(&pool, 90).unwrap();
         assert_eq!(deleted, 1, "should have deleted exactly the old entry");
@@ -788,6 +820,109 @@ mod tests {
 
         let hosts = list_hosts(&pool).unwrap();
         assert_eq!(hosts.len(), 0, "no hosts should exist after empty batch");
+    }
+
+    #[test]
+    fn test_search_timestamp_range_filtering() {
+        let (pool, _dir) = test_pool();
+        let entries = vec![
+            make_entry("2026-01-01T00:00:00Z", "host-a", "info", "early message"),
+            make_entry("2026-06-15T12:00:00Z", "host-a", "info", "mid message"),
+            make_entry("2026-12-31T23:59:59Z", "host-a", "info", "late message"),
+        ];
+        insert_logs_batch(&pool, &entries).unwrap();
+
+        // from only
+        let params = SearchParams {
+            query: None, hostname: None, severity: None, severity_in: None,
+            app_name: None, from: Some("2026-06-01T00:00:00Z".into()), to: None, limit: None,
+        };
+        let results = search_logs(&pool, &params).unwrap();
+        assert_eq!(results.len(), 2, "from filter should return mid + late");
+
+        // to only
+        let params = SearchParams {
+            query: None, hostname: None, severity: None, severity_in: None,
+            app_name: None, from: None, to: Some("2026-06-30T00:00:00Z".into()), limit: None,
+        };
+        let results = search_logs(&pool, &params).unwrap();
+        assert_eq!(results.len(), 2, "to filter should return early + mid");
+
+        // from + to (narrow window)
+        let params = SearchParams {
+            query: None, hostname: None, severity: None, severity_in: None,
+            app_name: None,
+            from: Some("2026-06-01T00:00:00Z".into()),
+            to: Some("2026-06-30T00:00:00Z".into()),
+            limit: None,
+        };
+        let results = search_logs(&pool, &params).unwrap();
+        assert_eq!(results.len(), 1, "from+to filter should return only mid");
+        assert_eq!(results[0].message, "mid message");
+    }
+
+    #[test]
+    fn test_severity_to_num() {
+        assert_eq!(severity_to_num("emerg"), Some(0));
+        assert_eq!(severity_to_num("alert"), Some(1));
+        assert_eq!(severity_to_num("crit"), Some(2));
+        assert_eq!(severity_to_num("err"), Some(3));
+        assert_eq!(severity_to_num("warning"), Some(4));
+        assert_eq!(severity_to_num("notice"), Some(5));
+        assert_eq!(severity_to_num("info"), Some(6));
+        assert_eq!(severity_to_num("debug"), Some(7));
+        // Edge cases
+        assert_eq!(severity_to_num(""), None);
+        assert_eq!(severity_to_num("ERROR"), None, "case sensitive");
+        assert_eq!(severity_to_num("critical"), None, "not a valid syslog name");
+        assert_eq!(severity_to_num("warn"), None, "must be 'warning' not 'warn'");
+    }
+
+    #[test]
+    fn test_error_summary_severity_filter() {
+        let (pool, _dir) = test_pool();
+        let entries = vec![
+            make_entry("2026-01-01T00:00:00Z", "host-a", "err", "error msg"),
+            make_entry("2026-01-01T00:00:01Z", "host-a", "warning", "warn msg"),
+            make_entry("2026-01-01T00:00:02Z", "host-a", "info", "info msg"),
+            make_entry("2026-01-01T00:00:03Z", "host-a", "debug", "debug msg"),
+        ];
+        insert_logs_batch(&pool, &entries).unwrap();
+
+        let summary = get_error_summary(&pool, None, None).unwrap();
+        // Only err and warning should appear (not info, debug)
+        assert_eq!(summary.len(), 2);
+        let severities: Vec<&str> = summary.iter().map(|e| e.severity.as_str()).collect();
+        assert!(severities.contains(&"err"));
+        assert!(severities.contains(&"warning"));
+    }
+
+    #[test]
+    fn test_search_severity_in_filter() {
+        let (pool, _dir) = test_pool();
+        let entries = vec![
+            make_entry("2026-01-01T00:00:00Z", "host-a", "emerg", "emerg msg"),
+            make_entry("2026-01-01T00:00:01Z", "host-a", "err", "err msg"),
+            make_entry("2026-01-01T00:00:02Z", "host-a", "warning", "warn msg"),
+            make_entry("2026-01-01T00:00:03Z", "host-a", "info", "info msg"),
+            make_entry("2026-01-01T00:00:04Z", "host-a", "debug", "debug msg"),
+        ];
+        insert_logs_batch(&pool, &entries).unwrap();
+
+        let params = SearchParams {
+            query: None, hostname: None, severity: None,
+            severity_in: Some(vec!["emerg".into(), "err".into(), "warning".into()]),
+            app_name: None, from: None, to: None, limit: None,
+        };
+        let results = search_logs(&pool, &params).unwrap();
+        assert_eq!(results.len(), 3, "severity_in should match exactly 3");
+        for r in &results {
+            assert!(
+                ["emerg", "err", "warning"].contains(&r.severity.as_str()),
+                "unexpected severity: {}",
+                r.severity
+            );
+        }
     }
 
     #[test]

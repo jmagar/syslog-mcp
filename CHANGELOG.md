@@ -2,7 +2,34 @@
 
 All notable changes to syslog-mcp are documented here.
 
-## [Unreleased]
+## [0.1.7] — 2026-03-30
+
+### Fixed
+- `src/db.rs`: Retention purge now uses `received_at` (server clock) instead of `timestamp` (device clock) — prevents misconfigured device clocks from causing immediate purge or infinite retention (syslog-mcp-x6l)
+- `src/db.rs`: Added composite `(severity, timestamp)` index for `get_error_summary` query performance (syslog-mcp-ctj)
+- `src/db.rs`: `std::collections::HashMap` imported at module level instead of inline paths (syslog-mcp-rva)
+- `src/mcp.rs`: `/health` endpoint now runs `SELECT 1` instead of `COUNT(*)` over entire logs table (syslog-mcp-068)
+- `src/mcp.rs`: `severity_to_num` moved to `db.rs` as single source of truth (syslog-mcp-nu6)
+- `src/mcp.rs`: 401 response uses JSON-RPC 2.0 envelope; replaced `futures` crate with `futures-core` (syslog-mcp-zr4)
+- `src/syslog.rs`: TCP accept error now uses exponential backoff (100ms → 5s cap) instead of flat 100ms sleep (syslog-mcp-ve1)
+- `src/syslog.rs`: `looks_like_timestamp` now validates digit positions, not just separator offsets (syslog-mcp-qus)
+- `src/syslog.rs`: Removed false "octet-counting" claim from TCP listener doc comment (syslog-mcp-jsv)
+- `src/syslog.rs`: Flush retry adds 250ms pause to avoid hammering a failing DB (syslog-mcp-rjt)
+- `src/config.rs`: Renamed `parse_addr` to `validate_addr` for clarity (syslog-mcp-e5m)
+- `scripts/smoke-test.sh`: `assert_no_error` now fails on non-JSON output instead of silently passing (syslog-mcp-tef)
+- `Cargo.toml`: Removed unused `ws` feature from axum; removed unused `json` feature from tracing-subscriber (syslog-mcp-3ou, syslog-mcp-avg)
+- `docker-compose.yml`: SWAG labels updated to `swag=enable` + url/port/proto format (syslog-mcp-j4m)
+
+### Added
+- `src/db.rs`: `PRAGMA wal_checkpoint(PASSIVE)` after hourly purge to prevent unbounded WAL growth (syslog-mcp-dah)
+- `src/db.rs`: `pub fn severity_to_num()` for reuse across modules (syslog-mcp-nu6)
+- `src/config.rs`: `batch_size` and `flush_interval_ms` fields in `SyslogConfig` with serde defaults (syslog-mcp-7uv)
+- `src/db.rs`: 4 new unit tests — timestamp range filtering, severity_to_num edge cases, error summary severity filter, severity_in filter (syslog-mcp-063, syslog-mcp-v9r, syslog-mcp-3su, syslog-mcp-94p)
+- `scripts/backup.sh`: WAL-safe SQLite backup script with cron scheduling and 30-day pruning (syslog-mcp-8zi)
+- `docs/runbooks/deploy.md`: Rolling update, rollback, health check, and pre-deploy checklist (syslog-mcp-8np)
+- `.env.example`: Added `max_message_size`, `batch_size`, `flush_interval_ms` documentation (syslog-mcp-vri)
+- `README.md`: SSE endpoint stub behavior documented; Docker network prereq documented (syslog-mcp-3t7, syslog-mcp-7r4)
+- `CLAUDE.md`: CEF hostname trust boundary, batch writer failure path, correlate_events 999 limit cap documented (syslog-mcp-dum, syslog-mcp-2oj, syslog-mcp-y1n)
 
 ---
 
@@ -114,7 +141,8 @@ All notable changes to syslog-mcp are documented here.
 
 ---
 
-[Unreleased]: https://github.com/jmagar/syslog-mcp/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/jmagar/syslog-mcp/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/jmagar/syslog-mcp/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/jmagar/syslog-mcp/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/jmagar/syslog-mcp/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/jmagar/syslog-mcp/compare/v0.1.3...v0.1.4

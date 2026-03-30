@@ -23,6 +23,8 @@ Homelab syslog receiver + MCP server. One Rust binary that:
 docker compose up -d
 ```
 
+The compose file uses a `proxy` network (configurable via `DOCKER_NETWORK` env var, defaults to `syslog_mcp`). If attaching to an existing reverse-proxy network, set `DOCKER_NETWORK=your-network-name` in `.env`.
+
 Then configure each host to forward syslog to port 1514. See [SETUP.md](SETUP.md).
 
 ## MCP Endpoint
@@ -46,6 +48,10 @@ SYSLOG_MCP_MCP__BIND=0.0.0.0:3100
 > **Warning:** `retention_days` defaults to 90. Logs older than 90 days are **permanently and irreversibly deleted hourly**. Set `SYSLOG_MCP_STORAGE__RETENTION_DAYS=0` to disable.
 
 > **Note (Docker):** When running in Docker, `config.toml` is NOT read — the binary reads from CWD (`/`) and the TOML is copied to `/etc/syslog-mcp/` which is not CWD. Use environment variables (`SYSLOG_MCP_` prefix) or the `docker-compose.yml` environment block instead. Editing `config.toml` has no effect in Docker.
+
+## SSE Endpoint
+
+`GET /sse` is a legacy MCP transport stub. It returns a single SSE event with the `/mcp` endpoint URL and then closes — it is **not** a persistent event stream. MCP clients should use `POST /mcp` (Streamable HTTP) for all tool calls.
 
 ## Architecture
 
@@ -122,6 +128,10 @@ cp /data/syslog.db /data/syslog.db-wal /data/syslog.db-shm /backup/
 # Option 2: WAL-safe online backup (no manual checkpoint needed)
 sqlite3 /data/syslog.db ".backup /backup/syslog.db"
 ```
+
+## Deployment
+
+See [docs/runbooks/deploy.md](docs/runbooks/deploy.md) for rolling update and rollback procedures.
 
 ## License
 

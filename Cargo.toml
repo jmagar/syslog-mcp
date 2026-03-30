@@ -1,6 +1,6 @@
 [package]
 name = "syslog-mcp"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 rust-version = "1.86"
 description = "Syslog receiver + MCP server for homelab log intelligence"
@@ -10,7 +10,7 @@ description = "Syslog receiver + MCP server for homelab log intelligence"
 tokio = { version = "1", features = ["full"] }
 
 # HTTP / MCP transport
-axum = { version = "0.8", features = ["ws"] }
+axum = "0.8"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 
 # SQLite
@@ -33,7 +33,7 @@ figment = { version = "0.10", features = ["toml", "env"] }
 
 # Logging
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Utils
 anyhow = "1"
@@ -41,7 +41,7 @@ subtle = "2"
 
 # SSE support
 tokio-stream = "0.1"
-futures = "0.3"
+futures-core = "0.3"
 
 [dev-dependencies]
 tempfile = "3"

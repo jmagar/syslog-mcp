@@ -92,8 +92,11 @@ import sys, json
 try:
     d = json.load(sys.stdin)
     sys.exit(1 if d.get('isError') else 0)
+except (json.JSONDecodeError, ValueError):
+    # Non-JSON output is a real failure — mcporter/tool returned garbage
+    sys.exit(1)
 except Exception:
-    sys.exit(0)  # non-JSON output treated as pass (e.g. mcporter errors shown separately)
+    sys.exit(1)
 " 2>/dev/null; then
         pass "$label"
     else

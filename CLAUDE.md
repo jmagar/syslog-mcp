@@ -94,6 +94,9 @@ RUST_LOG=info
 - **SSE proxy** — nginx/SWAG must set `proxy_buffering off`, `chunked_transfer_encoding off`, and `proxy_http_version 1.1` for SSE (`GET /sse`) to stream correctly
 - **Data volume** — DB lives in `./data/` (bind mount); `*.db` is gitignored so the database files won't be committed
 - **Retention purge** — `retention_days` defaults to 90; logs older than 90 days are **permanently deleted hourly** with no recovery path. Set `SYSLOG_MCP_STORAGE__RETENTION_DAYS=0` to disable purging entirely.
+- **CEF hostname vs source_ip** — For UniFi CEF messages, the stored `hostname` comes from the CEF `UNIFIdeviceName` extension field (message body), **not** the syslog header. Any LAN device can spoof this value. `source_ip` is the only network-verified identity. See `src/syslog.rs` parse_syslog for the trust boundary.
+- **Batch writer failure** — If `insert_logs_batch` fails, the batch is retained for the next flush (up to 1000 entries, then discarded). A 250ms pause prevents hammering a failing DB. Persistent write failures will eventually cause data loss via the 10K-entry channel cap. The mpsc channel is in-memory only — no durable write-ahead log.
+- **correlate_events limit cap** — The `limit` parameter is silently capped at 999 (not 1000) because the implementation fetches `limit+1` rows to detect truncation, and `search_logs` hard-caps at 1000.
 - **Auth / trust model** — MCP endpoint is unauthenticated by default; any client reaching port 3100 has full log read access. Set `SYSLOG_MCP_MCP__API_TOKEN` to require Bearer auth. CORS is restricted to `localhost:3100` (browser-only; curl/mcporter unaffected). If exposing via SWAG/reverse proxy, add auth at the proxy layer or set the token. See README Security section for details.
 
 ## Testing MCP Tools
