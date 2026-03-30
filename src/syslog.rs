@@ -419,6 +419,14 @@ fn parse_syslog(raw: &str, source_ip: String) -> db::LogBatchEntry {
             && (raw_app_name.as_deref().unwrap_or("").contains("CEF:")
                 || raw_message.contains("CEF:"))
         {
+            // SECURITY NOTE: The hostname stored here is extracted from the CEF message
+            // body (UNIFIdeviceName extension field), NOT validated against the network
+            // source. Any LAN device can craft a CEF message with an arbitrary
+            // UNIFIdeviceName and impersonate a legitimate host. `source_ip` is the
+            // only trustworthy identity — it reflects the actual network sender address
+            // recorded by the OS at socket accept time and cannot be spoofed by message
+            // content.
+            //
             // Reconstruct full_text only for CEF messages (syslog_loose splits
             // "The Mothership CEF:…" across app_name and message for UniFi RFC 5424).
             let full_text = match &raw_app_name {
@@ -429,6 +437,21 @@ fn parse_syslog(raw: &str, source_ip: String) -> db::LogBatchEntry {
             if cef.hostname.is_none() && cef.app_name.is_none() && cef.message.is_none() {
                 let preview = &full_text[..full_text.len().min(200)];
                 warn!(msg = preview, "CEF heuristic triggered but all fields are None — malformed CEF body, using raw fallback");
+            }
+            // When the CEF-extracted hostname differs from the syslog-header hostname,
+            // emit a debug log to aid forensic analysis. A mismatch is normal for
+            // UniFi (header has a timestamp), but an unexpected mismatch from a device
+            // that does not put a timestamp in the header may indicate spoofing.
+            if let Some(ref cef_host) = cef.hostname {
+                if !raw_hostname.is_empty() && cef_host != &raw_hostname {
+                    debug!(
+                        cef_hostname = %cef_host,
+                        syslog_header_hostname = %raw_hostname,
+                        source_ip = %source_ip,
+                        "CEF hostname differs from syslog-header hostname; \
+                         CEF value is from message content and is not network-verified"
+                    );
+                }
             }
             (
                 truncate(&cef.hostname.unwrap_or_else(|| raw_hostname.clone()), 255).to_string(),
