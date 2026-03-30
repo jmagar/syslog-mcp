@@ -369,190 +369,184 @@ where
 /// Execute a tool by name
 async fn execute_tool(state: &AppState, name: &str, args: Value) -> anyhow::Result<Value> {
     match name {
-        "search_logs" => {
-            let params = SearchParams {
-                query: args.get("query").and_then(|v| v.as_str()).map(String::from),
-                hostname: args
-                    .get("hostname")
-                    .and_then(|v| v.as_str())
-                    .map(String::from),
-                severity: args
-                    .get("severity")
-                    .and_then(|v| v.as_str())
-                    .map(String::from),
-                severity_in: None,
-                app_name: args
-                    .get("app_name")
-                    .and_then(|v| v.as_str())
-                    .map(String::from),
-                from: parse_optional_timestamp(
-                    args.get("from").and_then(|v| v.as_str()),
-                    "from",
-                )?,
-                to: parse_optional_timestamp(
-                    args.get("to").and_then(|v| v.as_str()),
-                    "to",
-                )?,
-                limit: args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32),
-            };
-            let results = run_db(&state.pool, move |pool| db::search_logs(pool, &params)).await?;
-            Ok(json!({
-                "count": results.len(),
-                "logs": results
-            }))
-        }
-
-        "tail_logs" => {
-            let hostname = args
-                .get("hostname")
-                .and_then(|v| v.as_str())
-                .map(String::from);
-            let app_name = args
-                .get("app_name")
-                .and_then(|v| v.as_str())
-                .map(String::from);
-            let n = args.get("n").and_then(|v| v.as_u64()).unwrap_or(50) as u32;
-            let results = run_db(&state.pool, move |pool| {
-                db::tail_logs(pool, hostname.as_deref(), app_name.as_deref(), n)
-            })
-            .await?;
-            Ok(json!({
-                "count": results.len(),
-                "logs": results
-            }))
-        }
-
-        "get_errors" => {
-            let from = parse_optional_timestamp(
-                args.get("from").and_then(|v| v.as_str()),
-                "from",
-            )?;
-            let to = parse_optional_timestamp(
-                args.get("to").and_then(|v| v.as_str()),
-                "to",
-            )?;
-            let results = run_db(&state.pool, move |pool| {
-                db::get_error_summary(pool, from.as_deref(), to.as_deref())
-            })
-            .await?;
-            Ok(json!({
-                "summary": results
-            }))
-        }
-
-        "list_hosts" => {
-            let results = run_db(&state.pool, db::list_hosts).await?;
-            Ok(json!({
-                "hosts": results
-            }))
-        }
-
-        "correlate_events" => {
-            let reference_time = args
-                .get("reference_time")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("reference_time is required"))?;
-
-            let window = args
-                .get("window_minutes")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(5)
-                .min(60) as i64;
-
-            let severity_min = args
-                .get("severity_min")
-                .and_then(|v| v.as_str())
-                .unwrap_or("warning");
-
-            // Validate severity_min before using it
-            let sev_threshold = severity_to_num(severity_min)
-                .ok_or_else(|| anyhow::anyhow!(
-                    "Invalid severity_min '{}'. Must be one of: emerg, alert, crit, err, warning, notice, info, debug",
-                    severity_min
-                ))?;
-
-            // Slice SEVERITY_LEVELS up to and including sev_threshold — lower index = more severe,
-            // so levels[0..=threshold] gives everything at or above the requested minimum.
-            let severity_levels: Vec<String> = db::SEVERITY_LEVELS[..=sev_threshold as usize]
-                .iter()
-                .map(|&s| s.to_string())
-                .collect();
-
-            // Parse reference time and normalize to UTC so window bounds compare
-            // correctly against UTC-stored timestamps (mixed offsets misorder TEXT).
-            let ref_dt = chrono::DateTime::parse_from_rfc3339(reference_time)
-                .map_err(|e| anyhow::anyhow!("Invalid reference_time '{}': {e}", reference_time))?
-                .with_timezone(&chrono::Utc);
-
-            let from = (ref_dt - chrono::Duration::minutes(window)).to_rfc3339();
-            let to = (ref_dt + chrono::Duration::minutes(window)).to_rfc3339();
-
-            let limit = args
-                .get("limit")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(500)
-                // Cap at 999: search_logs hard-limits to 1000 rows, so limit+1 must
-                // stay ≤ 1000 for the truncation sentinel to work correctly.
-                .min(999) as u32;
-
-            let search = SearchParams {
-                query: args.get("query").and_then(|v| v.as_str()).map(String::from),
-                hostname: args
-                    .get("hostname")
-                    .and_then(|v| v.as_str())
-                    .map(String::from),
-                severity: None,
-                severity_in: Some(severity_levels),
-                app_name: None,
-                from: Some(from.clone()),
-                to: Some(to.clone()),
-                // Fetch one extra to detect truncation without a separate COUNT query
-                limit: Some(limit + 1),
-            };
-
-            let mut results =
-                run_db(&state.pool, move |pool| db::search_logs(pool, &search)).await?;
-            let truncated = results.len() > limit as usize;
-            results.truncate(limit as usize);
-
-            // Group by hostname, preserving time order within each host
-            let mut by_host: std::collections::BTreeMap<String, Vec<&db::LogEntry>> =
-                std::collections::BTreeMap::new();
-            for log in &results {
-                by_host.entry(log.hostname.clone()).or_default().push(log);
-            }
-
-            let grouped: Vec<Value> = by_host
-                .into_iter()
-                .map(|(host, logs)| {
-                    json!({
-                        "hostname": host,
-                        "event_count": logs.len(),
-                        "events": logs
-                    })
-                })
-                .collect();
-
-            Ok(json!({
-                "reference_time": reference_time,
-                "window_minutes": window,
-                "window_from": from,
-                "window_to": to,
-                "severity_min": severity_min,
-                "total_events": results.len(),
-                "truncated": truncated,
-                "hosts_count": grouped.len(),
-                "hosts": grouped
-            }))
-        }
-
-        "get_stats" => {
-            let stats = run_db(&state.pool, db::get_stats).await?;
-            Ok(serde_json::to_value(&stats)?)
-        }
-
+        "search_logs" => tool_search_logs(&state.pool, args).await,
+        "tail_logs" => tool_tail_logs(&state.pool, args).await,
+        "get_errors" => tool_get_errors(&state.pool, args).await,
+        "list_hosts" => tool_list_hosts(&state.pool, args).await,
+        "correlate_events" => tool_correlate_events(&state.pool, args).await,
+        "get_stats" => tool_get_stats(&state.pool, args).await,
         _ => Err(anyhow::anyhow!("Unknown tool: {name}")),
     }
+}
+
+async fn tool_search_logs(pool: &Arc<DbPool>, args: Value) -> anyhow::Result<Value> {
+    let params = SearchParams {
+        query: args.get("query").and_then(|v| v.as_str()).map(String::from),
+        hostname: args
+            .get("hostname")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        severity: args
+            .get("severity")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        severity_in: None,
+        app_name: args
+            .get("app_name")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        from: parse_optional_timestamp(args.get("from").and_then(|v| v.as_str()), "from")?,
+        to: parse_optional_timestamp(args.get("to").and_then(|v| v.as_str()), "to")?,
+        limit: args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32),
+    };
+    let results = run_db(pool, move |pool| db::search_logs(pool, &params)).await?;
+    Ok(json!({
+        "count": results.len(),
+        "logs": results
+    }))
+}
+
+async fn tool_tail_logs(pool: &Arc<DbPool>, args: Value) -> anyhow::Result<Value> {
+    let hostname = args
+        .get("hostname")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let app_name = args
+        .get("app_name")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let n = args.get("n").and_then(|v| v.as_u64()).unwrap_or(50) as u32;
+    let results = run_db(pool, move |pool| {
+        db::tail_logs(pool, hostname.as_deref(), app_name.as_deref(), n)
+    })
+    .await?;
+    Ok(json!({
+        "count": results.len(),
+        "logs": results
+    }))
+}
+
+async fn tool_get_errors(pool: &Arc<DbPool>, args: Value) -> anyhow::Result<Value> {
+    let from = parse_optional_timestamp(args.get("from").and_then(|v| v.as_str()), "from")?;
+    let to = parse_optional_timestamp(args.get("to").and_then(|v| v.as_str()), "to")?;
+    let results = run_db(pool, move |pool| {
+        db::get_error_summary(pool, from.as_deref(), to.as_deref())
+    })
+    .await?;
+    Ok(json!({
+        "summary": results
+    }))
+}
+
+async fn tool_list_hosts(pool: &Arc<DbPool>, _args: Value) -> anyhow::Result<Value> {
+    let results = run_db(pool, db::list_hosts).await?;
+    Ok(json!({
+        "hosts": results
+    }))
+}
+
+async fn tool_correlate_events(pool: &Arc<DbPool>, args: Value) -> anyhow::Result<Value> {
+    let reference_time = args
+        .get("reference_time")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("reference_time is required"))?;
+
+    let window = args
+        .get("window_minutes")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(5)
+        .min(60) as i64;
+
+    let severity_min = args
+        .get("severity_min")
+        .and_then(|v| v.as_str())
+        .unwrap_or("warning");
+
+    // Validate severity_min before using it
+    let sev_threshold = severity_to_num(severity_min).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Invalid severity_min '{}'. Must be one of: emerg, alert, crit, err, warning, notice, info, debug",
+            severity_min
+        )
+    })?;
+
+    // Slice SEVERITY_LEVELS up to and including sev_threshold — lower index = more severe,
+    // so levels[0..=threshold] gives everything at or above the requested minimum.
+    let severity_levels: Vec<String> = db::SEVERITY_LEVELS[..=sev_threshold as usize]
+        .iter()
+        .map(|&s| s.to_string())
+        .collect();
+
+    // Parse reference time and normalize to UTC so window bounds compare
+    // correctly against UTC-stored timestamps (mixed offsets misorder TEXT).
+    let ref_dt = chrono::DateTime::parse_from_rfc3339(reference_time)
+        .map_err(|e| anyhow::anyhow!("Invalid reference_time '{}': {e}", reference_time))?
+        .with_timezone(&chrono::Utc);
+
+    let from = (ref_dt - chrono::Duration::minutes(window)).to_rfc3339();
+    let to = (ref_dt + chrono::Duration::minutes(window)).to_rfc3339();
+
+    let limit = args
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(500)
+        // Cap at 999: search_logs hard-limits to 1000 rows, so limit+1 must
+        // stay ≤ 1000 for the truncation sentinel to work correctly.
+        .min(999) as u32;
+
+    let search = SearchParams {
+        query: args.get("query").and_then(|v| v.as_str()).map(String::from),
+        hostname: args
+            .get("hostname")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        severity: None,
+        severity_in: Some(severity_levels),
+        app_name: None,
+        from: Some(from.clone()),
+        to: Some(to.clone()),
+        // Fetch one extra to detect truncation without a separate COUNT query
+        limit: Some(limit + 1),
+    };
+
+    let mut results = run_db(pool, move |pool| db::search_logs(pool, &search)).await?;
+    let truncated = results.len() > limit as usize;
+    results.truncate(limit as usize);
+
+    // Group by hostname, preserving time order within each host
+    let mut by_host: std::collections::BTreeMap<String, Vec<&db::LogEntry>> =
+        std::collections::BTreeMap::new();
+    for log in &results {
+        by_host.entry(log.hostname.clone()).or_default().push(log);
+    }
+
+    let grouped: Vec<Value> = by_host
+        .into_iter()
+        .map(|(host, logs)| {
+            json!({
+                "hostname": host,
+                "event_count": logs.len(),
+                "events": logs
+            })
+        })
+        .collect();
+
+    Ok(json!({
+        "reference_time": reference_time,
+        "window_minutes": window,
+        "window_from": from,
+        "window_to": to,
+        "severity_min": severity_min,
+        "total_events": results.len(),
+        "truncated": truncated,
+        "hosts_count": grouped.len(),
+        "hosts": grouped
+    }))
+}
+
+async fn tool_get_stats(pool: &Arc<DbPool>, _args: Value) -> anyhow::Result<Value> {
+    let stats = run_db(pool, db::get_stats).await?;
+    Ok(serde_json::to_value(&stats)?)
 }
 
 fn severity_to_num(s: &str) -> Option<u8> {
