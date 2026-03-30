@@ -487,8 +487,10 @@ async fn tool_correlate_events(pool: &Arc<DbPool>, args: Value) -> anyhow::Resul
         .map_err(|e| anyhow::anyhow!("Invalid reference_time '{}': {e}", reference_time))?
         .with_timezone(&chrono::Utc);
 
-    let from = (ref_dt - chrono::Duration::minutes(window)).to_rfc3339();
-    let to = (ref_dt + chrono::Duration::minutes(window)).to_rfc3339();
+    let delta = chrono::TimeDelta::try_minutes(window)
+        .ok_or_else(|| anyhow::anyhow!("duration overflow"))?;
+    let from = (ref_dt - delta).to_rfc3339();
+    let to = (ref_dt + delta).to_rfc3339();
 
     let limit = args
         .get("limit")
