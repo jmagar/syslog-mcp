@@ -198,6 +198,29 @@ pub fn insert_logs_batch(pool: &DbPool, entries: &[LogBatchEntry]) -> Result<usi
     Ok(entries.len())
 }
 
+/// Validate a user-supplied FTS5 query before execution.
+///
+/// Limits:
+/// - Max 512 characters (prevents very long queries from taxing the FTS tokenizer)
+/// - Max 16 whitespace-separated terms (prevents 28+ wildcard term DoS)
+///
+/// Returns a user-friendly error; the caller logs the details server-side.
+pub fn validate_fts_query(query: &str) -> Result<()> {
+    if query.len() > 512 {
+        anyhow::bail!(
+            "Search query too long ({} chars); maximum is 512 characters",
+            query.len()
+        );
+    }
+    let term_count = query.split_whitespace().count();
+    if term_count > 16 {
+        anyhow::bail!(
+            "Search query has too many terms ({term_count}); maximum is 16 terms"
+        );
+    }
+    Ok(())
+}
+
 /// Search logs with flexible filtering + FTS
 pub fn search_logs(pool: &DbPool, params: &SearchParams) -> Result<Vec<LogEntry>> {
     let conn = pool.get()?;
@@ -205,6 +228,8 @@ pub fn search_logs(pool: &DbPool, params: &SearchParams) -> Result<Vec<LogEntry>
 
     // If we have a full-text query, use FTS5 join
     if let Some(ref query) = params.query {
+        validate_fts_query(query)?;
+
         let mut sql = String::from(
             "SELECT l.id, l.timestamp, l.hostname, l.facility, l.severity,
                     l.app_name, l.process_id, l.message, l.received_at
@@ -220,11 +245,16 @@ pub fn search_logs(pool: &DbPool, params: &SearchParams) -> Result<Vec<LogEntry>
         sql.push_str(&format!(" ORDER BY l.timestamp DESC LIMIT {limit}"));
 
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(
-            rusqlite::params_from_iter(bindings.iter()),
-            map_row,
-        )?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(bindings.iter()), map_row)
+            .map_err(|e| {
+                tracing::error!(error = %e, query = %query, "FTS5 MATCH query failed");
+                anyhow::anyhow!("Search query failed")
+            })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| {
+            tracing::error!(error = %e, query = %query, "FTS5 row mapping failed");
+            anyhow::anyhow!("Search query failed")
+        })
     } else {
         let mut sql = String::from(
             "SELECT l.id, l.timestamp, l.hostname, l.facility, l.severity,
@@ -588,6 +618,43 @@ mod tests {
         };
         let result = search_logs(&pool, &params);
         assert!(result.is_err(), "invalid FTS5 query should return Err");
+        // Error message must be generic — no schema details leaked
+        let msg = result.unwrap_err().to_string();
+        assert_eq!(msg, "Search query failed", "error must be generic");
+    }
+
+    // --- validate_fts_query unit tests ---
+
+    #[test]
+    fn test_validate_fts_query_valid() {
+        assert!(validate_fts_query("disk error").is_ok());
+        assert!(validate_fts_query("nginx AND 502").is_ok());
+        // Exactly 16 terms should pass
+        let sixteen = (0..16).map(|i| format!("term{i}")).collect::<Vec<_>>().join(" ");
+        assert!(validate_fts_query(&sixteen).is_ok());
+        // Exactly 512 chars should pass
+        let at_limit = "a".repeat(512);
+        assert!(validate_fts_query(&at_limit).is_ok());
+    }
+
+    #[test]
+    fn test_validate_fts_query_too_long() {
+        let long_query = "a".repeat(513);
+        let result = validate_fts_query(&long_query);
+        assert!(result.is_err(), "query > 512 chars should be rejected");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("513"), "error should mention actual length");
+        assert!(msg.contains("512"), "error should mention the limit");
+    }
+
+    #[test]
+    fn test_validate_fts_query_too_many_terms() {
+        let many_terms = (0..17).map(|i| format!("term{i}")).collect::<Vec<_>>().join(" ");
+        let result = validate_fts_query(&many_terms);
+        assert!(result.is_err(), "query with 17 terms should be rejected");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("17"), "error should mention actual term count");
+        assert!(msg.contains("16"), "error should mention the limit");
     }
 
     #[test]
