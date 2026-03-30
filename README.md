@@ -110,6 +110,19 @@ The SWAG config in [SETUP.md](SETUP.md) exposes the endpoint at `https://syslog-
 | Exposed via SWAG/reverse proxy | Set `SYSLOG_MCP_MCP__API_TOKEN` or add proxy-layer auth |
 | Public internet exposure | Set token **and** add proxy-layer auth |
 
+## Backup
+
+The database runs in WAL mode. Copying `.db`, `.db-wal`, and `.db-shm` together without a checkpoint can capture inconsistent state if writes are in progress. Use one of these safe approaches:
+
+```bash
+# Option 1: checkpoint first, then copy all three files
+sqlite3 /data/syslog.db 'PRAGMA wal_checkpoint(FULL);'
+cp /data/syslog.db /data/syslog.db-wal /data/syslog.db-shm /backup/
+
+# Option 2: WAL-safe online backup (no manual checkpoint needed)
+sqlite3 /data/syslog.db ".backup /backup/syslog.db"
+```
+
 ## License
 
 MIT

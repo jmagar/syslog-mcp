@@ -90,7 +90,7 @@ RUST_LOG=info
 - **Port 1514 not 514** — avoids needing root; use iptables PREROUTING to redirect 514→1514 for devices that can't be reconfigured (see SETUP.md)
 - **Cargo.lock is tracked** — binary crates should commit Cargo.lock for reproducible builds (Cargo docs guidance)
 - **FTS5 query syntax** — `search_logs` uses SQLite FTS5: `error AND nginx`, `"disk full"`, `kern OR syslog`; invalid FTS5 syntax returns a db error. **Hyphen is the FTS5 NOT operator** — to search for hyphenated terms, use phrase syntax: `"smoke-test"` not `smoke-test`
-- **WAL mode** — SQLite runs in WAL mode; if copying the DB file, also copy `.db-wal` and `.db-shm`, or the copy will be corrupt
+- **WAL mode** — SQLite runs in WAL mode; copying `.db`, `.db-wal`, and `.db-shm` together without a checkpoint captures potentially inconsistent state. Safe backup options: (1) run `PRAGMA wal_checkpoint(FULL);` first, then copy all three files, or (2) use `sqlite3 source.db '.backup dest.db'` which is WAL-safe and requires no manual checkpoint
 - **SSE proxy** — nginx/SWAG must set `proxy_buffering off`, `chunked_transfer_encoding off`, and `proxy_http_version 1.1` for SSE (`GET /sse`) to stream correctly
 - **Data volume** — DB lives in `./data/` (bind mount); `*.db` is gitignored so the database files won't be committed
 - **Retention purge** — `retention_days` defaults to 90; logs older than 90 days are **permanently deleted hourly** with no recovery path. Set `SYSLOG_MCP_STORAGE__RETENTION_DAYS=0` to disable purging entirely.
@@ -126,3 +126,127 @@ curl -s -X POST http://localhost:3100/mcp \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_stats","arguments":{}}}'
 ```
+
+
+<!-- BEGIN BEADS INTEGRATION v:1 profile:full hash:f65d5d33 -->
+## Issue Tracking with bd (beads)
+
+**IMPORTANT**: This project uses **bd (beads)** for ALL issue tracking. Do NOT use markdown TODOs, task lists, or other tracking methods.
+
+### Why bd?
+
+- Dependency-aware: Track blockers and relationships between issues
+- Git-friendly: Dolt-powered version control with native sync
+- Agent-optimized: JSON output, ready work detection, discovered-from links
+- Prevents duplicate tracking systems and confusion
+
+### Quick Start
+
+**Check for ready work:**
+
+```bash
+bd ready --json
+```
+
+**Create new issues:**
+
+```bash
+bd create "Issue title" --description="Detailed context" -t bug|feature|task -p 0-4 --json
+bd create "Issue title" --description="What this issue is about" -p 1 --deps discovered-from:bd-123 --json
+```
+
+**Claim and update:**
+
+```bash
+bd update <id> --claim --json
+bd update bd-42 --priority 1 --json
+```
+
+**Complete work:**
+
+```bash
+bd close bd-42 --reason "Completed" --json
+```
+
+### Issue Types
+
+- `bug` - Something broken
+- `feature` - New functionality
+- `task` - Work item (tests, docs, refactoring)
+- `epic` - Large feature with subtasks
+- `chore` - Maintenance (dependencies, tooling)
+
+### Priorities
+
+- `0` - Critical (security, data loss, broken builds)
+- `1` - High (major features, important bugs)
+- `2` - Medium (default, nice-to-have)
+- `3` - Low (polish, optimization)
+- `4` - Backlog (future ideas)
+
+### Workflow for AI Agents
+
+1. **Check ready work**: `bd ready` shows unblocked issues
+2. **Claim your task atomically**: `bd update <id> --claim`
+3. **Work on it**: Implement, test, document
+4. **Discover new work?** Create linked issue:
+   - `bd create "Found bug" --description="Details about what was found" -p 1 --deps discovered-from:<parent-id>`
+5. **Complete**: `bd close <id> --reason "Done"`
+
+### Quality
+- Use `--acceptance` and `--design` fields when creating issues
+- Use `--validate` to check description completeness
+
+### Lifecycle
+- `bd defer <id>` / `bd supersede <id>` for issue management
+- `bd stale` / `bd orphans` / `bd lint` for hygiene
+- `bd human <id>` to flag for human decisions
+- `bd formula list` / `bd mol pour <name>` for structured workflows
+
+### Auto-Sync
+
+bd automatically syncs via Dolt:
+
+- Each write auto-commits to Dolt history
+- Use `bd dolt push`/`bd dolt pull` for remote sync
+- No manual export/import needed!
+
+### Important Rules
+
+- ✅ Use bd for ALL task tracking
+- ✅ Always use `--json` flag for programmatic use
+- ✅ Link discovered work with `discovered-from` dependencies
+- ✅ Check `bd ready` before asking "what should I work on?"
+- ❌ Do NOT create markdown TODO lists
+- ❌ Do NOT use external issue trackers
+- ❌ Do NOT duplicate tracking systems
+
+For more details, see README.md and docs/QUICKSTART.md.
+
+## Session Completion
+
+**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
+
+**MANDATORY WORKFLOW:**
+
+1. **File issues for remaining work** - Create issues for anything that needs follow-up
+2. **Run quality gates** (if code changed) - Tests, linters, builds
+3. **Update issue status** - Close finished work, update in-progress items
+4. **PUSH TO REMOTE** - This is MANDATORY:
+   ```bash
+   git pull --rebase
+   bd dolt push
+   git push
+   git status  # MUST show "up to date with origin"
+   ```
+5. **Clean up** - Clear stashes, prune remote branches
+6. **Verify** - All changes committed AND pushed
+7. **Hand off** - Provide context for next session
+
+**CRITICAL RULES:**
+- Work is NOT complete until `git push` succeeds
+- NEVER stop before pushing - that leaves work stranded locally
+- NEVER say "ready to push when you are" - YOU must push
+- If push fails, resolve and retry until it succeeds
+
+<!-- END BEADS INTEGRATION -->
