@@ -112,7 +112,11 @@ async fn require_auth(
         if provided != Some(expected.as_str()) {
             return (
                 StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "unauthorized"})),
+                Json(json!({
+                    "jsonrpc": "2.0",
+                    "id": null,
+                    "error": {"code": -32001, "message": "unauthorized"}
+                })),
             )
                 .into_response();
         }
