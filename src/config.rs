@@ -108,3 +108,59 @@ impl Config {
         Ok(config)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+
+    /// Regression test for the SYSLOG_MCP_ prefix.
+    ///
+    /// History: the Dockerfile previously used SYSLOG_MCP__ (double underscore) which figment
+    /// silently ignores — env vars had zero effect and defaults were used instead. The correct
+    /// prefix is SYSLOG_MCP_ (single underscore); __ is only the nesting separator between
+    /// section and key (e.g. MCP__BIND means section=mcp, key=bind).
+    ///
+    /// If this test fails it means Config::load() is no longer reading env vars at all, or the
+    /// prefix has been changed back to double-underscore.
+    ///
+    /// NOTE: env var mutation is not thread-safe. Cargo runs tests in the same process by default.
+    /// If additional env var tests are added in future, use the `serial_test` crate and mark all
+    /// env var tests with `#[serial]` to prevent races.
+    #[test]
+    #[serial]
+    fn env_var_overrides_mcp_bind() {
+        // SYSLOG_MCP_MCP__BIND: prefix=SYSLOG_MCP_, section=MCP, key=BIND (split on __)
+        std::env::set_var("SYSLOG_MCP_MCP__BIND", "127.0.0.1:3200");
+        let result = Config::load();
+        std::env::remove_var("SYSLOG_MCP_MCP__BIND");
+
+        let cfg = result.expect("Config::load() should succeed with a valid bind address");
+        assert_eq!(
+            cfg.mcp.bind, "127.0.0.1:3200",
+            "SYSLOG_MCP_MCP__BIND env var must override mcp.bind; \
+             check that the figment prefix is SYSLOG_MCP_ (single underscore) and \
+             that __ is used as the section/key separator"
+        );
+    }
+
+    /// Verify that defaults are intact when no env vars are set.
+    ///
+    /// Guards against accidental removal of `Serialized::defaults(Config::default())` from the
+    /// figment chain.
+    #[test]
+    #[serial]
+    fn defaults_are_applied_without_env_vars() {
+        // Ensure the env var from the other test is not leaking (defensive).
+        std::env::remove_var("SYSLOG_MCP_MCP__BIND");
+
+        let cfg = Config::load().expect("Config::load() should succeed with defaults");
+        assert_eq!(cfg.mcp.bind, "0.0.0.0:3100");
+        assert_eq!(cfg.syslog.udp_bind, "0.0.0.0:1514");
+        assert_eq!(cfg.syslog.tcp_bind, "0.0.0.0:1514");
+        assert_eq!(cfg.storage.pool_size, 4);
+        assert_eq!(cfg.storage.retention_days, 90);
+        assert!(cfg.storage.wal_mode);
+        assert!(cfg.mcp.api_token.is_none());
+    }
+}
