@@ -390,9 +390,7 @@ pub fn validate_fts_query(query: &str) -> Result<()> {
     }
     let term_count = query.split_whitespace().count();
     if term_count > 16 {
-        anyhow::bail!(
-            "Search query has too many terms ({term_count}); maximum is 16 terms"
-        );
+        anyhow::bail!("Search query has too many terms ({term_count}); maximum is 16 terms");
     }
     Ok(())
 }
@@ -444,10 +442,7 @@ pub fn search_logs(pool: &DbPool, params: &SearchParams) -> Result<Vec<LogEntry>
         sql.push_str(&format!(" ORDER BY l.timestamp DESC LIMIT {limit}"));
 
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(
-            rusqlite::params_from_iter(bindings.iter()),
-            map_row,
-        )?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(bindings.iter()), map_row)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 }
@@ -589,7 +584,9 @@ pub fn purge_old_logs(pool: &DbPool, retention_days: u32) -> Result<usize> {
     // Best-effort: a small/empty index may return an error; log and continue.
     if total_deleted > 0 {
         let conn = pool.get()?;
-        if let Err(e) = conn.execute_batch("INSERT INTO logs_fts(logs_fts) VALUES('merge=500,250');") {
+        if let Err(e) =
+            conn.execute_batch("INSERT INTO logs_fts(logs_fts) VALUES('merge=500,250');")
+        {
             tracing::warn!(error = %e, "FTS merge skipped (non-fatal)");
         }
     }
@@ -715,9 +712,8 @@ struct DeletedChunk {
 
 fn delete_oldest_logs_chunk(pool: &DbPool, chunk_size: usize) -> Result<DeletedChunk> {
     let conn = pool.get()?;
-    let mut stmt = conn.prepare(
-        "SELECT id, hostname FROM logs ORDER BY received_at ASC, id ASC LIMIT ?1",
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT id, hostname FROM logs ORDER BY received_at ASC, id ASC LIMIT ?1")?;
     let selected: Vec<(i64, String)> = stmt
         .query_map([chunk_size as i64], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -735,7 +731,9 @@ fn delete_oldest_logs_chunk(pool: &DbPool, chunk_size: usize) -> Result<DeletedC
     hostnames.dedup();
 
     let ids: Vec<i64> = selected.iter().map(|(id, _)| *id).collect();
-    let placeholders = std::iter::repeat_n("?", ids.len()).collect::<Vec<_>>().join(", ");
+    let placeholders = std::iter::repeat_n("?", ids.len())
+        .collect::<Vec<_>>()
+        .join(", ");
     let sql = format!("DELETE FROM logs WHERE id IN ({placeholders})");
     let deleted_rows = conn.execute(&sql, rusqlite::params_from_iter(ids.iter()))?;
 
@@ -852,7 +850,6 @@ fn file_size_if_exists(path: &Path) -> Result<u64> {
     }
 }
 
-
 fn map_row(row: &rusqlite::Row) -> rusqlite::Result<LogEntry> {
     Ok(LogEntry {
         id: row.get(0)?,
@@ -939,8 +936,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let config = test_storage_config(dir.path().join("metrics.db"));
         let pool = init_pool(&config).unwrap();
-        insert_logs_batch(&pool, &[make_entry("2026-01-01T00:00:01Z", "host-a", "info", "hello")])
-            .unwrap();
+        insert_logs_batch(
+            &pool,
+            &[make_entry(
+                "2026-01-01T00:00:01Z",
+                "host-a",
+                "info",
+                "hello",
+            )],
+        )
+        .unwrap();
 
         let metrics = get_storage_metrics(&pool, &config).unwrap();
         assert!(metrics.logical_db_size_bytes > 0);
@@ -954,7 +959,9 @@ mod tests {
         let config = test_storage_config(dir.path().join("autovac.db"));
         let pool = init_pool(&config).unwrap();
         let conn = pool.get().unwrap();
-        let mode: i64 = conn.query_row("PRAGMA auto_vacuum", [], |r| r.get(0)).unwrap();
+        let mode: i64 = conn
+            .query_row("PRAGMA auto_vacuum", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(mode, 2);
     }
 
@@ -974,7 +981,9 @@ mod tests {
         let config = test_storage_config(db_path);
         let pool = init_pool(&config).unwrap();
         let conn = pool.get().unwrap();
-        let mode: i64 = conn.query_row("PRAGMA auto_vacuum", [], |r| r.get(0)).unwrap();
+        let mode: i64 = conn
+            .query_row("PRAGMA auto_vacuum", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(mode, 2);
     }
 
@@ -999,8 +1008,18 @@ mod tests {
     fn test_search_fts() {
         let (pool, _dir) = test_pool();
         let entries = vec![
-            make_entry("2026-01-01T00:00:01Z", "host-a", "err", "disk full on /dev/sda"),
-            make_entry("2026-01-01T00:00:02Z", "host-b", "info", "connection established"),
+            make_entry(
+                "2026-01-01T00:00:01Z",
+                "host-a",
+                "err",
+                "disk full on /dev/sda",
+            ),
+            make_entry(
+                "2026-01-01T00:00:02Z",
+                "host-b",
+                "info",
+                "connection established",
+            ),
         ];
         insert_logs_batch(&pool, &entries).unwrap();
 
@@ -1047,7 +1066,10 @@ mod tests {
         assert!(validate_fts_query("disk error").is_ok());
         assert!(validate_fts_query("nginx AND 502").is_ok());
         // Exactly 16 terms should pass
-        let sixteen = (0..16).map(|i| format!("term{i}")).collect::<Vec<_>>().join(" ");
+        let sixteen = (0..16)
+            .map(|i| format!("term{i}"))
+            .collect::<Vec<_>>()
+            .join(" ");
         assert!(validate_fts_query(&sixteen).is_ok());
         // Exactly 512 chars should pass
         let at_limit = "a".repeat(512);
@@ -1066,7 +1088,10 @@ mod tests {
 
     #[test]
     fn test_validate_fts_query_too_many_terms() {
-        let many_terms = (0..17).map(|i| format!("term{i}")).collect::<Vec<_>>().join(" ");
+        let many_terms = (0..17)
+            .map(|i| format!("term{i}"))
+            .collect::<Vec<_>>()
+            .join(" ");
         let result = validate_fts_query(&many_terms);
         assert!(result.is_err(), "query with 17 terms should be rejected");
         let msg = result.unwrap_err().to_string();
@@ -1156,9 +1181,19 @@ mod tests {
         let large_older = "delete-me-2-".repeat(150_000);
         let large_keep = "keep-me-".repeat(30_000);
         let entries = vec![
-            make_entry("2026-01-01T00:00:01Z", "deleted-host", "info", &large_oldest),
+            make_entry(
+                "2026-01-01T00:00:01Z",
+                "deleted-host",
+                "info",
+                &large_oldest,
+            ),
             make_entry("2026-01-01T00:00:02Z", "deleted-host", "info", &large_older),
-            make_entry("2026-01-01T00:00:03Z", "surviving-host", "info", &large_keep),
+            make_entry(
+                "2026-01-01T00:00:03Z",
+                "surviving-host",
+                "info",
+                &large_keep,
+            ),
         ];
         insert_logs_batch(&pool, &entries).unwrap();
         update_received_at(&pool, &large_oldest, "2026-01-01T00:00:00Z");
@@ -1173,7 +1208,10 @@ mod tests {
 
         let hosts = list_hosts(&pool).unwrap();
         assert!(hosts.iter().all(|host| host.hostname != "deleted-host"));
-        let surviving = hosts.iter().find(|host| host.hostname == "surviving-host").unwrap();
+        let surviving = hosts
+            .iter()
+            .find(|host| host.hostname == "surviving-host")
+            .unwrap();
         assert_eq!(surviving.log_count, 1);
     }
 
@@ -1219,14 +1257,13 @@ mod tests {
         config.min_free_disk_mb = 512;
         config.recovery_free_disk_mb = 768;
 
-        let probe = FakeDiskSpaceProbe::new(vec![
-            64 * 1_048_576,
-            900 * 1_048_576,
-        ]);
+        let probe = FakeDiskSpaceProbe::new(vec![64 * 1_048_576, 900 * 1_048_576]);
         let outcome = enforce_storage_budget_with_probe(&pool, &config, &probe).unwrap();
 
         assert!(outcome.deleted_rows > 0);
-        assert!(outcome.metrics.free_disk_bytes.unwrap() >= outcome.recovery.free_disk_bytes.unwrap());
+        assert!(
+            outcome.metrics.free_disk_bytes.unwrap() >= outcome.recovery.free_disk_bytes.unwrap()
+        );
     }
 
     #[test]
@@ -1300,23 +1337,38 @@ mod tests {
 
         // from only
         let params = SearchParams {
-            query: None, hostname: None, severity: None, severity_in: None,
-            app_name: None, from: Some("2026-06-01T00:00:00Z".into()), to: None, limit: None,
+            query: None,
+            hostname: None,
+            severity: None,
+            severity_in: None,
+            app_name: None,
+            from: Some("2026-06-01T00:00:00Z".into()),
+            to: None,
+            limit: None,
         };
         let results = search_logs(&pool, &params).unwrap();
         assert_eq!(results.len(), 2, "from filter should return mid + late");
 
         // to only
         let params = SearchParams {
-            query: None, hostname: None, severity: None, severity_in: None,
-            app_name: None, from: None, to: Some("2026-06-30T00:00:00Z".into()), limit: None,
+            query: None,
+            hostname: None,
+            severity: None,
+            severity_in: None,
+            app_name: None,
+            from: None,
+            to: Some("2026-06-30T00:00:00Z".into()),
+            limit: None,
         };
         let results = search_logs(&pool, &params).unwrap();
         assert_eq!(results.len(), 2, "to filter should return early + mid");
 
         // from + to (narrow window)
         let params = SearchParams {
-            query: None, hostname: None, severity: None, severity_in: None,
+            query: None,
+            hostname: None,
+            severity: None,
+            severity_in: None,
             app_name: None,
             from: Some("2026-06-01T00:00:00Z".into()),
             to: Some("2026-06-30T00:00:00Z".into()),
@@ -1341,7 +1393,11 @@ mod tests {
         assert_eq!(severity_to_num(""), None);
         assert_eq!(severity_to_num("ERROR"), None, "case sensitive");
         assert_eq!(severity_to_num("critical"), None, "not a valid syslog name");
-        assert_eq!(severity_to_num("warn"), None, "must be 'warning' not 'warn'");
+        assert_eq!(
+            severity_to_num("warn"),
+            None,
+            "must be 'warning' not 'warn'"
+        );
     }
 
     #[test]
@@ -1376,9 +1432,14 @@ mod tests {
         insert_logs_batch(&pool, &entries).unwrap();
 
         let params = SearchParams {
-            query: None, hostname: None, severity: None,
+            query: None,
+            hostname: None,
+            severity: None,
             severity_in: Some(vec!["emerg".into(), "err".into(), "warning".into()]),
-            app_name: None, from: None, to: None, limit: None,
+            app_name: None,
+            from: None,
+            to: None,
+            limit: None,
         };
         let results = search_logs(&pool, &params).unwrap();
         assert_eq!(results.len(), 3, "severity_in should match exactly 3");

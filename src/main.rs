@@ -63,7 +63,8 @@ async fn main() -> Result<()> {
         None
     };
 
-    let storage_handle = if config.storage.max_db_size_mb > 0 || config.storage.min_free_disk_mb > 0 {
+    let storage_handle = if config.storage.max_db_size_mb > 0 || config.storage.min_free_disk_mb > 0
+    {
         let storage_pool = pool.clone();
         let storage_config = config.storage.clone();
         let handle = tokio::spawn(async move {
@@ -74,12 +75,11 @@ async fn main() -> Result<()> {
                 interval.tick().await;
                 let pool = Arc::clone(&storage_pool);
                 let storage = storage_config.clone();
-                if let Err(e) = tokio::task::spawn_blocking(move || {
-                    db::enforce_storage_budget(&pool, &storage)
-                })
-                .await
-                .map_err(|e| anyhow::anyhow!("spawn_blocking error: {e}"))
-                .and_then(|r| r)
+                if let Err(e) =
+                    tokio::task::spawn_blocking(move || db::enforce_storage_budget(&pool, &storage))
+                        .await
+                        .map_err(|e| anyhow::anyhow!("spawn_blocking error: {e}"))
+                        .and_then(|r| r)
                 {
                     tracing::error!(error = %e, "Failed to enforce storage budget");
                 }

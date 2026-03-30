@@ -91,20 +91,48 @@ impl McpConfig {
 
 // --- Defaults ---
 
-fn default_max_message_size() -> usize { 8192 }
-fn default_max_tcp_connections() -> usize { 512 }
-fn default_tcp_idle_timeout_secs() -> u64 { 300 }
-fn default_batch_size() -> usize { 100 }
-fn default_flush_interval() -> u64 { 500 }
-fn default_pool_size() -> u32 { 4 }
-fn default_retention_days() -> u32 { 90 }
-fn default_max_db_size_mb() -> u64 { 1024 }
-fn default_recovery_db_size_mb() -> u64 { 900 }
-fn default_min_free_disk_mb() -> u64 { 512 }
-fn default_recovery_free_disk_mb() -> u64 { 768 }
-fn default_cleanup_interval_secs() -> u64 { 60 }
-fn default_true() -> bool { true }
-fn default_server_name() -> String { "syslog-mcp".into() }
+fn default_max_message_size() -> usize {
+    8192
+}
+fn default_max_tcp_connections() -> usize {
+    512
+}
+fn default_tcp_idle_timeout_secs() -> u64 {
+    300
+}
+fn default_batch_size() -> usize {
+    100
+}
+fn default_flush_interval() -> u64 {
+    500
+}
+fn default_pool_size() -> u32 {
+    4
+}
+fn default_retention_days() -> u32 {
+    90
+}
+fn default_max_db_size_mb() -> u64 {
+    1024
+}
+fn default_recovery_db_size_mb() -> u64 {
+    900
+}
+fn default_min_free_disk_mb() -> u64 {
+    512
+}
+fn default_recovery_free_disk_mb() -> u64 {
+    768
+}
+fn default_cleanup_interval_secs() -> u64 {
+    60
+}
+fn default_true() -> bool {
+    true
+}
+fn default_server_name() -> String {
+    "syslog-mcp".into()
+}
 
 impl Default for Config {
     fn default() -> Self {
@@ -155,7 +183,10 @@ impl Config {
         //    SYSLOG_MCP_* → MCP server + storage settings
         env_override_str("SYSLOG_HOST", &mut config.syslog.host);
         env_override_parse("SYSLOG_PORT", &mut config.syslog.port)?;
-        env_override_parse("SYSLOG_MAX_MESSAGE_SIZE", &mut config.syslog.max_message_size)?;
+        env_override_parse(
+            "SYSLOG_MAX_MESSAGE_SIZE",
+            &mut config.syslog.max_message_size,
+        )?;
         env_override_parse("SYSLOG_BATCH_SIZE", &mut config.syslog.batch_size)?;
         env_override_parse("SYSLOG_FLUSH_INTERVAL", &mut config.syslog.flush_interval)?;
 
@@ -164,8 +195,14 @@ impl Config {
         env_override_opt_str("SYSLOG_MCP_API_TOKEN", &mut config.mcp.api_token);
         env_override_path("SYSLOG_MCP_DB_PATH", &mut config.storage.db_path);
         env_override_parse("SYSLOG_MCP_POOL_SIZE", &mut config.storage.pool_size)?;
-        env_override_parse("SYSLOG_MCP_RETENTION_DAYS", &mut config.storage.retention_days)?;
-        env_override_parse("SYSLOG_MCP_MAX_DB_SIZE_MB", &mut config.storage.max_db_size_mb)?;
+        env_override_parse(
+            "SYSLOG_MCP_RETENTION_DAYS",
+            &mut config.storage.retention_days,
+        )?;
+        env_override_parse(
+            "SYSLOG_MCP_MAX_DB_SIZE_MB",
+            &mut config.storage.max_db_size_mb,
+        )?;
         env_override_parse(
             "SYSLOG_MCP_RECOVERY_DB_SIZE_MB",
             &mut config.storage.recovery_db_size_mb,
@@ -323,11 +360,19 @@ mod tests {
     fn defaults_are_applied_without_env_vars() {
         // Clear any leaked env vars
         for key in [
-            "SYSLOG_HOST", "SYSLOG_PORT", "SYSLOG_MCP_HOST", "SYSLOG_MCP_PORT",
-            "SYSLOG_MCP_DB_PATH", "SYSLOG_MCP_POOL_SIZE", "SYSLOG_MCP_RETENTION_DAYS",
-            "SYSLOG_MCP_API_TOKEN", "SYSLOG_MCP_MAX_DB_SIZE_MB",
-            "SYSLOG_MCP_RECOVERY_DB_SIZE_MB", "SYSLOG_MCP_MIN_FREE_DISK_MB",
-            "SYSLOG_MCP_RECOVERY_FREE_DISK_MB", "SYSLOG_MCP_CLEANUP_INTERVAL_SECS",
+            "SYSLOG_HOST",
+            "SYSLOG_PORT",
+            "SYSLOG_MCP_HOST",
+            "SYSLOG_MCP_PORT",
+            "SYSLOG_MCP_DB_PATH",
+            "SYSLOG_MCP_POOL_SIZE",
+            "SYSLOG_MCP_RETENTION_DAYS",
+            "SYSLOG_MCP_API_TOKEN",
+            "SYSLOG_MCP_MAX_DB_SIZE_MB",
+            "SYSLOG_MCP_RECOVERY_DB_SIZE_MB",
+            "SYSLOG_MCP_MIN_FREE_DISK_MB",
+            "SYSLOG_MCP_RECOVERY_FREE_DISK_MB",
+            "SYSLOG_MCP_CLEANUP_INTERVAL_SECS",
         ] {
             std::env::remove_var(key);
         }

@@ -24,12 +24,12 @@ Five modules in `src/`:
 | Module | Purpose |
 |--------|---------|
 | `config.rs` | Config: `config.toml` + env vars (`SYSLOG_*` and `SYSLOG_MCP_*` prefixes) |
-| `db.rs` | SQLite pool (r2d2 + rusqlite), FTS5 full-text index, schema init, retention purge |
-| `syslog.rs` | UDP + TCP listeners, RFC 3164/5424 parsing via `syslog_loose`, mpsc batch writer |
+| `db.rs` | SQLite pool (r2d2 + rusqlite), FTS5 full-text index, schema init, retention purge, storage-budget enforcement |
+| `syslog.rs` | UDP + TCP listeners, RFC 3164/5424 parsing via `syslog_loose`, mpsc batch writer, write blocking under storage pressure |
 | `mcp.rs` | Axum HTTP server, JSON-RPC 2.0 handler, all 6 MCP tool implementations |
-| `main.rs` | Wires everything, starts hourly retention purge task, graceful shutdown |
+| `main.rs` | Wires everything, starts hourly retention purge + storage-budget enforcement tasks, graceful shutdown |
 
-Tests: 51 unit tests across `syslog.rs` (29), `db.rs` (18), `config.rs` (4). Run with `cargo test`.
+Tests: unit tests across `syslog.rs`, `db.rs`, `config.rs`, and `mcp.rs`. Run with `cargo test`.
 
 ## Ports
 
@@ -47,7 +47,7 @@ Tests: 51 unit tests across `syslog.rs` (29), `db.rs` (18), `config.rs` (4). Run
 | `get_errors` | Error/warning summary grouped by host and severity |
 | `list_hosts` | All known hosts with first/last seen + log counts |
 | `correlate_events` | Cross-host event correlation in a time window |
-| `get_stats` | DB stats (total logs, size, time range) |
+| `get_stats` | DB stats (total logs, logical/physical size, free disk, configured thresholds, write-block state, time range) |
 
 ## Config
 
@@ -71,6 +71,11 @@ SYSLOG_MCP_API_TOKEN=your-secret-token  # optional; enables Bearer auth on /mcp
 SYSLOG_MCP_DB_PATH=/data/syslog.db
 SYSLOG_MCP_POOL_SIZE=4
 SYSLOG_MCP_RETENTION_DAYS=90     # 0 = keep forever
+SYSLOG_MCP_MAX_DB_SIZE_MB=1024        # 0 = disable logical DB size guard
+SYSLOG_MCP_RECOVERY_DB_SIZE_MB=900    # cleanup target after DB-size breach
+SYSLOG_MCP_MIN_FREE_DISK_MB=512       # 0 = disable free-disk guard
+SYSLOG_MCP_RECOVERY_FREE_DISK_MB=768  # cleanup target after free-disk breach
+SYSLOG_MCP_CLEANUP_INTERVAL_SECS=60   # storage-budget enforcement interval (>= 5)
 
 # Log verbosity (set to debug or trace for development)
 RUST_LOG=info
@@ -100,6 +105,7 @@ RUST_LOG=info
 - **SSE proxy** — nginx/SWAG must set `proxy_buffering off`, `chunked_transfer_encoding off`, and `proxy_http_version 1.1` for SSE (`GET /sse`) to stream correctly
 - **Data volume** — DB lives in `./data/` (bind mount); `*.db` is gitignored so the database files won't be committed
 - **Retention purge** — `retention_days` defaults to 90; logs older than 90 days are **permanently deleted hourly** with no recovery path. Set `SYSLOG_MCP_RETENTION_DAYS=0` to disable purging entirely.
+- **Storage guardrail** — Logical DB size and free-disk limits are enabled by default (`1024/900 MB` DB, `512/768 MB` free disk). When thresholds are breached, the server deletes oldest logs by `received_at` until recovery targets are met. If cleanup still cannot recover enough space, the batch writer blocks new writes until storage becomes healthy again.
 - **CEF hostname vs source_ip** — For UniFi CEF messages, the stored `hostname` comes from the CEF `UNIFIdeviceName` extension field (message body), **not** the syslog header. Any LAN device can spoof this value. `source_ip` is the only network-verified identity. See `src/syslog.rs` parse_syslog for the trust boundary.
 - **Batch writer failure** — If `insert_logs_batch` fails, the batch is retained for the next flush (up to 1000 entries, then discarded). A 250ms pause prevents hammering a failing DB. Persistent write failures will eventually cause data loss via the 10K-entry channel cap. The mpsc channel is in-memory only — no durable write-ahead log.
 - **correlate_events limit cap** — The `limit` parameter is silently capped at 999 (not 1000) because the implementation fetches `limit+1` rows to detect truncation, and `search_logs` hard-caps at 1000.

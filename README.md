@@ -15,7 +15,7 @@ Homelab syslog receiver + MCP server. One Rust binary that:
 | `get_errors` | Error/warning summary grouped by host and severity |
 | `list_hosts` | All known hosts with first/last seen + log counts |
 | `correlate_events` | Cross-host event correlation in a time window |
-| `get_stats` | Database stats (total logs, size, time range) |
+| `get_stats` | Database stats (total logs, logical/physical size, free disk, write-block state, time range) |
 
 ## Quick Start
 
@@ -45,11 +45,18 @@ SYSLOG_MCP_HOST=0.0.0.0    # MCP HTTP server host
 SYSLOG_MCP_PORT=3100        # MCP HTTP server port
 SYSLOG_MCP_DB_PATH=/data/syslog.db
 SYSLOG_MCP_RETENTION_DAYS=90   # logs older than this are permanently deleted hourly; set to 0 to keep forever
+SYSLOG_MCP_MAX_DB_SIZE_MB=1024        # 0 = disable logical DB size guard
+SYSLOG_MCP_RECOVERY_DB_SIZE_MB=900    # cleanup target after DB-size breach
+SYSLOG_MCP_MIN_FREE_DISK_MB=512       # 0 = disable free-disk guard
+SYSLOG_MCP_RECOVERY_FREE_DISK_MB=768  # cleanup target after free-disk breach
+SYSLOG_MCP_CLEANUP_INTERVAL_SECS=60   # storage-budget enforcement interval
 ```
 
 See `.env.example` for the complete list.
 
 > **Warning:** `retention_days` defaults to 90. Logs older than 90 days are **permanently and irreversibly deleted hourly**. Set `SYSLOG_MCP_RETENTION_DAYS=0` to disable.
+
+> **Warning:** The storage guardrail also performs **permanent oldest-first emergency deletion by `received_at`** when the DB exceeds `SYSLOG_MCP_MAX_DB_SIZE_MB` or the DB filesystem drops below `SYSLOG_MCP_MIN_FREE_DISK_MB`. If cleanup still cannot recover enough space, new syslog writes are blocked until storage becomes healthy again.
 
 > **Note (Docker):** When running in Docker, `config.toml` is NOT read — the binary reads from CWD (`/`) and the TOML is at a different path. Use environment variables via `.env` instead.
 

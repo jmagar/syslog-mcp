@@ -595,10 +595,7 @@ async fn tool_get_stats(state: &AppState, _args: Value) -> anyhow::Result<Value>
 /// Returns `Ok(None)` when `raw` is `None`. Returns a descriptive error when
 /// `raw` is `Some` but not valid RFC3339 — callers get a clear message rather
 /// than a silent wrong-result query against UTC-stored timestamps.
-fn parse_optional_timestamp(
-    raw: Option<&str>,
-    field_name: &str,
-) -> anyhow::Result<Option<String>> {
+fn parse_optional_timestamp(raw: Option<&str>, field_name: &str) -> anyhow::Result<Option<String>> {
     match raw {
         None => Ok(None),
         Some(s) => {

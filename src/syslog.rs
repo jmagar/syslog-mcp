@@ -47,7 +47,15 @@ pub async fn start(config: SyslogConfig, storage: StorageConfig, pool: Arc<DbPoo
     let max_tcp_connections = config.max_tcp_connections;
     let tcp_idle_timeout_secs = config.tcp_idle_timeout_secs;
     tokio::spawn(async move {
-        if let Err(e) = tcp_listener(&tcp_bind, tcp_tx, max_size, max_tcp_connections, tcp_idle_timeout_secs).await {
+        if let Err(e) = tcp_listener(
+            &tcp_bind,
+            tcp_tx,
+            max_size,
+            max_tcp_connections,
+            tcp_idle_timeout_secs,
+        )
+        .await
+        {
             error!(error = %e, "TCP syslog listener failed");
         }
     });
@@ -58,7 +66,11 @@ pub async fn start(config: SyslogConfig, storage: StorageConfig, pool: Arc<DbPoo
 }
 
 /// UDP syslog receiver
-async fn udp_listener(bind: &str, max_size: usize, tx: mpsc::Sender<db::LogBatchEntry>) -> Result<()> {
+async fn udp_listener(
+    bind: &str,
+    max_size: usize,
+    tx: mpsc::Sender<db::LogBatchEntry>,
+) -> Result<()> {
     let socket = UdpSocket::bind(bind).await?;
     info!(bind = %bind, "UDP syslog listener bound");
 
@@ -133,7 +145,11 @@ async fn handle_tcp_connection(
                     info!(peer = %addr, "syslog write channel cleared — backpressure lifted");
                     backpressure = false;
                 }
-                if tx.send(parse_syslog(&line, addr.to_string())).await.is_err() {
+                if tx
+                    .send(parse_syslog(&line, addr.to_string()))
+                    .await
+                    .is_err()
+                {
                     break;
                 }
             }
@@ -350,27 +366,27 @@ fn cef_ext_value(extensions: &str, key: &str) -> Option<String> {
     // Avoid format! allocations: check starts_with("key=") directly, then scan
     // for " key=" using manual byte search on the raw string slice.
     let key_eq_len = key.len() + 1; // length of "key="
-    let start = if extensions.starts_with(key)
-        && extensions.as_bytes().get(key.len()) == Some(&b'=')
-    {
-        key_eq_len
-    } else {
-        // Find " key=" without allocating: search for ' ' then check the slice after it
-        let bytes = extensions.as_bytes();
-        let key_bytes = key.as_bytes();
-        let mut found = None;
-        let mut i = 0;
-        while i + key_eq_len < bytes.len() {
-            if bytes[i] == b' ' && bytes[i + 1..].starts_with(key_bytes)
-                && bytes.get(i + 1 + key.len()) == Some(&b'=')
-            {
-                found = Some(i + 1 + key_eq_len);
-                break;
+    let start =
+        if extensions.starts_with(key) && extensions.as_bytes().get(key.len()) == Some(&b'=') {
+            key_eq_len
+        } else {
+            // Find " key=" without allocating: search for ' ' then check the slice after it
+            let bytes = extensions.as_bytes();
+            let key_bytes = key.as_bytes();
+            let mut found = None;
+            let mut i = 0;
+            while i + key_eq_len < bytes.len() {
+                if bytes[i] == b' '
+                    && bytes[i + 1..].starts_with(key_bytes)
+                    && bytes.get(i + 1 + key.len()) == Some(&b'=')
+                {
+                    found = Some(i + 1 + key_eq_len);
+                    break;
+                }
+                i += 1;
             }
-            i += 1;
-        }
-        found?
-    };
+            found?
+        };
     let rest = &extensions[start..];
 
     let mut end = rest.len();
@@ -418,14 +434,24 @@ struct CefFields {
 fn extract_cef_fields(text: &str) -> CefFields {
     let cef_pos = match text.find("CEF:") {
         Some(p) => p,
-        None => return CefFields { hostname: None, app_name: None, message: None },
+        None => {
+            return CefFields {
+                hostname: None,
+                app_name: None,
+                message: None,
+            }
+        }
     };
 
     let cef_str = &text[cef_pos..];
     // CEF header has exactly 8 pipe-delimited fields; splitn keeps the rest in field 7
     let parts: Vec<&str> = cef_str.splitn(8, '|').collect();
     if parts.len() < 8 {
-        return CefFields { hostname: None, app_name: None, message: None };
+        return CefFields {
+            hostname: None,
+            app_name: None,
+            message: None,
+        };
     }
 
     let event_name = parts[5].to_string();
@@ -436,7 +462,11 @@ fn extract_cef_fields(text: &str) -> CefFields {
 
     let message = cef_ext_value(extensions, "msg").unwrap_or_else(|| cef_str.to_string());
 
-    CefFields { hostname, app_name: Some(event_name), message: Some(message) }
+    CefFields {
+        hostname,
+        app_name: Some(event_name),
+        message: Some(message),
+    }
 }
 
 /// Parse a raw syslog message (RFC 3164 / RFC 5424 / loose).
@@ -495,58 +525,58 @@ fn parse_syslog(raw: &str, source_ip: String) -> db::LogBatchEntry {
     //   4. The final `else` branch is the standard RFC 3164/5424 path and must
     //      remain the last arm — it handles all unrecognised messages.
     // ───────────────────────────────────────────────────────────────────────────
-    let (hostname, app_name, message) =
-        if looks_like_timestamp(&raw_hostname)
-            && (raw_app_name.as_deref().unwrap_or("").contains("CEF:")
-                || raw_message.contains("CEF:"))
-        {
-            // SECURITY NOTE: The hostname stored here is extracted from the CEF message
-            // body (UNIFIdeviceName extension field), NOT validated against the network
-            // source. Any LAN device can craft a CEF message with an arbitrary
-            // UNIFIdeviceName and impersonate a legitimate host. `source_ip` is the
-            // only trustworthy identity — it reflects the actual network sender address
-            // recorded by the OS at socket accept time and cannot be spoofed by message
-            // content.
-            //
-            // Reconstruct full_text only for CEF messages (syslog_loose splits
-            // "The Mothership CEF:…" across app_name and message for UniFi RFC 5424).
-            let full_text = match &raw_app_name {
-                Some(app) => format!("{app} {raw_message}"),
-                None => raw_message.clone(),
-            };
-            let cef = extract_cef_fields(&full_text);
-            if cef.hostname.is_none() && cef.app_name.is_none() && cef.message.is_none() {
-                let preview = &full_text[..full_text.len().min(200)];
-                warn!(msg = preview, "CEF heuristic triggered but all fields are None — malformed CEF body, using raw fallback");
-            }
-            // When the CEF-extracted hostname differs from the syslog-header hostname,
-            // emit a debug log to aid forensic analysis. A mismatch is normal for
-            // UniFi (header has a timestamp), but an unexpected mismatch from a device
-            // that does not put a timestamp in the header may indicate spoofing.
-            if let Some(ref cef_host) = cef.hostname {
-                if !raw_hostname.is_empty() && cef_host != &raw_hostname {
-                    debug!(
-                        cef_hostname = %cef_host,
-                        syslog_header_hostname = %raw_hostname,
-                        source_ip = %source_ip,
-                        "CEF hostname differs from syslog-header hostname; \
-                         CEF value is from message content and is not network-verified"
-                    );
-                }
-            }
-            (
-                truncate(&cef.hostname.unwrap_or_else(|| raw_hostname.clone()), 255).to_string(),
-                cef.app_name.or(raw_app_name).map(|s| truncate(&s, 128).to_string()),
-                truncate(&cef.message.unwrap_or(raw_message), 8192).to_string(),
-            )
-        } else {
-            let hostname = if raw_hostname.is_empty() {
-                "unknown".to_string()
-            } else {
-                raw_hostname
-            };
-            (hostname, raw_app_name, raw_message)
+    let (hostname, app_name, message) = if looks_like_timestamp(&raw_hostname)
+        && (raw_app_name.as_deref().unwrap_or("").contains("CEF:") || raw_message.contains("CEF:"))
+    {
+        // SECURITY NOTE: The hostname stored here is extracted from the CEF message
+        // body (UNIFIdeviceName extension field), NOT validated against the network
+        // source. Any LAN device can craft a CEF message with an arbitrary
+        // UNIFIdeviceName and impersonate a legitimate host. `source_ip` is the
+        // only trustworthy identity — it reflects the actual network sender address
+        // recorded by the OS at socket accept time and cannot be spoofed by message
+        // content.
+        //
+        // Reconstruct full_text only for CEF messages (syslog_loose splits
+        // "The Mothership CEF:…" across app_name and message for UniFi RFC 5424).
+        let full_text = match &raw_app_name {
+            Some(app) => format!("{app} {raw_message}"),
+            None => raw_message.clone(),
         };
+        let cef = extract_cef_fields(&full_text);
+        if cef.hostname.is_none() && cef.app_name.is_none() && cef.message.is_none() {
+            let preview = &full_text[..full_text.len().min(200)];
+            warn!(msg = preview, "CEF heuristic triggered but all fields are None — malformed CEF body, using raw fallback");
+        }
+        // When the CEF-extracted hostname differs from the syslog-header hostname,
+        // emit a debug log to aid forensic analysis. A mismatch is normal for
+        // UniFi (header has a timestamp), but an unexpected mismatch from a device
+        // that does not put a timestamp in the header may indicate spoofing.
+        if let Some(ref cef_host) = cef.hostname {
+            if !raw_hostname.is_empty() && cef_host != &raw_hostname {
+                debug!(
+                    cef_hostname = %cef_host,
+                    syslog_header_hostname = %raw_hostname,
+                    source_ip = %source_ip,
+                    "CEF hostname differs from syslog-header hostname; \
+                     CEF value is from message content and is not network-verified"
+                );
+            }
+        }
+        (
+            truncate(&cef.hostname.unwrap_or_else(|| raw_hostname.clone()), 255).to_string(),
+            cef.app_name
+                .or(raw_app_name)
+                .map(|s| truncate(&s, 128).to_string()),
+            truncate(&cef.message.unwrap_or(raw_message), 8192).to_string(),
+        )
+    } else {
+        let hostname = if raw_hostname.is_empty() {
+            "unknown".to_string()
+        } else {
+            raw_hostname
+        };
+        (hostname, raw_app_name, raw_message)
+    };
 
     db::LogBatchEntry {
         timestamp,
@@ -712,7 +742,8 @@ mod tests {
         let cef = extract_cef_fields(text);
         assert_eq!(cef.hostname, Some("The Mothership".to_string()));
         assert_eq!(cef.app_name, Some("Admin Made Config Changes".to_string()));
-        assert!(cef.message
+        assert!(cef
+            .message
             .unwrap()
             .starts_with("Jacob Magar changed Syslog Settings"));
     }
@@ -782,7 +813,8 @@ mod tests {
     fn test_parse_syslog_cef_all_none_no_panic() {
         // CEF heuristic fires (timestamp hostname + "CEF:" in body) but body is malformed
         // (< 8 pipe fields). Should not panic and should fall back to raw fields.
-        let raw = "<14>1 2026-01-01T00:00:00Z 2026-01-01T00:00:00Z App - - - body with CEF: but no pipes";
+        let raw =
+            "<14>1 2026-01-01T00:00:00Z 2026-01-01T00:00:00Z App - - - body with CEF: but no pipes";
         let parsed = parse_syslog(raw, "192.168.1.1:514".to_string());
         // Should fall back gracefully — no panic
         assert!(!parsed.hostname.is_empty());
