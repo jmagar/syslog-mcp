@@ -345,8 +345,11 @@ pub fn purge_old_logs(pool: &DbPool, retention_days: u32) -> Result<usize> {
     }
 
     // Incremental FTS merge — much shorter write-lock duration than full rebuild.
+    // Best-effort: a small/empty index may return an error; log and continue.
     if total_deleted > 0 {
-        conn.execute_batch("INSERT INTO logs_fts(logs_fts) VALUES('merge=500,250');")?;
+        if let Err(e) = conn.execute_batch("INSERT INTO logs_fts(logs_fts) VALUES('merge=500,250');") {
+            tracing::warn!(error = %e, "FTS merge skipped (non-fatal)");
+        }
     }
 
     tracing::info!(deleted = total_deleted, cutoff = %cutoff, "Purged old logs");
@@ -452,4 +455,164 @@ fn map_row(row: &rusqlite::Row) -> rusqlite::Result<LogEntry> {
         message: row.get(7)?,
         received_at: row.get(8)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Create an isolated test pool using a temp file (not :memory: — FTS5 needs file)
+    fn test_pool() -> (DbPool, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let config = StorageConfig {
+            db_path,
+            pool_size: 1,
+            retention_days: 90,
+            wal_mode: false, // WAL not needed for tests
+        };
+        let pool = init_pool(&config).unwrap();
+        (pool, dir) // keep dir alive for test duration
+    }
+
+    fn make_entry(ts: &str, host: &str, severity: &str, msg: &str) -> LogBatchEntry {
+        (
+            ts.to_string(),
+            host.to_string(),
+            None,
+            severity.to_string(),
+            None,
+            None,
+            msg.to_string(),
+            msg.to_string(),
+        )
+    }
+
+    #[test]
+    fn test_insert_and_tail() {
+        let (pool, _dir) = test_pool();
+        let entries = vec![
+            make_entry("2026-01-01T00:00:01Z", "host-a", "err", "first error"),
+            make_entry("2026-01-01T00:00:02Z", "host-a", "info", "second info"),
+            make_entry("2026-01-01T00:00:03Z", "host-b", "warning", "third warning"),
+        ];
+        let n = insert_logs_batch(&pool, &entries).unwrap();
+        assert_eq!(n, 3);
+
+        let rows = tail_logs(&pool, None, None, 10).unwrap();
+        assert_eq!(rows.len(), 3);
+    }
+
+    #[test]
+    fn test_host_aggregation() {
+        let (pool, _dir) = test_pool();
+        let entries = vec![
+            make_entry("2026-01-01T00:00:01Z", "host-a", "info", "msg1"),
+            make_entry("2026-01-01T00:00:02Z", "host-a", "info", "msg2"),
+            make_entry("2026-01-01T00:00:03Z", "host-b", "info", "msg3"),
+        ];
+        insert_logs_batch(&pool, &entries).unwrap();
+
+        let hosts = list_hosts(&pool).unwrap();
+        assert_eq!(hosts.len(), 2);
+        // host-a should have log_count = 2
+        let ha = hosts.iter().find(|h| h["hostname"] == "host-a").unwrap();
+        assert_eq!(ha["log_count"], 2);
+    }
+
+    #[test]
+    fn test_search_fts() {
+        let (pool, _dir) = test_pool();
+        let entries = vec![
+            make_entry("2026-01-01T00:00:01Z", "host-a", "err", "disk full on /dev/sda"),
+            make_entry("2026-01-01T00:00:02Z", "host-b", "info", "connection established"),
+        ];
+        insert_logs_batch(&pool, &entries).unwrap();
+
+        let params = SearchParams {
+            query: Some("disk".to_string()),
+            hostname: None,
+            severity: None,
+            severity_in: None,
+            app_name: None,
+            from: None,
+            to: None,
+            limit: None,
+        };
+        let results = search_logs(&pool, &params).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].message.contains("disk full"));
+    }
+
+    #[test]
+    fn test_search_invalid_fts_returns_error() {
+        let (pool, _dir) = test_pool();
+        // FTS5 treats bare parentheses as a syntax error
+        let params = SearchParams {
+            query: Some("(invalid fts syntax".to_string()),
+            hostname: None,
+            severity: None,
+            severity_in: None,
+            app_name: None,
+            from: None,
+            to: None,
+            limit: None,
+        };
+        let result = search_logs(&pool, &params);
+        assert!(result.is_err(), "invalid FTS5 query should return Err");
+    }
+
+    #[test]
+    fn test_purge_old_logs_removes_old() {
+        let (pool, _dir) = test_pool();
+        let entries = vec![
+            // Old entry — should be purged
+            make_entry("2020-01-01T00:00:00Z", "host-a", "info", "old message"),
+            // Recent entry — should survive
+            make_entry("2099-01-01T00:00:00Z", "host-a", "info", "future message"),
+        ];
+        insert_logs_batch(&pool, &entries).unwrap();
+
+        let deleted = purge_old_logs(&pool, 90).unwrap();
+        assert_eq!(deleted, 1, "should have deleted exactly the old entry");
+
+        let remaining = tail_logs(&pool, None, None, 10).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].message, "future message");
+    }
+
+    #[test]
+    fn test_purge_zero_retention_noop() {
+        let (pool, _dir) = test_pool();
+        let entries = vec![make_entry("2020-01-01T00:00:00Z", "host-a", "info", "old")];
+        insert_logs_batch(&pool, &entries).unwrap();
+
+        let deleted = purge_old_logs(&pool, 0).unwrap();
+        assert_eq!(deleted, 0, "retention_days=0 should be a no-op");
+    }
+
+    #[test]
+    fn test_get_stats_empty_db() {
+        let (pool, _dir) = test_pool();
+        let stats = get_stats(&pool).unwrap();
+        assert_eq!(stats["total_logs"], 0);
+        assert_eq!(stats["total_hosts"], 0);
+        // oldest_log and newest_log should be null on empty DB
+        assert!(stats["oldest_log"].is_null());
+        assert!(stats["newest_log"].is_null());
+    }
+
+    #[test]
+    fn test_tail_filter_by_host() {
+        let (pool, _dir) = test_pool();
+        let entries = vec![
+            make_entry("2026-01-01T00:00:01Z", "host-a", "info", "from a"),
+            make_entry("2026-01-01T00:00:02Z", "host-b", "info", "from b"),
+        ];
+        insert_logs_batch(&pool, &entries).unwrap();
+
+        let rows = tail_logs(&pool, Some("host-a"), None, 10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].hostname, "host-a");
+    }
 }
