@@ -22,6 +22,7 @@ desktop.ini
 # Docs (generated, session-specific)
 docs/reports
 docs/superpowers
+.omc/
 
 # Logs
 *.log

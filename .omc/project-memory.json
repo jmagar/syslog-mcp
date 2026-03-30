@@ -137,8 +137,8 @@
     },
     {
       "path": "Cargo.toml",
-      "accessCount": 27,
-      "lastAccessed": 1774884005801,
+      "accessCount": 29,
+      "lastAccessed": 1774902027019,
       "type": "file"
     },
     {
@@ -259,6 +259,12 @@
       "path": "docs/sessions/2026-03-30-bulk-bead-resolution-v017.md",
       "accessCount": 1,
       "lastAccessed": 1774880058425,
+      "type": "file"
+    },
+    {
+      "path": "docs/sessions/2026-03-30-claude-md-audit.md",
+      "accessCount": 1,
+      "lastAccessed": 1774884121137,
       "type": "file"
     }
   ],
