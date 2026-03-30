@@ -210,16 +210,19 @@ async fn dispatch(state: &AppState, req: &JsonRpcRequest) -> JsonRpcResponse {
                         }]
                     }),
                 ),
-                Err(e) => JsonRpcResponse::success(
-                    id,
-                    json!({
-                        "content": [{
-                            "type": "text",
-                            "text": format!("Error: {e}")
-                        }],
-                        "isError": true
-                    }),
-                ),
+                Err(e) => {
+                    tracing::error!(error = %e, tool = %tool_name, "Tool execution failed");
+                    JsonRpcResponse::success(
+                        id,
+                        json!({
+                            "content": [{
+                                "type": "text",
+                                "text": "Tool execution failed"
+                            }],
+                            "isError": true
+                        }),
+                    )
+                }
             }
         }
 
