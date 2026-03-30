@@ -26,6 +26,12 @@ services:
       retries: 3
       start_period: 10s
 
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+
     labels:
       - "swag=syslog-mcp"  # For your SWAG reverse proxy
 
