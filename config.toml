@@ -13,6 +13,11 @@ db_path = "/data/syslog.db"
 pool_size = 4
 retention_days = 90   # 0 = keep forever
 wal_mode = true
+max_db_size_mb = 1024         # 0 = disable DB logical-size guard
+recovery_db_size_mb = 900     # cleanup target after DB-size breach
+min_free_disk_mb = 512        # 0 = disable free-disk guard
+recovery_free_disk_mb = 768   # cleanup target after free-disk breach
+cleanup_interval_secs = 60    # storage-budget enforcement interval
 
 [mcp]
 host = "0.0.0.0"

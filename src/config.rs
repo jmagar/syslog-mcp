@@ -51,6 +51,21 @@ pub struct StorageConfig {
     /// WAL mode (recommended for concurrent reads)
     #[serde(default = "default_true")]
     pub wal_mode: bool,
+    /// Soft limit for logical DB size in MB (0 = disabled)
+    #[serde(default = "default_max_db_size_mb")]
+    pub max_db_size_mb: u64,
+    /// Recovery target for logical DB size in MB
+    #[serde(default = "default_recovery_db_size_mb")]
+    pub recovery_db_size_mb: u64,
+    /// Minimum free disk in MB for the DB filesystem (0 = disabled)
+    #[serde(default = "default_min_free_disk_mb")]
+    pub min_free_disk_mb: u64,
+    /// Recovery target for free disk in MB
+    #[serde(default = "default_recovery_free_disk_mb")]
+    pub recovery_free_disk_mb: u64,
+    /// Storage budget enforcement interval in seconds
+    #[serde(default = "default_cleanup_interval_secs")]
+    pub cleanup_interval_secs: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,6 +98,11 @@ fn default_batch_size() -> usize { 100 }
 fn default_flush_interval() -> u64 { 500 }
 fn default_pool_size() -> u32 { 4 }
 fn default_retention_days() -> u32 { 90 }
+fn default_max_db_size_mb() -> u64 { 1024 }
+fn default_recovery_db_size_mb() -> u64 { 900 }
+fn default_min_free_disk_mb() -> u64 { 512 }
+fn default_recovery_free_disk_mb() -> u64 { 768 }
+fn default_cleanup_interval_secs() -> u64 { 60 }
 fn default_true() -> bool { true }
 fn default_server_name() -> String { "syslog-mcp".into() }
 
@@ -103,6 +123,11 @@ impl Default for Config {
                 pool_size: default_pool_size(),
                 retention_days: default_retention_days(),
                 wal_mode: true,
+                max_db_size_mb: default_max_db_size_mb(),
+                recovery_db_size_mb: default_recovery_db_size_mb(),
+                min_free_disk_mb: default_min_free_disk_mb(),
+                recovery_free_disk_mb: default_recovery_free_disk_mb(),
+                cleanup_interval_secs: default_cleanup_interval_secs(),
             },
             mcp: McpConfig {
                 host: "0.0.0.0".into(),
@@ -140,11 +165,29 @@ impl Config {
         env_override_path("SYSLOG_MCP_DB_PATH", &mut config.storage.db_path);
         env_override_parse("SYSLOG_MCP_POOL_SIZE", &mut config.storage.pool_size)?;
         env_override_parse("SYSLOG_MCP_RETENTION_DAYS", &mut config.storage.retention_days)?;
+        env_override_parse("SYSLOG_MCP_MAX_DB_SIZE_MB", &mut config.storage.max_db_size_mb)?;
+        env_override_parse(
+            "SYSLOG_MCP_RECOVERY_DB_SIZE_MB",
+            &mut config.storage.recovery_db_size_mb,
+        )?;
+        env_override_parse(
+            "SYSLOG_MCP_MIN_FREE_DISK_MB",
+            &mut config.storage.min_free_disk_mb,
+        )?;
+        env_override_parse(
+            "SYSLOG_MCP_RECOVERY_FREE_DISK_MB",
+            &mut config.storage.recovery_free_disk_mb,
+        )?;
+        env_override_parse(
+            "SYSLOG_MCP_CLEANUP_INTERVAL_SECS",
+            &mut config.storage.cleanup_interval_secs,
+        )?;
 
         // Validation
         if config.storage.pool_size == 0 {
             return Err(anyhow::anyhow!("SYSLOG_MCP_POOL_SIZE must be > 0"));
         }
+        validate_storage_config(&config.storage)?;
         validate_host(&config.syslog.host)?;
         validate_host(&config.mcp.host)?;
 
@@ -203,6 +246,50 @@ fn validate_host(host: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn validate_storage_config(storage: &StorageConfig) -> anyhow::Result<()> {
+    if storage.max_db_size_mb > 0 {
+        if storage.recovery_db_size_mb == 0 {
+            return Err(anyhow::anyhow!(
+                "recovery_db_size_mb must be > 0 when max_db_size_mb is enabled"
+            ));
+        }
+        if storage.recovery_db_size_mb >= storage.max_db_size_mb {
+            return Err(anyhow::anyhow!(
+                "recovery_db_size_mb must be lower than max_db_size_mb"
+            ));
+        }
+    } else if storage.recovery_db_size_mb != 0 {
+        return Err(anyhow::anyhow!(
+            "recovery_db_size_mb must be 0 when max_db_size_mb is disabled"
+        ));
+    }
+
+    if storage.min_free_disk_mb > 0 {
+        if storage.recovery_free_disk_mb == 0 {
+            return Err(anyhow::anyhow!(
+                "recovery_free_disk_mb must be > 0 when min_free_disk_mb is enabled"
+            ));
+        }
+        if storage.recovery_free_disk_mb <= storage.min_free_disk_mb {
+            return Err(anyhow::anyhow!(
+                "recovery_free_disk_mb must be higher than min_free_disk_mb"
+            ));
+        }
+    } else if storage.recovery_free_disk_mb != 0 {
+        return Err(anyhow::anyhow!(
+            "recovery_free_disk_mb must be 0 when min_free_disk_mb is disabled"
+        ));
+    }
+
+    if storage.cleanup_interval_secs < 5 {
+        return Err(anyhow::anyhow!(
+            "cleanup_interval_secs must be at least 5 seconds"
+        ));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,7 +325,9 @@ mod tests {
         for key in [
             "SYSLOG_HOST", "SYSLOG_PORT", "SYSLOG_MCP_HOST", "SYSLOG_MCP_PORT",
             "SYSLOG_MCP_DB_PATH", "SYSLOG_MCP_POOL_SIZE", "SYSLOG_MCP_RETENTION_DAYS",
-            "SYSLOG_MCP_API_TOKEN",
+            "SYSLOG_MCP_API_TOKEN", "SYSLOG_MCP_MAX_DB_SIZE_MB",
+            "SYSLOG_MCP_RECOVERY_DB_SIZE_MB", "SYSLOG_MCP_MIN_FREE_DISK_MB",
+            "SYSLOG_MCP_RECOVERY_FREE_DISK_MB", "SYSLOG_MCP_CLEANUP_INTERVAL_SECS",
         ] {
             std::env::remove_var(key);
         }
@@ -253,6 +342,11 @@ mod tests {
         assert_eq!(cfg.storage.pool_size, 4);
         assert_eq!(cfg.storage.retention_days, 90);
         assert!(cfg.storage.wal_mode);
+        assert_eq!(cfg.storage.max_db_size_mb, 1024);
+        assert_eq!(cfg.storage.recovery_db_size_mb, 900);
+        assert_eq!(cfg.storage.min_free_disk_mb, 512);
+        assert_eq!(cfg.storage.recovery_free_disk_mb, 768);
+        assert_eq!(cfg.storage.cleanup_interval_secs, 60);
         assert!(cfg.mcp.api_token.is_none());
     }
 
@@ -264,5 +358,57 @@ mod tests {
         std::env::remove_var("SYSLOG_HOST");
 
         assert!(result.is_err(), "Host containing ':' should be rejected");
+    }
+
+    #[test]
+    fn defaults_include_storage_budget_settings() {
+        let cfg = Config::default();
+        assert_eq!(cfg.storage.max_db_size_mb, 1024);
+        assert_eq!(cfg.storage.recovery_db_size_mb, 900);
+        assert_eq!(cfg.storage.min_free_disk_mb, 512);
+        assert_eq!(cfg.storage.recovery_free_disk_mb, 768);
+        assert_eq!(cfg.storage.cleanup_interval_secs, 60);
+    }
+
+    #[test]
+    #[serial]
+    fn env_var_overrides_storage_budget_settings() {
+        std::env::set_var("SYSLOG_MCP_MAX_DB_SIZE_MB", "2048");
+        std::env::set_var("SYSLOG_MCP_RECOVERY_DB_SIZE_MB", "1800");
+        std::env::set_var("SYSLOG_MCP_MIN_FREE_DISK_MB", "1024");
+        std::env::set_var("SYSLOG_MCP_RECOVERY_FREE_DISK_MB", "1536");
+        std::env::set_var("SYSLOG_MCP_CLEANUP_INTERVAL_SECS", "120");
+
+        let result = Config::load();
+
+        for key in [
+            "SYSLOG_MCP_MAX_DB_SIZE_MB",
+            "SYSLOG_MCP_RECOVERY_DB_SIZE_MB",
+            "SYSLOG_MCP_MIN_FREE_DISK_MB",
+            "SYSLOG_MCP_RECOVERY_FREE_DISK_MB",
+            "SYSLOG_MCP_CLEANUP_INTERVAL_SECS",
+        ] {
+            std::env::remove_var(key);
+        }
+
+        let cfg = result.expect("Config::load() should succeed");
+        assert_eq!(cfg.storage.max_db_size_mb, 2048);
+        assert_eq!(cfg.storage.recovery_db_size_mb, 1800);
+        assert_eq!(cfg.storage.min_free_disk_mb, 1024);
+        assert_eq!(cfg.storage.recovery_free_disk_mb, 1536);
+        assert_eq!(cfg.storage.cleanup_interval_secs, 120);
+    }
+
+    #[test]
+    #[serial]
+    fn rejects_invalid_storage_budget_relationships() {
+        std::env::set_var("SYSLOG_MCP_MAX_DB_SIZE_MB", "100");
+        std::env::set_var("SYSLOG_MCP_RECOVERY_DB_SIZE_MB", "100");
+        let result = Config::load();
+        std::env::remove_var("SYSLOG_MCP_MAX_DB_SIZE_MB");
+        std::env::remove_var("SYSLOG_MCP_RECOVERY_DB_SIZE_MB");
+
+        let err = result.expect_err("Config::load() should reject invalid recovery_db_size_mb");
+        assert!(err.to_string().contains("recovery_db_size_mb"));
     }
 }
