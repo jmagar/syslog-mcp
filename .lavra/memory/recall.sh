@@ -148,7 +148,6 @@ if command -v sqlite3 &>/dev/null; then
       RESULTS=""
 
       while IFS= read -r ROW; do
-        local type content bead tags
         type=$(echo "$ROW" | jq -r '.type // empty' 2>/dev/null)
         [[ -z "$type" ]] && continue
 
