@@ -36,7 +36,7 @@ async fn main() -> Result<()> {
     let pool = Arc::new(db::init_pool(&config.storage)?);
 
     // Start syslog listeners
-    syslog::start(config.syslog.clone(), pool.clone()).await?;
+    syslog::start(config.syslog.clone(), config.storage.clone(), pool.clone()).await?;
 
     // Start retention purge task
     let retention_days = config.storage.retention_days;
@@ -58,6 +58,37 @@ async fn main() -> Result<()> {
             }
         });
         info!(retention_days, "Log retention purge task started (hourly)");
+        Some(handle)
+    } else {
+        None
+    };
+
+    let storage_handle = if config.storage.max_db_size_mb > 0 || config.storage.min_free_disk_mb > 0 {
+        let storage_pool = pool.clone();
+        let storage_config = config.storage.clone();
+        let handle = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(
+                storage_config.cleanup_interval_secs,
+            ));
+            loop {
+                interval.tick().await;
+                let pool = Arc::clone(&storage_pool);
+                let storage = storage_config.clone();
+                if let Err(e) = tokio::task::spawn_blocking(move || {
+                    db::enforce_storage_budget(&pool, &storage)
+                })
+                .await
+                .map_err(|e| anyhow::anyhow!("spawn_blocking error: {e}"))
+                .and_then(|r| r)
+                {
+                    tracing::error!(error = %e, "Failed to enforce storage budget");
+                }
+            }
+        });
+        info!(
+            cleanup_interval_secs = config.storage.cleanup_interval_secs,
+            "Storage budget enforcement task started"
+        );
         Some(handle)
     } else {
         None
@@ -99,6 +130,10 @@ async fn main() -> Result<()> {
         .await?;
 
     if let Some(handle) = purge_handle {
+        handle.abort();
+        let _ = handle.await;
+    }
+    if let Some(handle) = storage_handle {
         handle.abort();
         let _ = handle.await;
     }

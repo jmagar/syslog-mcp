@@ -6,7 +6,7 @@ use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::{mpsc, Semaphore};
 use tracing::{debug, error, info, warn};
 
-use crate::config::SyslogConfig;
+use crate::config::{StorageConfig, SyslogConfig};
 use crate::db::{self, DbPool};
 
 /// Syslog facility names (RFC 5424)
@@ -17,15 +17,16 @@ const FACILITIES: &[&str] = &[
 ];
 
 /// Start syslog listeners (UDP + TCP) and the write batcher
-pub async fn start(config: SyslogConfig, pool: Arc<DbPool>) -> Result<()> {
+pub async fn start(config: SyslogConfig, storage: StorageConfig, pool: Arc<DbPool>) -> Result<()> {
     let (tx, rx) = mpsc::channel::<db::LogBatchEntry>(10_000);
 
     // Spawn the batched writer
     let writer_pool = pool.clone();
+    let writer_storage = storage.clone();
     let batch_size = config.batch_size;
     let flush_interval = tokio::time::Duration::from_millis(config.flush_interval);
     tokio::spawn(async move {
-        batch_writer(rx, writer_pool, batch_size, flush_interval).await;
+        batch_writer(rx, writer_pool, writer_storage, batch_size, flush_interval).await;
     });
 
     let bind_addr = config.bind_addr();
@@ -197,11 +198,12 @@ async fn tcp_listener(
 async fn batch_writer(
     mut rx: mpsc::Receiver<db::LogBatchEntry>,
     pool: Arc<DbPool>,
+    storage: StorageConfig,
     batch_size: usize,
     flush_interval: tokio::time::Duration,
 ) {
-
     let mut batch: Vec<db::LogBatchEntry> = Vec::with_capacity(batch_size);
+    let mut storage_blocked = false;
 
     loop {
         let deadline = tokio::time::sleep(flush_interval);
@@ -220,7 +222,7 @@ async fn batch_writer(
                         None => {
                             // Channel closed, flush remaining
                             if !batch.is_empty() {
-                                flush_batch(&pool, &mut batch).await;
+                                flush_batch(&pool, &storage, &mut batch, &mut storage_blocked).await;
                             }
                             info!("Write channel closed, exiting batch writer");
                             return;
@@ -234,31 +236,63 @@ async fn batch_writer(
         }
 
         if !batch.is_empty() {
-            flush_batch(&pool, &mut batch).await;
+            flush_batch(&pool, &storage, &mut batch, &mut storage_blocked).await;
         }
     }
 }
 
-async fn flush_batch(pool: &Arc<DbPool>, batch: &mut Vec<db::LogBatchEntry>) {
+async fn flush_batch(
+    pool: &Arc<DbPool>,
+    storage: &StorageConfig,
+    batch: &mut Vec<db::LogBatchEntry>,
+    storage_blocked: &mut bool,
+) {
     let pool = Arc::clone(pool);
+    let storage = storage.clone();
     let batch_to_write = std::mem::take(batch);
     let count = batch_to_write.len();
     match tokio::task::spawn_blocking(move || {
-        // Return the batch back on error so the caller can retain it for the next flush
+        let enforcement = match db::enforce_storage_budget(&pool, &storage) {
+            Ok(enforcement) => enforcement,
+            Err(e) => return Err((e, batch_to_write, false)),
+        };
+        if enforcement.write_blocked {
+            return Err((
+                anyhow::anyhow!(
+                    "storage budget exceeded: logical_db_size_bytes={}, free_disk_bytes={:?}",
+                    enforcement.metrics.logical_db_size_bytes,
+                    enforcement.metrics.free_disk_bytes
+                ),
+                batch_to_write,
+                true,
+            ));
+        }
+
         match db::insert_logs_batch(&pool, &batch_to_write) {
             Ok(n) => Ok(n),
-            Err(e) => Err((e, batch_to_write)),
+            Err(e) => Err((e, batch_to_write, false)),
         }
     })
     .await
     {
         Ok(Ok(n)) => {
+            if *storage_blocked {
+                info!(count = n, "storage budget recovered — writes resumed");
+                *storage_blocked = false;
+            }
             debug!(count = n, "Flushed log batch");
         }
-        Ok(Err((e, failed_batch))) => {
+        Ok(Err((e, failed_batch, blocked_by_storage))) => {
             // Cap retained batch to prevent unbounded growth on persistent write failures
             if failed_batch.len() < 1000 {
-                error!(error = %e, count, "Failed to flush log batch — retaining for next flush");
+                if blocked_by_storage {
+                    if !*storage_blocked {
+                        error!(error = %e, count, "Storage budget exceeded — retaining batch until space recovers");
+                        *storage_blocked = true;
+                    }
+                } else {
+                    error!(error = %e, count, "Failed to flush log batch — retaining for next flush");
+                }
                 *batch = failed_batch;
                 // Brief pause before the next flush attempt to avoid hammering a failing DB
                 tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
@@ -530,6 +564,67 @@ fn parse_syslog(raw: &str, source_ip: String) -> db::LogBatchEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::StorageConfig;
+
+    fn test_storage_config(db_path: std::path::PathBuf) -> StorageConfig {
+        StorageConfig {
+            db_path,
+            pool_size: 1,
+            retention_days: 90,
+            wal_mode: false,
+            max_db_size_mb: 1024,
+            recovery_db_size_mb: 900,
+            min_free_disk_mb: 0,
+            recovery_free_disk_mb: 0,
+            cleanup_interval_secs: 60,
+        }
+    }
+
+    fn test_pool() -> (Arc<DbPool>, StorageConfig, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_storage_config(dir.path().join("syslog-test.db"));
+        let pool = Arc::new(db::init_pool(&config).unwrap());
+        (pool, config, dir)
+    }
+
+    #[tokio::test]
+    async fn flush_batch_retains_entries_while_storage_is_write_blocked() {
+        let (pool, mut storage, _dir) = test_pool();
+        let free_disk_mb = db::get_storage_metrics(&pool, &storage)
+            .unwrap()
+            .free_disk_bytes
+            .unwrap()
+            / 1_048_576;
+        storage.min_free_disk_mb = free_disk_mb + 1024;
+        storage.recovery_free_disk_mb = free_disk_mb + 2048;
+        let mut batch = vec![parse_syslog(
+            "<34>Oct 11 22:14:15 mymachine su: blocked write",
+            "127.0.0.1:514".to_string(),
+        )];
+        let mut storage_blocked = false;
+
+        flush_batch(&pool, &storage, &mut batch, &mut storage_blocked).await;
+
+        assert_eq!(batch.len(), 1);
+        assert!(storage_blocked);
+    }
+
+    #[tokio::test]
+    async fn flush_batch_resumes_after_storage_recovers() {
+        let (pool, storage, _dir) = test_pool();
+        let mut batch = vec![parse_syslog(
+            "<34>Oct 11 22:14:15 mymachine su: resumed write",
+            "127.0.0.1:514".to_string(),
+        )];
+        let mut storage_blocked = true;
+
+        flush_batch(&pool, &storage, &mut batch, &mut storage_blocked).await;
+
+        assert!(batch.is_empty());
+        assert!(!storage_blocked);
+        let rows = db::tail_logs(&pool, None, None, 10).unwrap();
+        assert_eq!(rows.len(), 1);
+    }
 
     #[test]
     fn test_looks_like_timestamp_true() {
