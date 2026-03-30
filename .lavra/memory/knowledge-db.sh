@@ -243,6 +243,9 @@ _kb_sync_jsonl() {
 
   [[ ! -f "$JSONL_FILE" ]] && return 0
 
+  # Normalize to absolute path so the watermark key is stable regardless of CWD
+  JSONL_FILE="$(cd "$(dirname "$JSONL_FILE")" && pwd)/$(basename "$JSONL_FILE")"
+
   local FILE_LINES
   FILE_LINES=$(wc -l < "$JSONL_FILE" 2>/dev/null | tr -d ' ')
   [[ "$FILE_LINES" -eq 0 ]] && return 0
@@ -250,6 +253,14 @@ _kb_sync_jsonl() {
   # Compute per-file row count by counting rows whose source matches this file
   local SAFE_FILE_PATH
   SAFE_FILE_PATH="${JSONL_FILE//\'/\'\'}"
+
+  # Migrate any rows that were stored with a relative path variant of this file.
+  # Old installs stored source as a CWD-relative path; update them to absolute so
+  # the watermark count below is accurate and re-imports are skipped correctly.
+  local BASENAME
+  BASENAME=$(basename "$JSONL_FILE")
+  sqlite3 "$DB_PATH" "UPDATE knowledge SET source='${SAFE_FILE_PATH}' WHERE source LIKE '%${BASENAME}' AND source != '${SAFE_FILE_PATH}';" 2>/dev/null || true
+
   local FILE_DB_COUNT
   FILE_DB_COUNT=$(sqlite3 "$DB_PATH" "SELECT count(*) FROM knowledge WHERE source='${SAFE_FILE_PATH}';" 2>/dev/null || echo "0")
 
