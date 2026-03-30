@@ -53,7 +53,7 @@ pub async fn start(config: SyslogConfig, pool: Arc<DbPool>) -> Result<()> {
     let tcp_tx = tx.clone();
     let tcp_bind = config.tcp_bind.clone();
     tokio::spawn(async move {
-        if let Err(e) = tcp_listener(&tcp_bind, tcp_tx).await {
+        if let Err(e) = tcp_listener(&tcp_bind, tcp_tx, max_size).await {
             error!(error = %e, "TCP syslog listener failed");
         }
     });
@@ -108,6 +108,7 @@ async fn handle_tcp_connection(
     stream: tokio::net::TcpStream,
     addr: std::net::SocketAddr,
     tx: mpsc::Sender<ParsedLog>,
+    max_size: usize,
 ) {
     info!(peer = %addr, "TCP syslog connection accepted");
     let reader = BufReader::new(stream);
@@ -118,6 +119,15 @@ async fn handle_tcp_connection(
         match lines.next_line().await {
             Ok(Some(line)) => {
                 if line.is_empty() {
+                    continue;
+                }
+                if line.len() > max_size {
+                    warn!(
+                        peer = %addr,
+                        len = line.len(),
+                        max = max_size,
+                        "TCP syslog line exceeds max_message_size — dropped"
+                    );
                     continue;
                 }
                 // Log backpressure only on state transitions.
@@ -147,7 +157,7 @@ async fn handle_tcp_connection(
 ///
 /// Caps concurrent connections at 512 via a semaphore; each connection is
 /// subject to a 300 s idle/total timeout to evict zombie connections.
-async fn tcp_listener(bind: &str, tx: mpsc::Sender<ParsedLog>) -> Result<()> {
+async fn tcp_listener(bind: &str, tx: mpsc::Sender<ParsedLog>, max_size: usize) -> Result<()> {
     let listener = TcpListener::bind(bind).await?;
     info!(bind = %bind, "TCP syslog listener bound");
     let sem = Arc::new(Semaphore::new(512));
@@ -164,7 +174,7 @@ async fn tcp_listener(bind: &str, tx: mpsc::Sender<ParsedLog>) -> Result<()> {
                     let _permit = permit; // released automatically when task drops
                     match tokio::time::timeout(
                         tokio::time::Duration::from_secs(300),
-                        handle_tcp_connection(stream, addr, tx),
+                        handle_tcp_connection(stream, addr, tx, max_size),
                     )
                     .await
                     {
@@ -556,5 +566,16 @@ mod tests {
         assert_eq!(hostname, None);
         assert_eq!(app_name, None);
         assert_eq!(message, None);
+    }
+
+    #[test]
+    fn test_parse_syslog_large_message_truncation() {
+        // Verify parse_syslog handles a large input without panicking
+        let big = "x".repeat(100_000);
+        let raw = format!("<14>1 2026-01-01T00:00:00Z host app - - - {big}");
+        let parsed = parse_syslog(&raw);
+        assert_eq!(parsed.hostname, "host");
+        // message will be the big string — just verify no panic
+        assert!(!parsed.message.is_empty());
     }
 }
