@@ -385,8 +385,14 @@ async fn execute_tool(state: &AppState, name: &str, args: Value) -> anyhow::Resu
                     .get("app_name")
                     .and_then(|v| v.as_str())
                     .map(String::from),
-                from: args.get("from").and_then(|v| v.as_str()).map(String::from),
-                to: args.get("to").and_then(|v| v.as_str()).map(String::from),
+                from: parse_optional_timestamp(
+                    args.get("from").and_then(|v| v.as_str()),
+                    "from",
+                )?,
+                to: parse_optional_timestamp(
+                    args.get("to").and_then(|v| v.as_str()),
+                    "to",
+                )?,
                 limit: args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32),
             };
             let results = run_db(&state.pool, move |pool| db::search_logs(pool, &params)).await?;
@@ -417,8 +423,14 @@ async fn execute_tool(state: &AppState, name: &str, args: Value) -> anyhow::Resu
         }
 
         "get_errors" => {
-            let from = args.get("from").and_then(|v| v.as_str()).map(String::from);
-            let to = args.get("to").and_then(|v| v.as_str()).map(String::from);
+            let from = parse_optional_timestamp(
+                args.get("from").and_then(|v| v.as_str()),
+                "from",
+            )?;
+            let to = parse_optional_timestamp(
+                args.get("to").and_then(|v| v.as_str()),
+                "to",
+            )?;
             let results = run_db(&state.pool, move |pool| {
                 db::get_error_summary(pool, from.as_deref(), to.as_deref())
             })
@@ -545,4 +557,27 @@ fn severity_to_num(s: &str) -> Option<u8> {
         .iter()
         .position(|&l| l == s)
         .map(|i| i as u8)
+}
+
+/// Parse an optional RFC3339 timestamp string and normalize it to UTC.
+///
+/// Returns `Ok(None)` when `raw` is `None`. Returns a descriptive error when
+/// `raw` is `Some` but not valid RFC3339 — callers get a clear message rather
+/// than a silent wrong-result query against UTC-stored timestamps.
+fn parse_optional_timestamp(
+    raw: Option<&str>,
+    field_name: &str,
+) -> anyhow::Result<Option<String>> {
+    match raw {
+        None => Ok(None),
+        Some(s) => {
+            let dt = chrono::DateTime::parse_from_rfc3339(s).map_err(|e| {
+                anyhow::anyhow!(
+                    "Invalid {field_name} '{}': {e}. Expected ISO 8601 / RFC3339 format, e.g. '2025-01-15T00:00:00Z'",
+                    s
+                )
+            })?;
+            Ok(Some(dt.with_timezone(&chrono::Utc).to_rfc3339()))
+        }
+    }
 }
