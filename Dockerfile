@@ -21,7 +21,7 @@ COPY config.toml /etc/syslog-mcp/config.toml
 RUN groupadd --gid 10001 syslog && useradd --uid 10001 --gid syslog --no-create-home --shell /sbin/nologin syslog && mkdir -p /data && chown syslog:syslog /data
 
 ENV RUST_LOG=info
-ENV SYSLOG_MCP__STORAGE__DB_PATH=/data/syslog.db
+ENV SYSLOG_MCP_STORAGE__DB_PATH=/data/syslog.db
 
 USER 10001:10001
 
