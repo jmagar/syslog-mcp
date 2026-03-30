@@ -121,8 +121,15 @@ async fn handle_tcp_connection(
     let mut backpressure = false;
 
     loop {
-        match lines.next_line().await {
-            Ok(Some(line)) => {
+        // Idle timeout: if no data arrives within 300s, drop the connection.
+        // This is an idle (per-read) timeout, not a wall-clock timeout, so
+        // persistent forwarders sending continuous messages are never killed.
+        let next = tokio::time::timeout(
+            tokio::time::Duration::from_secs(300),
+            lines.next_line(),
+        );
+        match next.await {
+            Ok(Ok(Some(line))) => {
                 if line.is_empty() {
                     continue;
                 }
@@ -139,9 +146,13 @@ async fn handle_tcp_connection(
                     break;
                 }
             }
-            Ok(None) => break, // clean EOF
-            Err(e) => {
+            Ok(Ok(None)) => break, // clean EOF
+            Ok(Err(e)) => {
                 error!(peer = %addr, error = %e, "TCP syslog read error");
+                break;
+            }
+            Err(_) => {
+                warn!(peer = %addr, "TCP syslog connection timed out after 300s idle");
                 break;
             }
         }
@@ -152,7 +163,7 @@ async fn handle_tcp_connection(
 /// TCP syslog receiver (newline-delimited, octet-counting).
 ///
 /// Caps concurrent connections at 512 via a semaphore; each connection is
-/// subject to a 300 s idle/total timeout to evict zombie connections.
+/// subject to a 300 s idle timeout (per read) to evict zombie connections.
 async fn tcp_listener(bind: &str, tx: mpsc::Sender<ParsedLog>, max_size: usize) -> Result<()> {
     let listener = TcpListener::bind(bind).await?;
     info!(bind = %bind, "TCP syslog listener bound");
@@ -168,15 +179,7 @@ async fn tcp_listener(bind: &str, tx: mpsc::Sender<ParsedLog>, max_size: usize) 
                 let tx = tx.clone();
                 tokio::spawn(async move {
                     let _permit = permit; // released automatically when task drops
-                    match tokio::time::timeout(
-                        tokio::time::Duration::from_secs(300),
-                        handle_tcp_connection(stream, addr, tx, max_size),
-                    )
-                    .await
-                    {
-                        Ok(()) => {}
-                        Err(_) => warn!(peer = %addr, "TCP syslog connection timed out after 300s"),
-                    }
+                    handle_tcp_connection(stream, addr, tx, max_size).await;
                 });
             }
             Err(e) => {
