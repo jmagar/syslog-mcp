@@ -184,8 +184,8 @@ pub fn search_logs(pool: &DbPool, params: &SearchParams) -> Result<Vec<LogEntry>
              JOIN logs_fts ON logs_fts.rowid = l.id
              WHERE logs_fts MATCH ?1",
         );
-        let mut bindings: Vec<Box<dyn rusqlite::types::ToSql + '_>> =
-            vec![Box::new(query.as_str())];
+        let mut bindings: Vec<rusqlite::types::Value> =
+            vec![rusqlite::types::Value::Text(query.clone())];
         let mut idx = 2;
 
         append_filters(&mut sql, &mut bindings, &mut idx, params);
@@ -193,7 +193,7 @@ pub fn search_logs(pool: &DbPool, params: &SearchParams) -> Result<Vec<LogEntry>
 
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(
-            rusqlite::params_from_iter(bindings.iter().map(|b| b.as_ref())),
+            rusqlite::params_from_iter(bindings.iter()),
             map_row,
         )?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -203,7 +203,7 @@ pub fn search_logs(pool: &DbPool, params: &SearchParams) -> Result<Vec<LogEntry>
                     l.app_name, l.process_id, l.message, l.received_at
              FROM logs l WHERE 1=1",
         );
-        let mut bindings: Vec<Box<dyn rusqlite::types::ToSql + '_>> = vec![];
+        let mut bindings: Vec<rusqlite::types::Value> = vec![];
         let mut idx = 1;
 
         append_filters(&mut sql, &mut bindings, &mut idx, params);
@@ -211,7 +211,7 @@ pub fn search_logs(pool: &DbPool, params: &SearchParams) -> Result<Vec<LogEntry>
 
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(
-            rusqlite::params_from_iter(bindings.iter().map(|b| b.as_ref())),
+            rusqlite::params_from_iter(bindings.iter()),
             map_row,
         )?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -396,20 +396,20 @@ pub const SEVERITY_LEVELS: &[&str] = &[
 
 // --- helpers ---
 
-fn append_filters<'a>(
+fn append_filters(
     sql: &mut String,
-    bindings: &mut Vec<Box<dyn rusqlite::types::ToSql + 'a>>,
+    bindings: &mut Vec<rusqlite::types::Value>,
     idx: &mut usize,
-    params: &'a SearchParams,
+    params: &SearchParams,
 ) {
     if let Some(ref h) = params.hostname {
         sql.push_str(&format!(" AND l.hostname = ?{}", *idx));
-        bindings.push(Box::new(h.as_str()));
+        bindings.push(rusqlite::types::Value::Text(h.clone()));
         *idx += 1;
     }
     if let Some(ref s) = params.severity {
         sql.push_str(&format!(" AND l.severity = ?{}", *idx));
-        bindings.push(Box::new(s.as_str()));
+        bindings.push(rusqlite::types::Value::Text(s.clone()));
         *idx += 1;
     }
     if let Some(ref levels) = params.severity_in {
@@ -421,24 +421,24 @@ fn append_filters<'a>(
                 .collect();
             sql.push_str(&format!(" AND l.severity IN ({})", placeholders.join(", ")));
             for level in levels {
-                bindings.push(Box::new(level.as_str()));
+                bindings.push(rusqlite::types::Value::Text(level.clone()));
                 *idx += 1;
             }
         }
     }
     if let Some(ref a) = params.app_name {
         sql.push_str(&format!(" AND l.app_name = ?{}", *idx));
-        bindings.push(Box::new(a.as_str()));
+        bindings.push(rusqlite::types::Value::Text(a.clone()));
         *idx += 1;
     }
     if let Some(ref from) = params.from {
         sql.push_str(&format!(" AND l.timestamp >= ?{}", *idx));
-        bindings.push(Box::new(from.as_str()));
+        bindings.push(rusqlite::types::Value::Text(from.clone()));
         *idx += 1;
     }
     if let Some(ref to) = params.to {
         sql.push_str(&format!(" AND l.timestamp <= ?{}", *idx));
-        bindings.push(Box::new(to.as_str()));
+        bindings.push(rusqlite::types::Value::Text(to.clone()));
         *idx += 1;
     }
 }
