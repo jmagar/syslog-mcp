@@ -69,6 +69,47 @@ Or edit `config.toml`.
     all hosts                      your agents
 ```
 
+## Security / Trust Model
+
+The MCP endpoint is designed for **homelab-internal use**. It exposes your log data and should be treated accordingly.
+
+### Authentication
+
+As of v0.1.6, optional Bearer token auth is supported. Set the `SYSLOG_MCP_MCP__API_TOKEN` env var to require a token on all requests:
+
+```bash
+SYSLOG_MCP_MCP__API_TOKEN=your-secret-token
+```
+
+When set, every request must include:
+
+```
+Authorization: Bearer your-secret-token
+```
+
+Without this env var set, the endpoint is **unauthenticated** — any client that can reach port 3100 has full read access to all logs.
+
+### CORS
+
+CORS is restricted to `localhost:3100`. This is a browser-side restriction only — it does not protect against `curl`, `mcporter`, or any non-browser client.
+
+### Reverse Proxy Exposure
+
+The SWAG config in [SETUP.md](SETUP.md) exposes the endpoint at `https://syslog-mcp.tootie.tv/mcp` with no auth layer at the proxy. If you use this config, you should either:
+
+- Set `SYSLOG_MCP_MCP__API_TOKEN` so the service enforces auth itself, **or**
+- Add authentication at the SWAG layer (e.g. `auth_basic`, Authelia, or IP allowlist)
+
+**Do not expose this service to the public internet without one of the above in place.**
+
+### Summary
+
+| Scenario | Recommendation |
+|----------|---------------|
+| LAN-only, no SWAG | No action required; trust your LAN |
+| Exposed via SWAG/reverse proxy | Set `SYSLOG_MCP_MCP__API_TOKEN` or add proxy-layer auth |
+| Public internet exposure | Set token **and** add proxy-layer auth |
+
 ## License
 
 MIT

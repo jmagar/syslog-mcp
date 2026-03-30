@@ -60,6 +60,7 @@ SYSLOG_MCP_STORAGE__RETENTION_DAYS=90
 SYSLOG_MCP_MCP__BIND=0.0.0.0:3100
 SYSLOG_MCP_STORAGE__POOL_SIZE=4
 SYSLOG_MCP_STORAGE__WAL_MODE=true
+SYSLOG_MCP_MCP__API_TOKEN=your-secret-token  # optional; enables Bearer auth on /mcp
 
 # Log verbosity (set to debug or trace for development)
 RUST_LOG=info
@@ -93,6 +94,7 @@ RUST_LOG=info
 - **SSE proxy** — nginx/SWAG must set `proxy_buffering off`, `chunked_transfer_encoding off`, and `proxy_http_version 1.1` for SSE (`GET /sse`) to stream correctly
 - **Data volume** — DB lives in `./data/` (bind mount); `*.db` is gitignored so the database files won't be committed
 - **Retention purge** — `retention_days` defaults to 90; logs older than 90 days are **permanently deleted hourly** with no recovery path. Set `SYSLOG_MCP_STORAGE__RETENTION_DAYS=0` to disable purging entirely.
+- **Auth / trust model** — MCP endpoint is unauthenticated by default; any client reaching port 3100 has full log read access. Set `SYSLOG_MCP_MCP__API_TOKEN` to require Bearer auth. CORS is restricted to `localhost:3100` (browser-only; curl/mcporter unaffected). If exposing via SWAG/reverse proxy, add auth at the proxy layer or set the token. See README Security section for details.
 
 ## Testing MCP Tools
 
