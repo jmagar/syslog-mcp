@@ -414,6 +414,29 @@ fn parse_syslog(raw: &str, source_ip: String) -> db::LogBatchEntry {
     });
     let raw_message = msg.msg.to_string();
 
+    // ── Format dispatch ────────────────────────────────────────────────────────
+    // This is the extension point for vendor-specific syslog formats.
+    //
+    // Contract for every branch:
+    //   • hostname  — the logical device name (String, non-empty; fall back to
+    //                 raw_hostname or "unknown" when the format provides none)
+    //   • app_name  — the originating process / event category (Option<String>)
+    //   • message   — the human-readable log body (String, non-empty)
+    //
+    // Field precedence rule:
+    //   Vendor-specific fields extracted from the message body OVERRIDE the
+    //   values parsed from the syslog header (raw_hostname, raw_app_name,
+    //   raw_message). The syslog header is used only as a fallback when the
+    //   vendor format does not supply a value.
+    //
+    // To add a new vendor format (e.g. Fortinet, Cisco, Palo Alto CEF):
+    //   1. Add a detector function analogous to looks_like_timestamp().
+    //   2. Add a field-extractor function analogous to extract_cef_fields().
+    //   3. Add an `else if <detector>` branch here that calls your extractor
+    //      and returns (hostname, app_name, message) following the contract.
+    //   4. The final `else` branch is the standard RFC 3164/5424 path and must
+    //      remain the last arm — it handles all unrecognised messages.
+    // ───────────────────────────────────────────────────────────────────────────
     let (hostname, app_name, message) =
         if looks_like_timestamp(&raw_hostname)
             && (raw_app_name.as_deref().unwrap_or("").contains("CEF:")
