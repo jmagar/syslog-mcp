@@ -9,7 +9,6 @@ services:
       - "3100:3100/tcp"    # MCP HTTP
     volumes:
       - ./data:/data
-      - ./config.toml:/etc/syslog-mcp/config.toml:ro
     environment:
       - RUST_LOG=info
       - SYSLOG_MCP_STORAGE__DB_PATH=/data/syslog.db

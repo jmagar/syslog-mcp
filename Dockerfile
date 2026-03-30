@@ -16,7 +16,6 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y ca-certificates wget && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/syslog-mcp /usr/local/bin/syslog-mcp
-COPY config.toml /etc/syslog-mcp/config.toml
 
 RUN groupadd --gid 10001 syslog && useradd --uid 10001 --gid syslog --no-create-home --shell /sbin/nologin syslog && mkdir -p /data && chown syslog:syslog /data
 
