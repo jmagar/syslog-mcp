@@ -6,6 +6,29 @@ All notable changes to syslog-mcp are documented here.
 
 ---
 
+## [0.1.6] — 2026-03-30
+
+### Security
+- `src/main.rs`: Redact `api_token` from startup log — log individual fields with `auth_enabled=bool` instead of printing full config struct (syslog-mcp-4yw)
+- `src/mcp.rs`: Add optional Bearer token auth middleware; restrict CORS to localhost origins only (syslog-mcp-gm3)
+
+### Fixed
+- `Dockerfile`: Fix `ENV SYSLOG_MCP__STORAGE__DB_PATH` → `SYSLOG_MCP_STORAGE__DB_PATH` — double-underscore prefix was silently ignored by figment (syslog-mcp-s9b)
+- `src/syslog.rs`: Drop TCP lines exceeding `max_message_size` to prevent OOM from unbounded lines (syslog-mcp-zu9)
+- `src/syslog.rs`: Warn when CEF heuristic fires but all fields extract as None — malformed CEF body now emits a log line instead of silently falling back (syslog-mcp-w5e)
+- `src/syslog.rs`: Cap TCP connections at 512 with semaphore + 300s wall-clock timeout per connection (syslog-mcp-ct2)
+- `src/db.rs`: Chunked DELETE + incremental FTS merge to release WAL write-lock during retention purge (syslog-mcp-75i)
+- `src/config.rs`: Replace blocking `to_socket_addrs()` DNS call with non-blocking `SocketAddr::parse()` at config load time
+- `Dockerfile`: Run container as non-root user uid/gid 10001 (syslog-mcp-ab8)
+- `.lavra/memory/recall.sh`: Remove stray `local` keyword outside function scope (syslog-mcp-1mg)
+
+### Added
+- `.github/workflows/ci.yml`: GitHub Actions CI — fmt check, clippy `-D warnings`, test, cargo audit (syslog-mcp-7ee)
+- `src/db.rs`: 7 unit tests covering insert, FTS search, severity filter, purge, stats, host aggregation (syslog-mcp-sd0)
+- `.env.example`: Document `SYSLOG_MCP_MCP__API_TOKEN` bearer token option
+
+---
+
 ## [0.1.5] — 2026-03-28
 
 ### Fixed
@@ -91,7 +114,8 @@ All notable changes to syslog-mcp are documented here.
 
 ---
 
-[Unreleased]: https://github.com/jmagar/syslog-mcp/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/jmagar/syslog-mcp/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/jmagar/syslog-mcp/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/jmagar/syslog-mcp/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/jmagar/syslog-mcp/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/jmagar/syslog-mcp/compare/v0.1.2...v0.1.3

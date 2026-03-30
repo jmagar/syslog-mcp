@@ -17,12 +17,12 @@ services:
     # cap_add:
     #   - NET_BIND_SERVICE
     networks:
-      - jakenet
+      - proxy
 
     labels:
       - "swag=syslog-mcp"  # For your SWAG reverse proxy
 
 networks:
-  jakenet:
-    # Pre-create this network before first deploy: docker network create jakenet
+  proxy:
+    name: ${DOCKER_NETWORK:-syslog_mcp}
     external: true
