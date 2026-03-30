@@ -546,7 +546,10 @@ async fn execute_tool(state: &AppState, name: &str, args: Value) -> anyhow::Resu
             }))
         }
 
-        "get_stats" => Ok(run_db(&state.pool, db::get_stats).await?),
+        "get_stats" => {
+            let stats = run_db(&state.pool, db::get_stats).await?;
+            Ok(serde_json::to_value(&stats)?)
+        }
 
         _ => Err(anyhow::anyhow!("Unknown tool: {name}")),
     }

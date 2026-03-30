@@ -21,6 +21,34 @@ pub type LogBatchEntry = (
     String,         // raw
 );
 
+/// Error/warning summary entry (one row per hostname+severity)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ErrorSummaryEntry {
+    pub hostname: String,
+    pub severity: String,
+    pub count: i64,
+}
+
+/// Host registry entry with first/last seen and log count
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostEntry {
+    pub hostname: String,
+    pub first_seen: String,
+    pub last_seen: String,
+    pub log_count: i64,
+}
+
+/// Database statistics snapshot
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DbStats {
+    pub total_logs: i64,
+    pub total_hosts: i64,
+    pub oldest_log: Option<String>,
+    pub newest_log: Option<String>,
+    /// Formatted as "X.XX" MB
+    pub db_size_mb: String,
+}
+
 /// A parsed and stored log entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogEntry {
@@ -261,7 +289,7 @@ pub fn get_error_summary(
     pool: &DbPool,
     from: Option<&str>,
     to: Option<&str>,
-) -> Result<Vec<serde_json::Value>> {
+) -> Result<Vec<ErrorSummaryEntry>> {
     let conn = pool.get()?;
 
     let from = from.unwrap_or("1970-01-01T00:00:00Z");
@@ -277,30 +305,30 @@ pub fn get_error_summary(
     )?;
 
     let rows = stmt.query_map(params![from, to], |row| {
-        Ok(serde_json::json!({
-            "hostname": row.get::<_, String>(0)?,
-            "severity": row.get::<_, String>(1)?,
-            "count": row.get::<_, i64>(2)?,
-        }))
+        Ok(ErrorSummaryEntry {
+            hostname: row.get(0)?,
+            severity: row.get(1)?,
+            count: row.get(2)?,
+        })
     })?;
 
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 /// List all known hosts with stats
-pub fn list_hosts(pool: &DbPool) -> Result<Vec<serde_json::Value>> {
+pub fn list_hosts(pool: &DbPool) -> Result<Vec<HostEntry>> {
     let conn = pool.get()?;
     let mut stmt = conn.prepare(
         "SELECT hostname, first_seen, last_seen, log_count FROM hosts ORDER BY last_seen DESC",
     )?;
 
     let rows = stmt.query_map([], |row| {
-        Ok(serde_json::json!({
-            "hostname": row.get::<_, String>(0)?,
-            "first_seen": row.get::<_, String>(1)?,
-            "last_seen": row.get::<_, String>(2)?,
-            "log_count": row.get::<_, i64>(3)?,
-        }))
+        Ok(HostEntry {
+            hostname: row.get(0)?,
+            first_seen: row.get(1)?,
+            last_seen: row.get(2)?,
+            log_count: row.get(3)?,
+        })
     })?;
 
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -357,7 +385,7 @@ pub fn purge_old_logs(pool: &DbPool, retention_days: u32) -> Result<usize> {
 }
 
 /// Get database stats
-pub fn get_stats(pool: &DbPool) -> Result<serde_json::Value> {
+pub fn get_stats(pool: &DbPool) -> Result<DbStats> {
     let mut conn = pool.get()?;
 
     // PRAGMA queries can't run inside a transaction, so read them first
@@ -379,13 +407,13 @@ pub fn get_stats(pool: &DbPool) -> Result<serde_json::Value> {
     })?;
     tx.finish()?;
 
-    Ok(serde_json::json!({
-        "total_logs": total_logs,
-        "total_hosts": total_hosts,
-        "oldest_log": oldest,
-        "newest_log": newest,
-        "db_size_mb": format!("{db_size_mb:.2}"),
-    }))
+    Ok(DbStats {
+        total_logs,
+        total_hosts,
+        oldest_log: oldest,
+        newest_log: newest,
+        db_size_mb: format!("{db_size_mb:.2}"),
+    })
 }
 
 /// Syslog severity level names ordered by numeric value (0=emerg, 7=debug).
@@ -516,8 +544,8 @@ mod tests {
         let hosts = list_hosts(&pool).unwrap();
         assert_eq!(hosts.len(), 2);
         // host-a should have log_count = 2
-        let ha = hosts.iter().find(|h| h["hostname"] == "host-a").unwrap();
-        assert_eq!(ha["log_count"], 2);
+        let ha = hosts.iter().find(|h| h.hostname == "host-a").unwrap();
+        assert_eq!(ha.log_count, 2);
     }
 
     #[test]
@@ -595,11 +623,11 @@ mod tests {
     fn test_get_stats_empty_db() {
         let (pool, _dir) = test_pool();
         let stats = get_stats(&pool).unwrap();
-        assert_eq!(stats["total_logs"], 0);
-        assert_eq!(stats["total_hosts"], 0);
-        // oldest_log and newest_log should be null on empty DB
-        assert!(stats["oldest_log"].is_null());
-        assert!(stats["newest_log"].is_null());
+        assert_eq!(stats.total_logs, 0);
+        assert_eq!(stats.total_hosts, 0);
+        // oldest_log and newest_log should be None on empty DB
+        assert!(stats.oldest_log.is_none());
+        assert!(stats.newest_log.is_none());
     }
 
     #[test]
