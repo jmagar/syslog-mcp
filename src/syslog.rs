@@ -401,15 +401,17 @@ fn parse_syslog(raw: &str, source_ip: String) -> db::LogBatchEntry {
     });
     let raw_message = msg.msg.to_string();
 
-    // Reconstruct the full message text (syslog_loose splits "The Mothership CEF:…" across
-    // app_name and message when parsing UniFi RFC 5424 messages)
-    let full_text = match &raw_app_name {
-        Some(app) => format!("{app} {raw_message}"),
-        None => raw_message.clone(),
-    };
-
     let (hostname, app_name, message) =
-        if looks_like_timestamp(&raw_hostname) && full_text.contains("CEF:") {
+        if looks_like_timestamp(&raw_hostname)
+            && (raw_app_name.as_deref().unwrap_or("").contains("CEF:")
+                || raw_message.contains("CEF:"))
+        {
+            // Reconstruct full_text only for CEF messages (syslog_loose splits
+            // "The Mothership CEF:…" across app_name and message for UniFi RFC 5424).
+            let full_text = match &raw_app_name {
+                Some(app) => format!("{app} {raw_message}"),
+                None => raw_message.clone(),
+            };
             let cef = extract_cef_fields(&full_text);
             if cef.hostname.is_none() && cef.app_name.is_none() && cef.message.is_none() {
                 let preview = &full_text[..full_text.len().min(200)];
