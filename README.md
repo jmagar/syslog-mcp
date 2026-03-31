@@ -24,6 +24,7 @@ docker compose up -d
 ```
 
 The compose file uses a `proxy` network (configurable via `DOCKER_NETWORK` env var, defaults to `syslog_mcp`). If attaching to an existing reverse-proxy network, set `DOCKER_NETWORK=your-network-name` in `.env`.
+It also runs the container as a configurable UID/GID, defaulting to `1000:1000` via `SYSLOG_UID` and `SYSLOG_GID`.
 
 Then configure each host to forward syslog to port 1514. See [SETUP.md](SETUP.md).
 
@@ -50,6 +51,8 @@ SYSLOG_MCP_RECOVERY_DB_SIZE_MB=900    # cleanup target after DB-size breach
 SYSLOG_MCP_MIN_FREE_DISK_MB=512       # 0 = disable free-disk guard
 SYSLOG_MCP_RECOVERY_FREE_DISK_MB=768  # cleanup target after free-disk breach
 SYSLOG_MCP_CLEANUP_INTERVAL_SECS=60   # storage-budget enforcement interval
+SYSLOG_UID=1000                       # Docker runtime user for bind-mounted data
+SYSLOG_GID=1000                       # Docker runtime group for bind-mounted data
 ```
 
 See `.env.example` for the complete list.
@@ -59,6 +62,8 @@ See `.env.example` for the complete list.
 > **Warning:** The storage guardrail also performs **permanent oldest-first emergency deletion by `received_at`** when the DB exceeds `SYSLOG_MCP_MAX_DB_SIZE_MB` or the DB filesystem drops below `SYSLOG_MCP_MIN_FREE_DISK_MB`. If cleanup still cannot recover enough space, new syslog writes are blocked until storage becomes healthy again.
 
 > **Note (Docker):** When running in Docker, `config.toml` is NOT read — the binary reads from CWD (`/`) and the TOML is at a different path. Use environment variables via `.env` instead.
+
+> **Note (Bind mounts):** If you set `SYSLOG_MCP_DATA_VOLUME=./data`, ensure the host directory is writable by the configured `SYSLOG_UID`/`SYSLOG_GID`. With the default settings, that means `1000:1000`.
 
 ## SSE Endpoint
 

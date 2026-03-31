@@ -3,11 +3,16 @@ mod db;
 mod mcp;
 mod syslog;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use anyhow::Result;
 use tracing::info;
 use tracing_subscriber::{fmt, EnvFilter};
+
+fn background_interval(period: tokio::time::Duration) -> tokio::time::Interval {
+    tokio::time::interval_at(tokio::time::Instant::now() + period, period)
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -28,32 +33,76 @@ async fn main() -> Result<()> {
         mcp_bind = %config.mcp.bind_addr(),
         db_path = %config.storage.db_path.display(),
         retention_days = config.storage.retention_days,
+        max_db_size_mb = config.storage.max_db_size_mb,
+        recovery_db_size_mb = config.storage.recovery_db_size_mb,
+        min_free_disk_mb = config.storage.min_free_disk_mb,
+        recovery_free_disk_mb = config.storage.recovery_free_disk_mb,
+        cleanup_interval_secs = config.storage.cleanup_interval_secs,
+        pool_size = config.storage.pool_size,
+        wal_mode = config.storage.wal_mode,
         auth_enabled = config.mcp.api_token.is_some(),
         "Configuration loaded"
     );
 
     // Initialize database
     let pool = Arc::new(db::init_pool(&config.storage)?);
+    let storage_state = Arc::new(Mutex::new(None));
+    if config.storage.max_db_size_mb > 0 || config.storage.min_free_disk_mb > 0 {
+        let initial_outcome = db::enforce_storage_budget(&pool, &config.storage)?;
+        *storage_state.lock().expect("storage state mutex poisoned") =
+            Some(db::StorageBudgetState {
+                metrics: initial_outcome.metrics.clone(),
+                write_blocked: initial_outcome.write_blocked,
+            });
+        info!(
+            deleted_rows = initial_outcome.deleted_rows,
+            logical_db_size_bytes = initial_outcome.metrics.logical_db_size_bytes,
+            physical_db_size_bytes = initial_outcome.metrics.physical_db_size_bytes,
+            free_disk_bytes = ?initial_outcome.metrics.free_disk_bytes,
+            write_blocked = initial_outcome.write_blocked,
+            "Initial storage budget check completed"
+        );
+    }
 
     // Start syslog listeners
-    syslog::start(config.syslog.clone(), config.storage.clone(), pool.clone()).await?;
+    syslog::start_with_storage_state(
+        config.syslog.clone(),
+        config.storage.clone(),
+        pool.clone(),
+        storage_state.clone(),
+    )
+    .await?;
 
     // Start retention purge task
     let retention_days = config.storage.retention_days;
     let purge_handle = if retention_days > 0 {
         let purge_pool = pool.clone();
         let handle = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(3600));
+            let mut interval = background_interval(tokio::time::Duration::from_secs(3600));
             loop {
                 interval.tick().await;
+                let started = Instant::now();
                 let pool = Arc::clone(&purge_pool);
-                if let Err(e) =
-                    tokio::task::spawn_blocking(move || db::purge_old_logs(&pool, retention_days))
-                        .await
-                        .map_err(|e| anyhow::anyhow!("spawn_blocking error: {e}"))
-                        .and_then(|r| r)
+                tracing::debug!(retention_days, "Retention purge tick started");
+                match tokio::task::spawn_blocking(move || db::purge_old_logs(&pool, retention_days))
+                    .await
+                    .map_err(|e| anyhow::anyhow!("spawn_blocking error: {e}"))
+                    .and_then(|r| r)
                 {
-                    tracing::error!(error = %e, "Failed to purge old logs");
+                    Ok(deleted) => tracing::info!(
+                        retention_days,
+                        deleted,
+                        elapsed_ms = started.elapsed().as_millis(),
+                        "Retention purge tick completed"
+                    ),
+                    Err(e) => {
+                        tracing::error!(
+                            error = %e,
+                            retention_days,
+                            elapsed_ms = started.elapsed().as_millis(),
+                            "Failed to purge old logs"
+                        );
+                    }
                 }
             }
         });
@@ -67,21 +116,73 @@ async fn main() -> Result<()> {
     {
         let storage_pool = pool.clone();
         let storage_config = config.storage.clone();
+        let shared_storage_state = storage_state.clone();
         let handle = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(
+            let mut interval = background_interval(tokio::time::Duration::from_secs(
                 storage_config.cleanup_interval_secs,
             ));
             loop {
                 interval.tick().await;
+                let started = Instant::now();
                 let pool = Arc::clone(&storage_pool);
                 let storage = storage_config.clone();
-                if let Err(e) =
-                    tokio::task::spawn_blocking(move || db::enforce_storage_budget(&pool, &storage))
-                        .await
-                        .map_err(|e| anyhow::anyhow!("spawn_blocking error: {e}"))
-                        .and_then(|r| r)
+                tracing::debug!(
+                    cleanup_interval_secs = storage_config.cleanup_interval_secs,
+                    "Storage budget enforcement tick started"
+                );
+                match tokio::task::spawn_blocking(move || {
+                    db::enforce_storage_budget(&pool, &storage)
+                })
+                .await
+                .map_err(|e| anyhow::anyhow!("spawn_blocking error: {e}"))
+                .and_then(|r| r)
                 {
-                    tracing::error!(error = %e, "Failed to enforce storage budget");
+                    Ok(outcome) => {
+                        let previous_blocked = shared_storage_state
+                            .lock()
+                            .expect("storage state mutex poisoned")
+                            .as_ref()
+                            .map(|s| s.write_blocked);
+                        *shared_storage_state
+                            .lock()
+                            .expect("storage state mutex poisoned") =
+                            Some(db::StorageBudgetState {
+                                metrics: outcome.metrics.clone(),
+                                write_blocked: outcome.write_blocked,
+                            });
+
+                        if outcome.deleted_rows > 0
+                            || outcome.write_blocked
+                            || previous_blocked != Some(outcome.write_blocked)
+                        {
+                            tracing::info!(
+                                deleted_rows = outcome.deleted_rows,
+                                logical_db_size_bytes = outcome.metrics.logical_db_size_bytes,
+                                physical_db_size_bytes = outcome.metrics.physical_db_size_bytes,
+                                free_disk_bytes = ?outcome.metrics.free_disk_bytes,
+                                write_blocked = outcome.write_blocked,
+                                elapsed_ms = started.elapsed().as_millis(),
+                                "Storage budget enforcement tick completed"
+                            );
+                        } else {
+                            tracing::debug!(
+                                deleted_rows = outcome.deleted_rows,
+                                logical_db_size_bytes = outcome.metrics.logical_db_size_bytes,
+                                physical_db_size_bytes = outcome.metrics.physical_db_size_bytes,
+                                free_disk_bytes = ?outcome.metrics.free_disk_bytes,
+                                write_blocked = outcome.write_blocked,
+                                elapsed_ms = started.elapsed().as_millis(),
+                                "Storage budget enforcement tick completed"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            error = %e,
+                            elapsed_ms = started.elapsed().as_millis(),
+                            "Failed to enforce storage budget"
+                        );
+                    }
                 }
             }
         });
@@ -170,4 +271,21 @@ async fn shutdown_signal() {
         _ = terminate => {},
     }
     info!("Shutdown signal received");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::background_interval;
+
+    #[tokio::test]
+    async fn background_interval_waits_full_period_before_first_tick() {
+        let delay = tokio::time::Duration::from_millis(25);
+        let mut interval = background_interval(delay);
+        let started = std::time::Instant::now();
+        interval.tick().await;
+        assert!(
+            started.elapsed() >= tokio::time::Duration::from_millis(20),
+            "first tick should wait roughly one full period before firing"
+        );
+    }
 }

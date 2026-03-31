@@ -1,30 +1,48 @@
-# Build artifacts (gigabytes of Rust cache)
-target/
+# ── Version control ──────────────────────────────────────────────────────────
+.git
+.github
 
-# Live database files
-data/
-*.db
-*.db-wal
-*.db-shm
-
-# Version control
-.git/
-
-# Documentation
-docs/
-
-# Environment files
+# ── Secrets ──────────────────────────────────────────────────────────────────
 .env
 .env.*
+!.env.example
 
-# Tooling directories
-.beads/
-.lavra/
-.omc/
+# ── Claude Code / AI tooling ────────────────────────────────────────────────
+.claude
+.claude-plugin
+.omc
+.lavra
+.beads
+.serena
+.worktrees
+.full-review
+.full-review-archive-*
 
-# Scripts (not needed in image)
-scripts/
+# ── IDE / editor ─────────────────────────────────────────────────────────────
+.vscode
+.cursor
+.windsurf
+.1code
 
-# Editor / OS noise
-.DS_Store
-*.swp
+# ── Docs, tests, scripts (not needed at runtime) ────────────────────────────
+docs
+tests
+scripts
+*.md
+!README.md
+
+# ── Runtime artifacts ────────────────────────────────────────────────────────
+logs
+backups
+*.log
+.cache
+
+# ── Rust ─────────────────────────────────────────────────────────────────────
+target/
+Cargo.lock
+
+# ── Repo-specific ────────────────────────────────────────────────────────────
+data/
+*.db
+*.db-shm
+*.db-wal

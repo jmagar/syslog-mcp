@@ -2,6 +2,28 @@
 
 All notable changes to syslog-mcp are documented here.
 
+## [0.2.0] — 2026-03-31
+
+### Added
+- `docker-compose.yml` / `.env.example` / `README.md`: `SYSLOG_UID` and `SYSLOG_GID` env vars — container now runs as a configurable user/group (default `1000:1000`) for bind-mounted data directories
+- `src/db.rs`: `StorageBudgetState` struct — write-blocked flag and storage metrics shared via `Arc<Mutex<>>` across syslog and MCP modules
+- `src/db.rs`: Transient SQLite lock retry in batch insert — 3-attempt backoff (25/100/250ms) on `SQLITE_BUSY` / `SQLITE_LOCKED` before failing
+- `src/db.rs`: `configure_connection_pragmas()` helper — WAL mode and PRAGMA setup extracted from `init_pool` so every pooled connection is configured consistently
+- `src/main.rs`: Initial storage budget enforcement check on startup before accepting syslog traffic
+- `src/main.rs`: `background_interval()` helper — interval fires after the first period (not at t=0), preventing a burst on startup
+- `src/syslog.rs`: `start_with_storage_state()` replaces `start()` — storage state shared with batch writer for write-blocking under pressure
+
+### Fixed
+- `src/syslog.rs`: TCP handler now enforces `max_message_size` **per line** instead of per connection — persistent forwarders (rsyslog, syslog-ng) that reuse a single TCP session no longer hit the connection-level byte limit and cause an OOM/disconnect
+- `src/mcp.rs`: Auth rejection now logs `method`, `path`, and `has_auth_header` for diagnostics
+
+### Changed
+- `src/db.rs`, `src/main.rs`, `src/mcp.rs`, `src/syslog.rs`: Structured `tracing` fields added throughout — storage enforcement, batch insert, retention purge, TCP/UDP listeners, health check, and MCP request lifecycle all emit structured events
+- `.dockerignore`: Reorganized with categorized sections; AI tooling dirs (`.claude`, `.omc`, `.lavra`, `.beads`) explicitly excluded
+- `.gitignore`: Reorganized with categorized sections; editor dirs, cache, doc artifacts, and worktree dirs added
+
+---
+
 ## [0.1.9] — 2026-03-30
 
 ### Changed

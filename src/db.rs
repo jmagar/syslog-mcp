@@ -5,7 +5,7 @@ use anyhow::Result;
 use chrono::Utc;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::params;
+use rusqlite::{params, Connection, Error as SqliteError, ErrorCode};
 use serde::{Deserialize, Serialize};
 
 use crate::config::StorageConfig;
@@ -92,6 +92,12 @@ pub struct StorageEnforcementOutcome {
     pub write_blocked: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct StorageBudgetState {
+    pub metrics: StorageMetrics,
+    pub write_blocked: bool,
+}
+
 pub trait DiskSpaceProbe {
     fn free_bytes(&self, path: &Path) -> Result<u64>;
 }
@@ -151,7 +157,9 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
         std::fs::create_dir_all(parent)?;
     }
 
-    let manager = SqliteConnectionManager::file(&config.db_path);
+    let wal_mode = config.wal_mode;
+    let manager = SqliteConnectionManager::file(&config.db_path)
+        .with_init(move |conn| configure_connection_pragmas(conn, wal_mode));
     let pool = Pool::builder().max_size(config.pool_size).build(manager)?;
 
     // Initialize schema
@@ -165,13 +173,6 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
             conn.execute_batch("VACUUM;")?;
         }
     }
-
-    if config.wal_mode {
-        conn.execute_batch("PRAGMA journal_mode=WAL;")?;
-    }
-    conn.execute_batch("PRAGMA synchronous=NORMAL;")?;
-    conn.execute_batch("PRAGMA busy_timeout=5000;")?;
-    conn.execute_batch("PRAGMA cache_size=-64000;")?; // 64MB cache
 
     conn.execute_batch(
         "
@@ -248,6 +249,18 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
     Ok(pool)
 }
 
+fn configure_connection_pragmas(conn: &mut Connection, wal_mode: bool) -> rusqlite::Result<()> {
+    if wal_mode {
+        conn.execute_batch("PRAGMA journal_mode=WAL;")?;
+    }
+    conn.execute_batch(
+        "PRAGMA synchronous=NORMAL;
+         PRAGMA busy_timeout=5000;
+         PRAGMA cache_size=-64000;",
+    )?;
+    Ok(())
+}
+
 pub fn get_storage_metrics(pool: &DbPool, config: &StorageConfig) -> Result<StorageMetrics> {
     get_storage_metrics_with_probe(pool, config, &SystemDiskSpaceProbe)
 }
@@ -268,6 +281,13 @@ pub fn get_storage_metrics_with_probe(
     let free_disk_bytes = probe
         .free_bytes(config.db_path.parent().unwrap_or_else(|| Path::new(".")))
         .ok();
+    tracing::debug!(
+        logical_db_size_bytes,
+        physical_db_size_bytes,
+        free_disk_bytes = ?free_disk_bytes,
+        db_path = %config.db_path.display(),
+        "Collected storage metrics"
+    );
 
     Ok(StorageMetrics {
         logical_db_size_bytes,
@@ -292,7 +312,18 @@ pub fn enforce_storage_budget_with_probe(
     let mut deleted_rows = 0usize;
 
     let mut metrics = get_storage_metrics_with_probe(pool, config, probe)?;
+    tracing::debug!(
+        logical_db_size_bytes = metrics.logical_db_size_bytes,
+        physical_db_size_bytes = metrics.physical_db_size_bytes,
+        free_disk_bytes = ?metrics.free_disk_bytes,
+        max_db_size_mb = config.max_db_size_mb,
+        recovery_db_size_mb = config.recovery_db_size_mb,
+        min_free_disk_mb = config.min_free_disk_mb,
+        recovery_free_disk_mb = config.recovery_free_disk_mb,
+        "Storage budget enforcement check started"
+    );
     if !storage_limits_enabled(config) {
+        tracing::debug!("Storage limits disabled — skipping enforcement");
         return Ok(StorageEnforcementOutcome {
             metrics,
             recovery,
@@ -302,10 +333,24 @@ pub fn enforce_storage_budget_with_probe(
     }
 
     while exceeds_trigger(&metrics, config) || !within_recovery(&metrics, &recovery, config) {
+        tracing::warn!(
+            logical_db_size_bytes = metrics.logical_db_size_bytes,
+            physical_db_size_bytes = metrics.physical_db_size_bytes,
+            free_disk_bytes = ?metrics.free_disk_bytes,
+            deleted_rows,
+            "Storage budget exceeded recovery target — deleting oldest logs chunk"
+        );
         let deleted = delete_oldest_logs_chunk(pool, 1)?;
         if deleted.deleted_rows == 0 {
             metrics = get_storage_metrics_with_probe(pool, config, probe)?;
             let write_blocked = exceeds_trigger(&metrics, config);
+            tracing::warn!(
+                logical_db_size_bytes = metrics.logical_db_size_bytes,
+                free_disk_bytes = ?metrics.free_disk_bytes,
+                deleted_rows,
+                write_blocked,
+                "Storage budget enforcement could not delete more rows"
+            );
             return Ok(StorageEnforcementOutcome {
                 metrics,
                 recovery,
@@ -315,10 +360,24 @@ pub fn enforce_storage_budget_with_probe(
         }
 
         deleted_rows += deleted.deleted_rows;
+        tracing::info!(
+            deleted_rows = deleted.deleted_rows,
+            total_deleted_rows = deleted_rows,
+            affected_hosts = deleted.hostnames.len(),
+            "Deleted oldest log chunk for storage recovery"
+        );
         reconcile_hosts(pool, &deleted.hostnames)?;
         checkpoint_wal_and_incremental_vacuum(pool)?;
         metrics = get_storage_metrics_with_probe(pool, config, probe)?;
     }
+
+    tracing::debug!(
+        deleted_rows,
+        logical_db_size_bytes = metrics.logical_db_size_bytes,
+        physical_db_size_bytes = metrics.physical_db_size_bytes,
+        free_disk_bytes = ?metrics.free_disk_bytes,
+        "Storage budget enforcement completed"
+    );
 
     Ok(StorageEnforcementOutcome {
         metrics,
@@ -330,6 +389,30 @@ pub fn enforce_storage_budget_with_probe(
 
 /// Batch insert for higher throughput
 pub fn insert_logs_batch(pool: &DbPool, entries: &[LogBatchEntry]) -> Result<usize> {
+    const RETRY_DELAYS_MS: &[u64] = &[25, 100, 250];
+
+    let mut attempt = 0usize;
+    loop {
+        match insert_logs_batch_once(pool, entries) {
+            Ok(inserted) => return Ok(inserted),
+            Err(err) if is_transient_sqlite_lock(&err) && attempt < RETRY_DELAYS_MS.len() => {
+                let delay_ms = RETRY_DELAYS_MS[attempt];
+                tracing::warn!(
+                    error = %err,
+                    attempt = attempt + 1,
+                    retry_delay_ms = delay_ms,
+                    entry_count = entries.len(),
+                    "Transient SQLite lock during batch insert — retrying"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                attempt += 1;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+fn insert_logs_batch_once(pool: &DbPool, entries: &[LogBatchEntry]) -> Result<usize> {
     let mut conn = pool.get()?;
     let tx = conn.transaction()?;
 
@@ -368,10 +451,33 @@ pub fn insert_logs_batch(pool: &DbPool, entries: &[LogBatchEntry]) -> Result<usi
         for (hostname, count) in &host_counts {
             host_stmt.execute(params![hostname, count])?;
         }
+        tracing::debug!(
+            entry_count = entries.len(),
+            unique_hosts = host_counts.len(),
+            "Prepared batch insert transaction"
+        );
     }
 
     tx.commit()?;
+    tracing::debug!(
+        entry_count = entries.len(),
+        "Committed batch insert transaction"
+    );
     Ok(entries.len())
+}
+
+fn is_transient_sqlite_lock(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| match cause.downcast_ref::<SqliteError>() {
+        Some(SqliteError::SqliteFailure(sql_err, _))
+            if matches!(
+                sql_err.code,
+                ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked
+            ) =>
+        {
+            true
+        }
+        _ => false,
+    })
 }
 
 /// Validate a user-supplied FTS5 query before execution.
@@ -736,6 +842,13 @@ fn delete_oldest_logs_chunk(pool: &DbPool, chunk_size: usize) -> Result<DeletedC
         .join(", ");
     let sql = format!("DELETE FROM logs WHERE id IN ({placeholders})");
     let deleted_rows = conn.execute(&sql, rusqlite::params_from_iter(ids.iter()))?;
+    tracing::debug!(
+        selected_rows = selected.len(),
+        deleted_rows,
+        affected_hosts = hostnames.len(),
+        chunk_size,
+        "Deleted oldest logs chunk"
+    );
 
     Ok(DeletedChunk {
         deleted_rows,
@@ -780,6 +893,10 @@ fn reconcile_hosts(pool: &DbPool, hostnames: &[String]) -> Result<()> {
         )?;
     }
     tx.commit()?;
+    tracing::debug!(
+        host_count = hostnames.len(),
+        "Reconciled host aggregates after log deletion"
+    );
     Ok(())
 }
 
@@ -787,9 +904,13 @@ fn checkpoint_wal_and_incremental_vacuum(pool: &DbPool) -> Result<()> {
     let conn = pool.get()?;
     if let Err(e) = conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE);") {
         tracing::warn!(error = %e, "WAL checkpoint skipped (non-fatal)");
+    } else {
+        tracing::debug!("WAL checkpoint completed");
     }
     if let Err(e) = conn.execute_batch("PRAGMA incremental_vacuum(1000);") {
         tracing::warn!(error = %e, "incremental vacuum skipped (non-fatal)");
+    } else {
+        tracing::debug!("Incremental vacuum completed");
     }
     Ok(())
 }
@@ -985,6 +1106,27 @@ mod tests {
             .query_row("PRAGMA auto_vacuum", [], |r| r.get(0))
             .unwrap();
         assert_eq!(mode, 2);
+    }
+
+    #[test]
+    fn test_init_pool_applies_busy_timeout_to_each_pooled_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = test_storage_config(dir.path().join("busy-timeout.db"));
+        config.pool_size = 2;
+        let pool = init_pool(&config).unwrap();
+
+        let conn1 = pool.get().unwrap();
+        let conn2 = pool.get().unwrap();
+
+        let busy_timeout_1: i64 = conn1
+            .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
+            .unwrap();
+        let busy_timeout_2: i64 = conn2
+            .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
+            .unwrap();
+
+        assert_eq!(busy_timeout_1, 5000);
+        assert_eq!(busy_timeout_2, 5000);
     }
 
     #[test]

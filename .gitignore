@@ -1,17 +1,4 @@
-# Rust
-/target/
-
-# IDE
-.vscode/
-.idea/
-*.iml
-
-# OS
-.DS_Store
-Thumbs.db
-desktop.ini
-
-# Env / secrets
+# ── Secrets ──────────────────────────────────────────────────────────────────
 .env
 .env.*
 !.env.example
@@ -19,23 +6,52 @@ desktop.ini
 *.pem
 *.cert
 
-# Docs (generated, session-specific)
-docs/reports
-docs/superpowers
-.omc/
-
-# Logs
+# ── Runtime / hook artifacts ─────────────────────────────────────────────────
+backups/*
+!backups/.gitkeep
+logs/*
+!logs/.gitkeep
 *.log
 
-# Config overrides (keep example, ignore local)
-config.local.toml
-
-# Beads / Dolt files (added by bd init)
+# ── Claude Code / AI tooling ────────────────────────────────────────────────
+.claude/settings.local.json
+.claude/worktrees/
+.omc/
+.lavra/memory/session-state.md
+.beads/
 .dolt/
 .beads-credential-key
+.serena/
+.worktrees/
+.full-review/
+.full-review-archive-*
 
-# Runtime data (SQLite DB and WAL files)
+# ── IDE / editor ─────────────────────────────────────────────────────────────
+.vscode/
+.cursor/
+.windsurf/
+.1code/
+.idea/
+*.iml
+*.swp
+*.swo
+
+# ── Caches ───────────────────────────────────────────────────────────────────
+.cache/
+
+# ── Documentation artifacts ─────────────────────────────────────────────────
+.docs/
+docs/plans/
+docs/sessions/
+docs/reports/
+docs/superpowers/
+
+# ── Rust ─────────────────────────────────────────────────────────────────────
+/target/
+
+# ── Repo-specific ────────────────────────────────────────────────────────────
+config.local.toml
 data/
-data/*.db
+*.db
 *.db-shm
 *.db-wal

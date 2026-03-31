@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::{
     extract::{DefaultBodyLimit, State},
@@ -115,6 +116,8 @@ async fn require_auth(
     req: axum::extract::Request,
     next: middleware::Next,
 ) -> axum::response::Response {
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
     if let Some(ref expected) = state.config.api_token {
         let auth = req
             .headers()
@@ -126,6 +129,12 @@ async fn require_auth(
             None => false,
         };
         if !authorized {
+            tracing::warn!(
+                method = %method,
+                path = %path,
+                has_auth_header = auth.is_some(),
+                "Unauthorized MCP request rejected"
+            );
             return (
                 StatusCode::UNAUTHORIZED,
                 Json(json!({
@@ -143,6 +152,7 @@ async fn require_auth(
 /// Health check — lightweight probe that verifies DB connectivity without
 /// running COUNT(*) over the entire logs table.
 async fn health(State(state): State<AppState>) -> impl IntoResponse {
+    let started = Instant::now();
     let pool = Arc::clone(&state.pool);
     match tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
         let conn = pool.get()?;
@@ -151,17 +161,37 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
     })
     .await
     {
-        Ok(Ok(())) => Json(json!({ "status": "ok" })).into_response(),
-        Ok(Err(e)) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "status": "error", "error": e.to_string() })),
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "status": "error", "error": e.to_string() })),
-        )
-            .into_response(),
+        Ok(Ok(())) => {
+            tracing::debug!(
+                elapsed_ms = started.elapsed().as_millis(),
+                "Health check passed"
+            );
+            Json(json!({ "status": "ok" })).into_response()
+        }
+        Ok(Err(e)) => {
+            tracing::error!(
+                error = %e,
+                elapsed_ms = started.elapsed().as_millis(),
+                "Health check failed"
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "status": "error", "error": e.to_string() })),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                elapsed_ms = started.elapsed().as_millis(),
+                "Health check task join failed"
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "status": "error", "error": e.to_string() })),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -186,33 +216,51 @@ async fn handle_sse(
 async fn dispatch(state: &AppState, req: &JsonRpcRequest) -> JsonRpcResponse {
     let id = req.id.clone().unwrap_or(Value::Null);
     let params = req.params.clone().unwrap_or(Value::Null);
+    let request_id = summarize_json_rpc_id(&id);
+    tracing::info!(
+        request_id = %request_id,
+        method = %req.method,
+        params_summary = %summarize_json_value(&params, 160),
+        "MCP request received"
+    );
 
     match req.method.as_str() {
         // --- MCP lifecycle ---
-        "initialize" => JsonRpcResponse::success(
-            id,
-            json!({
-                "protocolVersion": "2025-03-26",
-                "capabilities": {
-                    "tools": { "listChanged": false }
-                },
-                "serverInfo": {
-                    "name": state.config.server_name,
-                    "version": env!("CARGO_PKG_VERSION")
-                }
-            }),
-        ),
+        "initialize" => {
+            tracing::debug!(request_id = %request_id, "MCP initialize handled");
+            JsonRpcResponse::success(
+                id,
+                json!({
+                    "protocolVersion": "2025-03-26",
+                    "capabilities": {
+                        "tools": { "listChanged": false }
+                    },
+                    "serverInfo": {
+                        "name": state.config.server_name,
+                        "version": env!("CARGO_PKG_VERSION")
+                    }
+                }),
+            )
+        }
 
-        "notifications/initialized" => JsonRpcResponse::success(id, json!({})),
+        "notifications/initialized" => {
+            tracing::debug!(request_id = %request_id, "MCP initialized notification received");
+            JsonRpcResponse::success(id, json!({}))
+        }
 
         // --- Tool listing ---
-        "tools/list" => JsonRpcResponse::success(id, json!({ "tools": tool_definitions() })),
+        "tools/list" => {
+            let tools = tool_definitions();
+            tracing::info!(request_id = %request_id, tool_count = tools.len(), "MCP tools listed");
+            JsonRpcResponse::success(id, json!({ "tools": tools }))
+        }
 
         // --- Tool execution ---
         "tools/call" => {
             let tool_name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
 
             if tool_name.is_empty() {
+                tracing::warn!(request_id = %request_id, "MCP tools/call missing tool name");
                 return JsonRpcResponse::error(
                     id,
                     -32602,
@@ -221,20 +269,44 @@ async fn dispatch(state: &AppState, req: &JsonRpcRequest) -> JsonRpcResponse {
             }
 
             let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
+            let args_summary = summarize_json_value(&arguments, 240);
+            let started = Instant::now();
+            tracing::info!(
+                request_id = %request_id,
+                tool = %tool_name,
+                arguments_summary = %args_summary,
+                "MCP tool execution started"
+            );
 
             match execute_tool(state, tool_name, arguments).await {
-                Ok(result) => JsonRpcResponse::success(
-                    id,
-                    json!({
-                        "content": [{
-                            "type": "text",
-                            "text": serde_json::to_string_pretty(&result)
-                                .unwrap_or_else(|e| format!("serialization error: {e}"))
-                        }]
-                    }),
-                ),
+                Ok(result) => {
+                    tracing::info!(
+                        request_id = %request_id,
+                        tool = %tool_name,
+                        elapsed_ms = started.elapsed().as_millis(),
+                        result_summary = %summarize_json_value(&result, 240),
+                        "MCP tool execution completed"
+                    );
+                    JsonRpcResponse::success(
+                        id,
+                        json!({
+                            "content": [{
+                                "type": "text",
+                                "text": serde_json::to_string_pretty(&result)
+                                    .unwrap_or_else(|e| format!("serialization error: {e}"))
+                            }]
+                        }),
+                    )
+                }
                 Err(e) => {
-                    tracing::error!(error = %e, tool = %tool_name, "Tool execution failed");
+                    tracing::error!(
+                        error = %e,
+                        request_id = %request_id,
+                        tool = %tool_name,
+                        elapsed_ms = started.elapsed().as_millis(),
+                        arguments_summary = %args_summary,
+                        "MCP tool execution failed"
+                    );
                     JsonRpcResponse::success(
                         id,
                         json!({
@@ -250,7 +322,10 @@ async fn dispatch(state: &AppState, req: &JsonRpcRequest) -> JsonRpcResponse {
         }
 
         // Unknown method
-        _ => JsonRpcResponse::error(id, -32601, format!("Method not found: {}", req.method)),
+        _ => {
+            tracing::warn!(request_id = %request_id, method = %req.method, "Unknown MCP method");
+            JsonRpcResponse::error(id, -32601, format!("Method not found: {}", req.method))
+        }
     }
 }
 
@@ -436,6 +511,7 @@ async fn tool_search_logs(pool: &Arc<DbPool>, args: Value) -> anyhow::Result<Val
         limit: args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32),
     };
     let results = run_db(pool, move |pool| db::search_logs(pool, &params)).await?;
+    tracing::debug!(result_count = results.len(), "search_logs completed");
     Ok(json!({
         "count": results.len(),
         "logs": results
@@ -456,6 +532,7 @@ async fn tool_tail_logs(pool: &Arc<DbPool>, args: Value) -> anyhow::Result<Value
         db::tail_logs(pool, hostname.as_deref(), app_name.as_deref(), n)
     })
     .await?;
+    tracing::debug!(result_count = results.len(), n, "tail_logs completed");
     Ok(json!({
         "count": results.len(),
         "logs": results
@@ -469,6 +546,7 @@ async fn tool_get_errors(pool: &Arc<DbPool>, args: Value) -> anyhow::Result<Valu
         db::get_error_summary(pool, from.as_deref(), to.as_deref())
     })
     .await?;
+    tracing::debug!(summary_rows = results.len(), "get_errors completed");
     Ok(json!({
         "summary": results
     }))
@@ -476,6 +554,7 @@ async fn tool_get_errors(pool: &Arc<DbPool>, args: Value) -> anyhow::Result<Valu
 
 async fn tool_list_hosts(pool: &Arc<DbPool>, _args: Value) -> anyhow::Result<Value> {
     let results = run_db(pool, db::list_hosts).await?;
+    tracing::debug!(host_count = results.len(), "list_hosts completed");
     Ok(json!({
         "hosts": results
     }))
@@ -587,7 +666,32 @@ async fn tool_get_stats(state: &AppState, _args: Value) -> anyhow::Result<Value>
     let stats = tokio::task::spawn_blocking(move || db::get_stats(&pool, &storage))
         .await
         .map_err(|e| anyhow::anyhow!("Task join error: {e}"))??;
+    tracing::debug!(
+        total_logs = stats.total_logs,
+        total_hosts = stats.total_hosts,
+        logical_db_size_mb = %stats.logical_db_size_mb,
+        physical_db_size_mb = %stats.physical_db_size_mb,
+        write_blocked = stats.write_blocked,
+        "get_stats completed"
+    );
     Ok(serde_json::to_value(&stats)?)
+}
+
+fn summarize_json_rpc_id(id: &Value) -> String {
+    summarize_json_value(id, 48)
+}
+
+fn summarize_json_value(value: &Value, limit: usize) -> String {
+    let raw = match value {
+        Value::Null => "null".to_string(),
+        Value::String(s) => s.clone(),
+        _ => value.to_string(),
+    };
+    if raw.len() <= limit {
+        raw
+    } else {
+        format!("{}…", &raw[..limit])
+    }
 }
 
 /// Parse an optional RFC3339 timestamp string and normalize it to UTC.
@@ -654,5 +758,13 @@ mod tests {
         assert!(value.get("logical_db_size_mb").is_some());
         assert!(value.get("physical_db_size_mb").is_some());
         assert!(value.get("write_blocked").is_some());
+    }
+
+    #[test]
+    fn summarize_json_value_truncates_long_values() {
+        let value = json!({"query": "x".repeat(80)});
+        let summary = summarize_json_value(&value, 24);
+        assert!(summary.len() <= 27);
+        assert!(summary.ends_with('…'));
     }
 }

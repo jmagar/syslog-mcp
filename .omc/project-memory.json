@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "lastScanned": 1774824528872,
+  "lastScanned": 1774919426856,
   "projectRoot": "/home/jmagar/workspace/syslog-mcp",
   "techStack": {
     "languages": [
@@ -55,7 +55,7 @@
       "path": "config",
       "purpose": "Configuration files",
       "fileCount": 1,
-      "lastAccessed": 1774824528860,
+      "lastAccessed": 1774919426854,
       "keyFiles": [
         "mcporter.json"
       ]
@@ -64,7 +64,7 @@
       "path": "data",
       "purpose": "Data files",
       "fileCount": 3,
-      "lastAccessed": 1774824528863,
+      "lastAccessed": 1774919426855,
       "keyFiles": [
         "syslog.db",
         "syslog.db-shm",
@@ -75,15 +75,16 @@
       "path": "docs",
       "purpose": "Documentation",
       "fileCount": 0,
-      "lastAccessed": 1774824528864,
+      "lastAccessed": 1774919426855,
       "keyFiles": []
     },
     "scripts": {
       "path": "scripts",
       "purpose": "Build/utility scripts",
-      "fileCount": 1,
-      "lastAccessed": 1774824528865,
+      "fileCount": 2,
+      "lastAccessed": 1774919426855,
       "keyFiles": [
+        "backup.sh",
         "smoke-test.sh"
       ]
     },
@@ -91,7 +92,7 @@
       "path": "src",
       "purpose": "Source code",
       "fileCount": 5,
-      "lastAccessed": 1774824528865,
+      "lastAccessed": 1774919426855,
       "keyFiles": [
         "config.rs",
         "db.rs",
@@ -103,8 +104,8 @@
     "target": {
       "path": "target",
       "purpose": null,
-      "fileCount": 3,
-      "lastAccessed": 1774824528865,
+      "fileCount": 2,
+      "lastAccessed": 1774919426856,
       "keyFiles": [
         "CACHEDIR.TAG"
       ]
@@ -130,15 +131,15 @@
       "type": "file"
     },
     {
-      "path": "src/config.rs",
-      "accessCount": 29,
-      "lastAccessed": 1774883605410,
+      "path": "Cargo.toml",
+      "accessCount": 31,
+      "lastAccessed": 1774967220608,
       "type": "file"
     },
     {
-      "path": "Cargo.toml",
+      "path": "src/config.rs",
       "accessCount": 29,
-      "lastAccessed": 1774902027019,
+      "lastAccessed": 1774883605410,
       "type": "file"
     },
     {
@@ -173,8 +174,8 @@
     },
     {
       "path": "CHANGELOG.md",
-      "accessCount": 12,
-      "lastAccessed": 1774884029043,
+      "accessCount": 14,
+      "lastAccessed": 1774967236999,
       "type": "file"
     },
     {
@@ -265,6 +266,12 @@
       "path": "docs/sessions/2026-03-30-claude-md-audit.md",
       "accessCount": 1,
       "lastAccessed": 1774884121137,
+      "type": "file"
+    },
+    {
+      "path": "docs/sessions/2026-03-30-flatten-env-vars.md",
+      "accessCount": 1,
+      "lastAccessed": 1774902108337,
       "type": "file"
     }
   ],

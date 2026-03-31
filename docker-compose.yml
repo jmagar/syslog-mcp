@@ -3,6 +3,7 @@ services:
     build: .
     container_name: syslog-mcp
     restart: unless-stopped
+    user: "${SYSLOG_UID:-1000}:${SYSLOG_GID:-1000}"
     env_file: .env
     ports:
       - "${SYSLOG_PORT:-1514}:1514/udp"
