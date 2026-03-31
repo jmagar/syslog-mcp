@@ -93,6 +93,7 @@ RUST_LOG=info
 | `config/mcporter.json` | mcporter config (HTTP transport to localhost:3100) |
 | `scripts/smoke-test.sh` | Live smoke test — all 6 MCP tools via mcporter, strict 25-assertion PASS/FAIL |
 | `scripts/backup.sh` | WAL-safe SQLite backup script (checkpoint + `.backup` method) |
+| `scripts/reset-db.sh` | WAL-safe backup + destructive DB reset helper for local/dev recovery |
 | `CHANGELOG.md` | Version history; updated by `quick-push` on each release |
 | `.lavra/memory/recall.sh` | Query the local knowledge DB: `bash .lavra/memory/recall.sh <keyword>` |
 
@@ -116,6 +117,9 @@ RUST_LOG=info
 ```bash
 # Full smoke test (requires server running)
 bash scripts/smoke-test.sh
+
+# WAL-safe backup, then destructive DB reset (service should be stopped first)
+bash scripts/reset-db.sh
 
 # Using mcporter (project config at config/mcporter.json)
 mcporter list syslog-mcp --config config/mcporter.json

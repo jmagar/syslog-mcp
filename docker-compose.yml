@@ -38,4 +38,4 @@ volumes:
 networks:
   proxy:
     name: ${DOCKER_NETWORK:-syslog_mcp}
-    external: false
+    external: true

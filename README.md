@@ -23,7 +23,7 @@ Homelab syslog receiver + MCP server. One Rust binary that:
 docker compose up -d
 ```
 
-The compose file uses a `proxy` network (configurable via `DOCKER_NETWORK` env var, defaults to `syslog_mcp`). If attaching to an existing reverse-proxy network, set `DOCKER_NETWORK=your-network-name` in `.env`.
+The compose file joins an external `proxy` network (configurable via `DOCKER_NETWORK` env var, defaults to `syslog_mcp`). Create that network first, or point `DOCKER_NETWORK` at an existing reverse-proxy network in `.env`.
 It also runs the container as a configurable UID/GID, defaulting to `1000:1000` via `SYSLOG_UID` and `SYSLOG_GID`.
 
 Then configure each host to forward syslog to port 1514. See [SETUP.md](SETUP.md).
@@ -144,6 +144,22 @@ cp /data/syslog.db /data/syslog.db-wal /data/syslog.db-shm /backup/
 # Option 2: WAL-safe online backup (no manual checkpoint needed)
 sqlite3 /data/syslog.db ".backup /backup/syslog.db"
 ```
+
+## Resetting The DB
+
+For a fast destructive reset, use the helper script:
+
+```bash
+# Stop syslog-mcp first, then:
+bash scripts/reset-db.sh
+```
+
+The script:
+
+- creates a WAL-safe timestamped backup in `./backups/` by default
+- prompts for a `RESET` confirmation string unless you pass `--force`
+- deletes `<db>`, `<db>-wal`, and `<db>-shm`
+- expects the next `syslog-mcp` start to recreate a fresh schema
 
 ## Deployment
 
