@@ -1,0 +1,8 @@
+{
+  "name": "syslog-mcp",
+  "version": "1.0.0",
+  "description": "Syslog management via MCP",
+  "tools": ["syslog", "syslog_help"],
+  "transport": "http",
+  "port": 8080
+}
