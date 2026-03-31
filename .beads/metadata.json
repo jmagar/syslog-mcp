@@ -1,7 +1,0 @@
-{
-  "database": "dolt",
-  "backend": "dolt",
-  "dolt_mode": "server",
-  "dolt_database": "syslog_mcp",
-  "project_id": "15ab796e-fb6e-4a70-8f71-64a7374a22e9"
-}

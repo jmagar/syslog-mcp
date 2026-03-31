@@ -9,10 +9,13 @@ pub struct Config {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SyslogConfig {
     /// Listen host (shared by UDP + TCP)
+    #[serde(default = "default_syslog_host")]
     pub host: String,
     /// Listen port (shared by UDP + TCP)
+    #[serde(default = "default_syslog_port")]
     pub port: u16,
     /// Max message size in bytes
     #[serde(default = "default_max_message_size")]
@@ -39,8 +42,10 @@ impl SyslogConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct StorageConfig {
     /// Path to SQLite database
+    #[serde(default = "default_db_path")]
     pub db_path: PathBuf,
     /// Connection pool size
     #[serde(default = "default_pool_size")]
@@ -69,10 +74,13 @@ pub struct StorageConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct McpConfig {
     /// HTTP listen host
+    #[serde(default = "default_mcp_host")]
     pub host: String,
     /// HTTP listen port
+    #[serde(default = "default_mcp_port")]
     pub port: u16,
     /// Server name exposed via MCP
     #[serde(default = "default_server_name")]
@@ -91,6 +99,21 @@ impl McpConfig {
 
 // --- Defaults ---
 
+fn default_syslog_host() -> String {
+    "0.0.0.0".into()
+}
+fn default_syslog_port() -> u16 {
+    1514
+}
+fn default_db_path() -> PathBuf {
+    PathBuf::from("/data/syslog.db")
+}
+fn default_mcp_host() -> String {
+    "0.0.0.0".into()
+}
+fn default_mcp_port() -> u16 {
+    3100
+}
 fn default_max_message_size() -> usize {
     8192
 }
@@ -134,35 +157,53 @@ fn default_server_name() -> String {
     "syslog-mcp".into()
 }
 
+impl Default for SyslogConfig {
+    fn default() -> Self {
+        Self {
+            host: default_syslog_host(),
+            port: default_syslog_port(),
+            max_message_size: default_max_message_size(),
+            max_tcp_connections: default_max_tcp_connections(),
+            tcp_idle_timeout_secs: default_tcp_idle_timeout_secs(),
+            batch_size: default_batch_size(),
+            flush_interval: default_flush_interval(),
+        }
+    }
+}
+
+impl Default for StorageConfig {
+    fn default() -> Self {
+        Self {
+            db_path: default_db_path(),
+            pool_size: default_pool_size(),
+            retention_days: default_retention_days(),
+            wal_mode: true,
+            max_db_size_mb: default_max_db_size_mb(),
+            recovery_db_size_mb: default_recovery_db_size_mb(),
+            min_free_disk_mb: default_min_free_disk_mb(),
+            recovery_free_disk_mb: default_recovery_free_disk_mb(),
+            cleanup_interval_secs: default_cleanup_interval_secs(),
+        }
+    }
+}
+
+impl Default for McpConfig {
+    fn default() -> Self {
+        Self {
+            host: default_mcp_host(),
+            port: default_mcp_port(),
+            server_name: default_server_name(),
+            api_token: None,
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
-            syslog: SyslogConfig {
-                host: "0.0.0.0".into(),
-                port: 1514,
-                max_message_size: default_max_message_size(),
-                max_tcp_connections: default_max_tcp_connections(),
-                tcp_idle_timeout_secs: default_tcp_idle_timeout_secs(),
-                batch_size: default_batch_size(),
-                flush_interval: default_flush_interval(),
-            },
-            storage: StorageConfig {
-                db_path: PathBuf::from("/data/syslog.db"),
-                pool_size: default_pool_size(),
-                retention_days: default_retention_days(),
-                wal_mode: true,
-                max_db_size_mb: default_max_db_size_mb(),
-                recovery_db_size_mb: default_recovery_db_size_mb(),
-                min_free_disk_mb: default_min_free_disk_mb(),
-                recovery_free_disk_mb: default_recovery_free_disk_mb(),
-                cleanup_interval_secs: default_cleanup_interval_secs(),
-            },
-            mcp: McpConfig {
-                host: "0.0.0.0".into(),
-                port: 3100,
-                server_name: default_server_name(),
-                api_token: None,
-            },
+            syslog: SyslogConfig::default(),
+            storage: StorageConfig::default(),
+            mcp: McpConfig::default(),
         }
     }
 }
@@ -172,10 +213,15 @@ impl Config {
         // 1. Start with defaults
         let mut config = Config::default();
 
-        // 2. Overlay config.toml if present
-        if let Ok(contents) = std::fs::read_to_string("config.toml") {
-            config = toml::from_str(&contents)
-                .map_err(|e| anyhow::anyhow!("Failed to parse config.toml: {e}"))?;
+        // 2. Overlay config.toml if present (partial configs are supported — missing
+        //    fields keep their defaults from step 1 via #[serde(default)] annotations)
+        match std::fs::read_to_string("config.toml") {
+            Ok(contents) => {
+                config = toml::from_str(&contents)
+                    .map_err(|e| anyhow::anyhow!("Failed to parse config.toml: {e}"))?;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(anyhow::anyhow!("Failed to read config.toml: {e}")),
         }
 
         // 3. Overlay environment variables (highest priority)

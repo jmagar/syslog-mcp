@@ -147,7 +147,7 @@ sqlite3 /data/syslog.db ".backup /backup/syslog.db"
 
 ## Deployment
 
-See [docs/runbooks/deploy.md](docs/runbooks/deploy.md) for rolling update and rollback procedures.
+See `SETUP.md` for per-host syslog forwarding setup and `scripts/backup.sh` for WAL-safe backup procedures.
 
 ## License
 

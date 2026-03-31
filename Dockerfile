@@ -17,12 +17,12 @@ RUN apt-get update && apt-get install -y ca-certificates wget && rm -rf /var/lib
 
 COPY --from=builder /app/target/release/syslog-mcp /usr/local/bin/syslog-mcp
 
-RUN groupadd --gid 10001 syslog && useradd --uid 10001 --gid syslog --no-create-home --shell /sbin/nologin syslog && mkdir -p /data && chown syslog:syslog /data
+RUN groupadd --gid 1000 syslog && useradd --uid 1000 --gid syslog --no-create-home --shell /sbin/nologin syslog && mkdir -p /data && chown syslog:syslog /data
 
 ENV RUST_LOG=info
 ENV SYSLOG_MCP_DB_PATH=/data/syslog.db
 
-USER 10001:10001
+USER 1000:1000
 
 EXPOSE 1514/udp 1514/tcp 3100/tcp
 

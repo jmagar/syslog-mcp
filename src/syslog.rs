@@ -337,7 +337,7 @@ async fn batch_writer(
                                 queue_capacity = rx.max_capacity(),
                                 "Queued parsed syslog entry"
                             );
-                            if batch.len() >= batch_size {
+                            if batch.len() > 0 && batch.len() % batch_size == 0 {
                                 break;
                             }
                         }
@@ -1168,12 +1168,8 @@ mod tests {
         // We feed a minimal bare message without a recognisable hostname field.
         let raw = "just a plain log line with no syslog structure at all";
         let parsed = parse_syslog(raw, "192.168.1.1:514".to_string());
-        // hostname must never be empty
-        assert!(!parsed.hostname.is_empty());
         // When syslog_loose returns no hostname the code inserts "unknown"
-        // (actual value depends on how syslog_loose parses the string, but
-        // it must not be the empty string).
-        assert!(parsed.hostname == "unknown" || !parsed.hostname.is_empty());
+        assert_eq!(parsed.hostname, "unknown", "bare string with no hostname should fall back to 'unknown'");
     }
 
     /// Empty string input must not panic and must return a valid db::LogBatchEntry.

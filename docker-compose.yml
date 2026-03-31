@@ -4,7 +4,9 @@ services:
     container_name: syslog-mcp
     restart: unless-stopped
     user: "${SYSLOG_UID:-1000}:${SYSLOG_GID:-1000}"
-    env_file: .env
+    env_file:
+      - path: .env
+        required: false
     ports:
       - "${SYSLOG_PORT:-1514}:1514/udp"
       - "${SYSLOG_PORT:-1514}:1514/tcp"
@@ -36,4 +38,4 @@ volumes:
 networks:
   proxy:
     name: ${DOCKER_NETWORK:-syslog_mcp}
-    external: true
+    external: false

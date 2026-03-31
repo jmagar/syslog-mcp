@@ -245,8 +245,12 @@ async fn main() -> Result<()> {
 
 async fn shutdown_signal() {
     let ctrl_c = async {
-        if let Err(e) = tokio::signal::ctrl_c().await {
-            tracing::error!(error = %e, "Failed to install CTRL+C handler");
+        match tokio::signal::ctrl_c().await {
+            Ok(()) => {}
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to install CTRL+C handler");
+                std::future::pending::<()>().await;
+            }
         }
     };
 

@@ -26,7 +26,9 @@ if [[ ! -f "$DB_PATH" ]]; then
 fi
 
 # WAL-safe online backup — no service stop required
-sqlite3 "$DB_PATH" ".backup '${BACKUP_FILE}'"
+# Escape single quotes in path to avoid breaking the .backup command syntax
+ESCAPED_BACKUP_FILE="${BACKUP_FILE//\'/\'\'}"
+sqlite3 "$DB_PATH" ".backup '${ESCAPED_BACKUP_FILE}'"
 
 SIZE=$(du -h "$BACKUP_FILE" | cut -f1)
 echo "Backup complete: ${BACKUP_FILE} (${SIZE})"

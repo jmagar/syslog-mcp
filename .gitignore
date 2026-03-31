@@ -36,14 +36,15 @@ logs/*
 *.swp
 *.swo
 
-# ── Caches ───────────────────────────────────────────────────────────────────
+# ── Caches (ALL tool artifacts go here — see .cache Convention) ──────────────
 .cache/
 
-# ── Documentation artifacts ─────────────────────────────────────────────────
+# ── Documentation artifacts (gitignore session/plan docs, keep reference) ───
 .docs/
 docs/plans/
 docs/sessions/
 docs/reports/
+docs/research/
 docs/superpowers/
 
 # ── Rust ─────────────────────────────────────────────────────────────────────
