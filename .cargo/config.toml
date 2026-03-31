@@ -1,0 +1,5 @@
+[build]
+target-dir = ".cache/cargo"
+
+[env]
+CARGO_HOME = { value = ".cache/cargo-home", relative = true }
