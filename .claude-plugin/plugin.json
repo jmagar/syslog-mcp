@@ -5,8 +5,20 @@
   "author": "jmagar",
   "repository": "https://github.com/jmagar/syslog-mcp",
   "license": "MIT",
-  "keywords": ["syslog", "mcp", "logging", "homelab"],
-  "tools": ["search_logs", "tail_logs", "get_errors", "list_hosts", "correlate_events", "get_stats"],
+  "keywords": [
+    "syslog",
+    "mcp",
+    "logging",
+    "homelab"
+  ],
+  "tools": [
+    "search_logs",
+    "tail_logs",
+    "get_errors",
+    "list_hosts",
+    "correlate_events",
+    "get_stats"
+  ],
   "transport": "http",
   "port": 3100,
   "userConfig": {
@@ -14,7 +26,8 @@
       "type": "string",
       "title": "Syslog MCP URL",
       "description": "Base URL of the syslog-mcp server (e.g. http://localhost:3100)",
-      "sensitive": false
+      "sensitive": false,
+      "default": "https://syslog.tootie.tv/mcp"
     },
     "SYSLOG_MCP_API_TOKEN": {
       "type": "string",
