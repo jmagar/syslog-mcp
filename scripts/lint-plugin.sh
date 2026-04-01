@@ -68,7 +68,7 @@ if [[ -f "$CLAUDE_PLUGIN" ]] && jq -e '.userConfig' "$CLAUDE_PLUGIN" >/dev/null 
     while IFS= read -r key; do
       MISSING=""
       for attr in type title description sensitive; do
-        if ! jq -e ".userConfig[\"$key\"].$attr" "$CLAUDE_PLUGIN" >/dev/null 2>&1; then
+        if ! jq -e ".userConfig[\"$key\"] | has(\"$attr\")" "$CLAUDE_PLUGIN" >/dev/null 2>&1; then
           MISSING="${MISSING:+$MISSING, }$attr"
         fi
       done
@@ -275,7 +275,6 @@ for req_file in \
   Justfile \
   entrypoint.sh \
   Dockerfile \
-  docker-compose.yaml \
   .dockerignore \
   .pre-commit-config.yaml; do
   if [[ -e "$PROJECT_DIR/$req_file" ]]; then
