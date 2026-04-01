@@ -2,10 +2,7 @@
   "mcpServers": {
     "syslog-mcp": {
       "type": "http",
-      "url": "${user_config.SYSLOG_MCP_URL}",
-      "headers": {
-        "Authorization": "Bearer ${user_config.SYSLOG_MCP_API_TOKEN}"
-      }
+      "url": "${SYSLOG_MCP_URL}"
     }
   }
 }
