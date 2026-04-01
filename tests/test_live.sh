@@ -24,7 +24,7 @@ echo ""
 
 if [ -n "$TOKEN" ]; then
   echo "Testing unauthenticated rejection..."
-  status=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/mcp" \
+  status=$(curl -s --max-time 10 -o /dev/null -w "%{http_code}" "$BASE_URL/mcp" \
     -X POST -H "Content-Type: application/json" \
     -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}')
   if [ "$status" = "401" ]; then
@@ -34,7 +34,7 @@ if [ -n "$TOKEN" ]; then
   fi
 
   echo "Testing bad token rejection..."
-  status=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/mcp" \
+  status=$(curl -s --max-time 10 -o /dev/null -w "%{http_code}" "$BASE_URL/mcp" \
     -X POST -H "Authorization: Bearer bad-token" \
     -H "Content-Type: application/json" \
     -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}')
@@ -48,7 +48,7 @@ else
 fi
 
 echo "Testing health endpoint (no auth)..."
-health=$(curl -sf "$BASE_URL/health" 2>&1) || { fail "Health endpoint unreachable"; health="{}"; }
+health=$(curl -sf --max-time 10 "$BASE_URL/health" 2>&1) || { fail "Health endpoint unreachable"; health="{}"; }
 health_status=$(echo "$health" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || echo "")
 if [ "$health_status" = "ok" ]; then
   pass "Health endpoint returns status=ok"
@@ -58,13 +58,13 @@ fi
 
 echo "Testing tools/list..."
 if [ -n "$TOKEN" ]; then
-  response=$(curl -s "$BASE_URL/mcp" \
+  response=$(curl -s --max-time 10 "$BASE_URL/mcp" \
     -X POST \
     -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \
     -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}')
 else
-  response=$(curl -s "$BASE_URL/mcp" \
+  response=$(curl -s --max-time 10 "$BASE_URL/mcp" \
     -X POST \
     -H "Content-Type: application/json" \
     -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}')

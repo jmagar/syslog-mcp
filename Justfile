@@ -50,7 +50,7 @@ check-contract:
     bash scripts/lint-plugin.sh
 
 validate-skills:
-    @test -f skills/syslog/SKILL.md && echo "OK" || echo "MISSING: skills/syslog/SKILL.md"
+    @test -f skills/syslog/SKILL.md && echo "OK" || { echo "MISSING: skills/syslog/SKILL.md"; exit 1; }
 
 clean:
     cargo clean

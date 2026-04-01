@@ -28,7 +28,7 @@ fi
     [ -z "$value" ] && continue
     if grep -q "^${key}=" "$ENV_FILE" 2>/dev/null; then
       awk -v k="$key" -v v="$value" \
-        'BEGIN{FS="="; OFS="="} $1==k {$2=v; print; next} {print}' \
+        '$0 ~ "^" k "=" {print k "=" v; next} {print}' \
         "$ENV_FILE" > "${ENV_FILE}.tmp" && mv "${ENV_FILE}.tmp" "$ENV_FILE"
     else
       echo "${key}=${value}" >> "$ENV_FILE"

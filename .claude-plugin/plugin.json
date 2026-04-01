@@ -6,7 +6,7 @@
   "repository": "https://github.com/jmagar/syslog-mcp",
   "license": "MIT",
   "keywords": ["syslog", "mcp", "logging", "homelab"],
-  "tools": ["syslog", "syslog_help"],
+  "tools": ["search_logs", "tail_logs", "get_errors", "list_hosts", "correlate_events", "get_stats"],
   "transport": "http",
   "port": 3100,
   "userConfig": {
