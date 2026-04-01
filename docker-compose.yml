@@ -17,7 +17,7 @@ services:
     # cap_add:
     #   - NET_BIND_SERVICE
     networks:
-      - proxy
+      - jakenet
 
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:3100/health || exit 1"]
@@ -36,6 +36,6 @@ volumes:
   syslog-mcp-data:
 
 networks:
-  proxy:
-    name: ${DOCKER_NETWORK:-syslog_mcp}
+  jakenet:
+    name: ${DOCKER_NETWORK:-syslog-mcp}
     external: true
