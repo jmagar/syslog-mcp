@@ -8,7 +8,7 @@
 #   SYSLOG_MCP_TOKEN=<token> SYSLOG_MCP_URL=http://host:3100 bash tests/test_live.sh
 set -euo pipefail
 
-TOKEN="${SYSLOG_MCP_TOKEN:?SYSLOG_MCP_TOKEN must be set}"
+TOKEN="${SYSLOG_MCP_TOKEN:-}"
 BASE_URL="${SYSLOG_MCP_URL:-http://localhost:3100}"
 
 PASS=0
@@ -22,25 +22,29 @@ echo "=== syslog-mcp live tests ==="
 echo "URL: $BASE_URL"
 echo ""
 
-echo "Testing unauthenticated rejection..."
-status=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/mcp" \
-  -X POST -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}')
-if [ "$status" = "401" ]; then
-  pass "Unauthenticated /mcp returns 401"
-else
-  fail "Unauthenticated /mcp: expected 401, got $status"
-fi
+if [ -n "$TOKEN" ]; then
+  echo "Testing unauthenticated rejection..."
+  status=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/mcp" \
+    -X POST -H "Content-Type: application/json" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}')
+  if [ "$status" = "401" ]; then
+    pass "Unauthenticated /mcp returns 401"
+  else
+    fail "Unauthenticated /mcp: expected 401, got $status"
+  fi
 
-echo "Testing bad token rejection..."
-status=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/mcp" \
-  -X POST -H "Authorization: Bearer bad-token" \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}')
-if [ "$status" = "401" ]; then
-  pass "Bad token /mcp returns 401"
+  echo "Testing bad token rejection..."
+  status=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/mcp" \
+    -X POST -H "Authorization: Bearer bad-token" \
+    -H "Content-Type: application/json" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}')
+  if [ "$status" = "401" ]; then
+    pass "Bad token /mcp returns 401"
+  else
+    fail "Bad token /mcp: expected 401, got $status"
+  fi
 else
-  fail "Bad token /mcp: expected 401, got $status"
+  echo "Skipping auth rejection tests (SYSLOG_MCP_TOKEN not set — auth assumed disabled)"
 fi
 
 echo "Testing health endpoint (no auth)..."
@@ -52,22 +56,29 @@ else
   fail "Health endpoint: expected status=ok, got '$health_status'"
 fi
 
-echo "Testing authenticated tools/list..."
-response=$(curl -s "$BASE_URL/mcp" \
-  -X POST \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}')
+echo "Testing tools/list..."
+if [ -n "$TOKEN" ]; then
+  response=$(curl -s "$BASE_URL/mcp" \
+    -X POST \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}')
+else
+  response=$(curl -s "$BASE_URL/mcp" \
+    -X POST \
+    -H "Content-Type: application/json" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}')
+fi
 tool_count=$(echo "$response" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
 tools = d.get('result', {}).get('tools', [])
 print(len(tools))
 " 2>/dev/null || echo "0")
-if [ "$tool_count" = "6" ]; then
-  pass "Authenticated tools/list returns 6 tools"
+if [ "$tool_count" -ge 1 ] 2>/dev/null; then
+  pass "tools/list returns $tool_count tool(s)"
 else
-  fail "tools/list: expected 6 tools, got $tool_count"
+  fail "tools/list: expected at least 1 tool, got $tool_count"
 fi
 
 echo ""

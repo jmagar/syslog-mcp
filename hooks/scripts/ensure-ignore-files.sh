@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-GITIGNORE="${CLAUDE_PLUGIN_ROOT}/.gitignore"
+GITIGNORE="${CLAUDE_PLUGIN_ROOT:-$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null || pwd)}/.gitignore"
 REQUIRED=(".env" ".env.*" "!.env.example" ".cache/" "target/" "backups/*" "!backups/.gitkeep" "logs/*" "!logs/.gitkeep")
 
 if [[ "${1:-}" == "--check" ]]; then

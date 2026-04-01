@@ -2,7 +2,25 @@
   "name": "syslog-mcp",
   "version": "1.0.0",
   "description": "Syslog management via MCP",
+  "author": "jmagar",
+  "repository": "https://github.com/jmagar/syslog-mcp",
+  "license": "MIT",
+  "keywords": ["syslog", "mcp", "logging", "homelab"],
   "tools": ["syslog", "syslog_help"],
   "transport": "http",
-  "port": 8080
+  "port": 3100,
+  "userConfig": {
+    "SYSLOG_MCP_URL": {
+      "type": "string",
+      "title": "Syslog MCP URL",
+      "description": "Base URL of the syslog-mcp server (e.g. http://localhost:3100)",
+      "sensitive": false
+    },
+    "SYSLOG_MCP_API_TOKEN": {
+      "type": "string",
+      "title": "API Token",
+      "description": "Bearer token for authenticating MCP requests (leave empty if auth is disabled)",
+      "sensitive": true
+    }
+  }
 }

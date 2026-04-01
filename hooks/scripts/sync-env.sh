@@ -8,8 +8,11 @@ mkdir -p "$BACKUP_DIR"
 declare -A MANAGED=(
   [SYSLOG_HOST]="${CLAUDE_PLUGIN_OPTION_SYSLOG_HOST:-}"
   [SYSLOG_PORT]="${CLAUDE_PLUGIN_OPTION_SYSLOG_PORT:-}"
-  [SYSLOG_MCP_TOKEN]="${CLAUDE_PLUGIN_OPTION_SYSLOG_MCP_TOKEN:-}"
+  [SYSLOG_MCP_API_TOKEN]="${CLAUDE_PLUGIN_OPTION_SYSLOG_MCP_API_TOKEN:-}"
 )
+
+LOCK_DIR="${CLAUDE_PLUGIN_ROOT:-$(pwd)}"
+mkdir -p "${LOCK_DIR}/.cache"
 
 touch "$ENV_FILE"
 
@@ -34,4 +37,4 @@ fi
 
   chmod 600 "$ENV_FILE"
 
-) 200>/tmp/syslog-sync-env.lock
+) 200>"${LOCK_DIR}/.cache/syslog-sync-env.lock"
