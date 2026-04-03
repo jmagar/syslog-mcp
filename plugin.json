@@ -1,0 +1,35 @@
+{
+  "name": "syslog-mcp",
+  "version": "1.0.0",
+  "description": "Homelab syslog receiver plus MCP server for searching, tailing, and correlating logs across hosts. Full-text search with FTS5, event correlation across time windows, and error summaries.",
+  "author": {
+    "name": "Jacob Magar",
+    "email": "jmagar@users.noreply.github.com"
+  },
+  "repository": "https://github.com/jmagar/syslog-mcp",
+  "homepage": "https://github.com/jmagar/syslog-mcp",
+  "license": "MIT",
+  "keywords": [
+    "syslog",
+    "logs",
+    "observability",
+    "homelab",
+    "mcp",
+    "sqlite"
+  ],
+  "userConfig": {
+    "syslog_mcp_url": {
+      "type": "string",
+      "title": "Syslog MCP URL",
+      "description": "Base URL of the syslog-mcp server (e.g. http://localhost:3100)",
+      "sensitive": false,
+      "default": "https://syslog.tootie.tv/mcp"
+    },
+    "syslog_mcp_token": {
+      "type": "string",
+      "title": "MCP Server Bearer Token",
+      "description": "Bearer token for authenticating MCP requests. Must match SYSLOG_MCP_TOKEN in .env. Generate with: openssl rand -hex 32",
+      "sensitive": true
+    }
+  }
+}
