@@ -1,0 +1,26 @@
+{
+  "name": "syslog-mcp",
+  "version": "1.0.0",
+  "description": "Homelab syslog receiver and MCP server for searching, tailing, and correlating logs across hosts.",
+  "mcpServers": {
+    "syslog-mcp": {
+      "command": "${extensionPath}/target/release/syslog-mcp",
+      "args": [],
+      "cwd": "${extensionPath}"
+    }
+  },
+  "settings": [
+    {
+      "name": "Database Path",
+      "description": "Path to the SQLite database for syslog storage (e.g., /data/syslog.db)",
+      "envVar": "SYSLOG_MCP_DB_PATH",
+      "sensitive": false
+    },
+    {
+      "name": "Syslog Listen Port",
+      "description": "UDP/TCP port for receiving syslog messages (default: 514)",
+      "envVar": "SYSLOG_PORT",
+      "sensitive": false
+    }
+  ]
+}
