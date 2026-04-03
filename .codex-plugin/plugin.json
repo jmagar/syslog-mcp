@@ -1,11 +1,44 @@
 {
   "name": "syslog-mcp",
   "version": "1.0.0",
-  "description": "Syslog management via MCP",
+  "description": "Syslog management via MCP.",
+  "homepage": "https://github.com/jmagar/syslog-mcp",
+  "repository": "https://github.com/jmagar/syslog-mcp",
+  "license": "MIT",
+  "keywords": [
+    "syslog",
+    "logs",
+    "observability",
+    "homelab",
+    "mcp",
+    "sqlite"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "apps": "./.app.json",
   "interface": {
-    "type": "mcp",
-    "transport": "http",
-    "url": "http://localhost:3100/mcp",
-    "displayName": "Syslog MCP"
+    "displayName": "Syslog MCP",
+    "shortDescription": "Search, tail, and correlate syslog data",
+    "longDescription": "Receive syslog, store it in SQLite, and search, tail, and correlate homelab logs through MCP tools and bundled skills.",
+    "developerName": "Jacob Magar",
+    "category": "Infrastructure",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/jmagar/syslog-mcp",
+    "defaultPrompt": [
+      "Search recent syslog errors.",
+      "Tail logs for a host.",
+      "Correlate an outage across multiple systems."
+    ],
+    "brandColor": "#475569",
+    "composerIcon": "./assets/icon.png",
+    "logo": "./assets/logo.svg"
+  },
+  "author": {
+    "name": "Jacob Magar",
+    "email": "jmagar@users.noreply.github.com",
+    "url": "https://github.com/jmagar"
   }
 }

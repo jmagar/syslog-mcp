@@ -85,6 +85,11 @@ impl JsonRpcResponse {
     }
 }
 
+enum DispatchResult {
+    Response(JsonRpcResponse),
+    Notification,
+}
+
 /// Build the MCP router
 pub fn router(state: AppState) -> Router {
     // Authenticated routes: /mcp and /sse require Bearer token when api_token is set
@@ -200,8 +205,11 @@ async fn handle_mcp_post(
     State(state): State<AppState>,
     Json(req): Json<JsonRpcRequest>,
 ) -> impl IntoResponse {
-    let response = dispatch(&state, &req).await;
-    Json(response)
+    match dispatch(&state, &req).await {
+        DispatchResult::Response(response) => Json(response).into_response(),
+        // JSON-RPC notifications must not produce a response body.
+        DispatchResult::Notification => StatusCode::ACCEPTED.into_response(),
+    }
 }
 
 /// SSE endpoint for MCP (legacy transport support)
@@ -213,7 +221,7 @@ async fn handle_sse(
 }
 
 /// Route MCP methods to handlers
-async fn dispatch(state: &AppState, req: &JsonRpcRequest) -> JsonRpcResponse {
+async fn dispatch(state: &AppState, req: &JsonRpcRequest) -> DispatchResult {
     let id = req.id.clone().unwrap_or(Value::Null);
     let params = req.params.clone().unwrap_or(Value::Null);
     let request_id = summarize_json_rpc_id(&id);
@@ -228,7 +236,7 @@ async fn dispatch(state: &AppState, req: &JsonRpcRequest) -> JsonRpcResponse {
         // --- MCP lifecycle ---
         "initialize" => {
             tracing::debug!(request_id = %request_id, "MCP initialize handled");
-            JsonRpcResponse::success(
+            DispatchResult::Response(JsonRpcResponse::success(
                 id,
                 json!({
                     "protocolVersion": "2025-03-26",
@@ -240,19 +248,19 @@ async fn dispatch(state: &AppState, req: &JsonRpcRequest) -> JsonRpcResponse {
                         "version": env!("CARGO_PKG_VERSION")
                     }
                 }),
-            )
+            ))
         }
 
         "notifications/initialized" => {
             tracing::debug!(request_id = %request_id, "MCP initialized notification received");
-            JsonRpcResponse::success(id, json!({}))
+            DispatchResult::Notification
         }
 
         // --- Tool listing ---
         "tools/list" => {
             let tools = tool_definitions();
             tracing::info!(request_id = %request_id, tool_count = tools.len(), "MCP tools listed");
-            JsonRpcResponse::success(id, json!({ "tools": tools }))
+            DispatchResult::Response(JsonRpcResponse::success(id, json!({ "tools": tools })))
         }
 
         // --- Tool execution ---
@@ -261,11 +269,11 @@ async fn dispatch(state: &AppState, req: &JsonRpcRequest) -> JsonRpcResponse {
 
             if tool_name.is_empty() {
                 tracing::warn!(request_id = %request_id, "MCP tools/call missing tool name");
-                return JsonRpcResponse::error(
+                return DispatchResult::Response(JsonRpcResponse::error(
                     id,
                     -32602,
                     "Missing required parameter: name".into(),
-                );
+                ));
             }
 
             let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
@@ -287,7 +295,7 @@ async fn dispatch(state: &AppState, req: &JsonRpcRequest) -> JsonRpcResponse {
                         result_summary = %summarize_json_value(&result, 240),
                         "MCP tool execution completed"
                     );
-                    JsonRpcResponse::success(
+                    DispatchResult::Response(JsonRpcResponse::success(
                         id,
                         json!({
                             "content": [{
@@ -296,7 +304,7 @@ async fn dispatch(state: &AppState, req: &JsonRpcRequest) -> JsonRpcResponse {
                                     .unwrap_or_else(|e| format!("serialization error: {e}"))
                             }]
                         }),
-                    )
+                    ))
                 }
                 Err(e) => {
                     tracing::error!(
@@ -307,7 +315,7 @@ async fn dispatch(state: &AppState, req: &JsonRpcRequest) -> JsonRpcResponse {
                         arguments_summary = %args_summary,
                         "MCP tool execution failed"
                     );
-                    JsonRpcResponse::success(
+                    DispatchResult::Response(JsonRpcResponse::success(
                         id,
                         json!({
                             "content": [{
@@ -316,7 +324,7 @@ async fn dispatch(state: &AppState, req: &JsonRpcRequest) -> JsonRpcResponse {
                             }],
                             "isError": true
                         }),
-                    )
+                    ))
                 }
             }
         }
@@ -324,7 +332,11 @@ async fn dispatch(state: &AppState, req: &JsonRpcRequest) -> JsonRpcResponse {
         // Unknown method
         _ => {
             tracing::warn!(request_id = %request_id, method = %req.method, "Unknown MCP method");
-            JsonRpcResponse::error(id, -32601, format!("Method not found: {}", req.method))
+            DispatchResult::Response(JsonRpcResponse::error(
+                id,
+                -32601,
+                format!("Method not found: {}", req.method),
+            ))
         }
     }
 }
@@ -804,6 +816,7 @@ fn parse_optional_timestamp(raw: Option<&str>, field_name: &str) -> anyhow::Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::to_bytes;
 
     fn test_storage_config(db_path: std::path::PathBuf) -> StorageConfig {
         StorageConfig {
@@ -845,6 +858,26 @@ mod tests {
         assert!(value.get("logical_db_size_mb").is_some());
         assert!(value.get("physical_db_size_mb").is_some());
         assert!(value.get("write_blocked").is_some());
+    }
+
+    #[tokio::test]
+    async fn initialized_notification_returns_no_jsonrpc_body() {
+        let (state, _dir) = test_state();
+        let response = handle_mcp_post(
+            State(state),
+            Json(JsonRpcRequest {
+                jsonrpc: "2.0".into(),
+                id: None,
+                method: "notifications/initialized".into(),
+                params: Some(json!({})),
+            }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert!(body.is_empty());
     }
 
     #[test]
