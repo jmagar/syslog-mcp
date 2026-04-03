@@ -29,7 +29,7 @@ USER 1000:1000
 
 EXPOSE 514/udp 514/tcp 8080/tcp
 
-HEALTHCHECK CMD curl -f http://localhost:8080/health || exit 1
+HEALTHCHECK CMD curl -sf http://localhost:3100/health || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["syslog-mcp"]
