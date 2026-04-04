@@ -167,9 +167,7 @@ async fn handle_tcp_connection(
     let mut line_count: u64 = 0;
     let mut total_bytes: usize = 0;
     let started = Instant::now();
-    let close_reason;
-
-    close_reason = loop {
+    let close_reason = loop {
         // Idle timeout: if no data arrives within idle_timeout_secs, drop the connection.
         // This is an idle (per-read) timeout, not a wall-clock timeout, so
         // persistent forwarders sending continuous messages are never killed.
@@ -337,7 +335,7 @@ async fn batch_writer(
                                 queue_capacity = rx.max_capacity(),
                                 "Queued parsed syslog entry"
                             );
-                            if batch.len() > 0 && batch.len() % batch_size == 0 {
+                            if !batch.is_empty() && batch.len() % batch_size == 0 {
                                 break;
                             }
                         }
@@ -843,6 +841,7 @@ mod tests {
             min_free_disk_mb: 0,
             recovery_free_disk_mb: 0,
             cleanup_interval_secs: 60,
+            cleanup_chunk_size: 1,
         }
     }
 

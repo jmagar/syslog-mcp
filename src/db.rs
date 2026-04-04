@@ -341,7 +341,7 @@ pub fn enforce_storage_budget_with_probe(
             deleted_rows,
             "Storage budget exceeded recovery target — deleting oldest logs chunk"
         );
-        let deleted = delete_oldest_logs_chunk(pool, 1)?;
+        let deleted = delete_oldest_logs_chunk(pool, config.cleanup_chunk_size)?;
         if deleted.deleted_rows == 0 {
             metrics = get_storage_metrics_with_probe(pool, config, probe)?;
             let write_blocked = exceeds_trigger(&metrics, config);
@@ -368,8 +368,11 @@ pub fn enforce_storage_budget_with_probe(
             "Deleted oldest log chunk for storage recovery"
         );
         reconcile_hosts(pool, &deleted.hostnames)?;
-        checkpoint_wal_and_incremental_vacuum(pool)?;
         metrics = get_storage_metrics_with_probe(pool, config, probe)?;
+    }
+
+    if deleted_rows > 0 {
+        checkpoint_wal_and_incremental_vacuum(pool)?;
     }
 
     tracing::debug!(
@@ -468,16 +471,12 @@ fn insert_logs_batch_once(pool: &DbPool, entries: &[LogBatchEntry]) -> Result<us
 }
 
 fn is_transient_sqlite_lock(err: &anyhow::Error) -> bool {
-    err.chain().any(|cause| match cause.downcast_ref::<SqliteError>() {
-        Some(SqliteError::SqliteFailure(sql_err, _))
-            if matches!(
-                sql_err.code,
-                ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked
-            ) =>
-        {
-            true
-        }
-        _ => false,
+    err.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<SqliteError>(),
+            Some(SqliteError::SqliteFailure(sql_err, _))
+                if matches!(sql_err.code, ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
+        )
     })
 }
 
@@ -1003,6 +1002,7 @@ mod tests {
             min_free_disk_mb: 512,
             recovery_free_disk_mb: 768,
             cleanup_interval_secs: 60,
+            cleanup_chunk_size: 1,
         }
     }
 

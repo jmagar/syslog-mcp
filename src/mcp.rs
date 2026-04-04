@@ -789,7 +789,11 @@ fn summarize_json_value(value: &Value, limit: usize) -> String {
     if raw.len() <= limit {
         raw
     } else {
-        format!("{}…", &raw[..limit])
+        let mut end = limit;
+        while end > 0 && !raw.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}…", &raw[..end])
     }
 }
 
@@ -829,6 +833,7 @@ mod tests {
             min_free_disk_mb: 0,
             recovery_free_disk_mb: 0,
             cleanup_interval_secs: 60,
+            cleanup_chunk_size: 1,
         }
     }
 
@@ -885,6 +890,16 @@ mod tests {
         let value = json!({"query": "x".repeat(80)});
         let summary = summarize_json_value(&value, 24);
         assert!(summary.len() <= 27);
+        assert!(summary.ends_with('…'));
+    }
+
+    #[test]
+    fn summarize_json_value_handles_multibyte_utf8() {
+        // Each Greek letter is 2 bytes; limit=5 falls inside the 3rd letter
+        let value = json!("αβγδεζ");
+        let summary = summarize_json_value(&value, 5);
+        // Should not panic, should be valid UTF-8
+        assert!(summary.is_char_boundary(summary.len()));
         assert!(summary.ends_with('…'));
     }
 }

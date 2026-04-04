@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     pub syslog: SyslogConfig,
     pub storage: StorageConfig,
@@ -71,6 +71,9 @@ pub struct StorageConfig {
     /// Storage budget enforcement interval in seconds
     #[serde(default = "default_cleanup_interval_secs")]
     pub cleanup_interval_secs: u64,
+    /// Number of rows to delete per chunk during storage enforcement
+    #[serde(default = "default_cleanup_chunk_size")]
+    pub cleanup_chunk_size: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -150,6 +153,9 @@ fn default_recovery_free_disk_mb() -> u64 {
 fn default_cleanup_interval_secs() -> u64 {
     60
 }
+fn default_cleanup_chunk_size() -> usize {
+    2_000
+}
 fn default_true() -> bool {
     true
 }
@@ -183,6 +189,7 @@ impl Default for StorageConfig {
             min_free_disk_mb: default_min_free_disk_mb(),
             recovery_free_disk_mb: default_recovery_free_disk_mb(),
             cleanup_interval_secs: default_cleanup_interval_secs(),
+            cleanup_chunk_size: default_cleanup_chunk_size(),
         }
     }
 }
@@ -198,15 +205,6 @@ impl Default for McpConfig {
     }
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            syslog: SyslogConfig::default(),
-            storage: StorageConfig::default(),
-            mcp: McpConfig::default(),
-        }
-    }
-}
 
 impl Config {
     pub fn load() -> anyhow::Result<Self> {
@@ -264,6 +262,10 @@ impl Config {
         env_override_parse(
             "SYSLOG_MCP_CLEANUP_INTERVAL_SECS",
             &mut config.storage.cleanup_interval_secs,
+        )?;
+        env_override_parse(
+            "SYSLOG_MCP_CLEANUP_CHUNK_SIZE",
+            &mut config.storage.cleanup_chunk_size,
         )?;
 
         // Validation
