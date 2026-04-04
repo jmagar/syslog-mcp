@@ -206,17 +206,14 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
             tokenize='porter unicode61'
         );
 
-        -- Triggers to keep FTS in sync
+        -- Trigger to keep FTS in sync on INSERT only.
+        -- DELETE and UPDATE triggers are intentionally absent: bulk DELETEs during
+        -- retention purge and storage-budget enforcement fire the trigger for every
+        -- deleted row inside a single implicit transaction, holding the SQLite write
+        -- lock long enough to starve the batch writer. FTS5 content tables tolerate
+        -- phantom rows — stale entries are skipped at query time and cleaned up by
+        -- periodic incremental merge (merge=500,250).
         CREATE TRIGGER IF NOT EXISTS logs_ai AFTER INSERT ON logs BEGIN
-            INSERT INTO logs_fts(rowid, message) VALUES (new.id, new.message);
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS logs_ad AFTER DELETE ON logs BEGIN
-            INSERT INTO logs_fts(logs_fts, rowid, message) VALUES('delete', old.id, old.message);
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS logs_au AFTER UPDATE ON logs BEGIN
-            INSERT INTO logs_fts(logs_fts, rowid, message) VALUES('delete', old.id, old.message);
             INSERT INTO logs_fts(rowid, message) VALUES (new.id, new.message);
         END;
 
@@ -245,6 +242,14 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
         conn.execute_batch("ALTER TABLE logs ADD COLUMN source_ip TEXT NOT NULL DEFAULT ''")?;
         tracing::info!("Migration: added source_ip column to logs table");
     }
+
+    // Migration: drop FTS5 DELETE/UPDATE triggers from existing databases.
+    // These triggers caused write-lock contention during bulk deletes (retention
+    // purge, storage enforcement). See schema comment above for rationale.
+    conn.execute_batch(
+        "DROP TRIGGER IF EXISTS logs_ad;
+         DROP TRIGGER IF EXISTS logs_au;",
+    )?;
 
     tracing::info!(path = %config.db_path.display(), "Database initialized");
     Ok(pool)
@@ -372,6 +377,17 @@ pub fn enforce_storage_budget_with_probe(
     }
 
     if deleted_rows > 0 {
+        // Incremental FTS merge — clean up phantom rows left by bulk deletes
+        // (DELETE trigger is intentionally absent). Best-effort, matching
+        // the pattern in purge_old_logs.
+        let conn = pool.get()?;
+        if let Err(e) =
+            conn.execute_batch("INSERT INTO logs_fts(logs_fts) VALUES('merge=500,250');")
+        {
+            tracing::warn!(error = %e, "FTS merge after storage enforcement skipped (non-fatal)");
+        }
+        drop(conn);
+
         checkpoint_wal_and_incremental_vacuum(pool)?;
     }
 

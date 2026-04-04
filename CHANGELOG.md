@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4] — 2026-04-03
+
+### Fixed
+
+- **`src/db.rs`**: FTS5 write-lock contention during retention purge and storage-budget bulk deletes — removed `logs_ad` (AFTER DELETE) and `logs_au` (AFTER UPDATE) triggers that fired per-row inside 10k-chunk transactions, starving the batch writer. Added migration to drop triggers from existing databases. FTS5 phantom rows are cleaned up by incremental merge (syslog-mcp-eg5)
+
+### Added
+
+- **`src/db.rs`**: Incremental FTS merge (`merge=500,250`) after storage-budget enforcement bulk deletes, matching the existing `purge_old_logs` pattern
+
 ## [0.2.3] — 2026-04-03
 
 ### Fixed
