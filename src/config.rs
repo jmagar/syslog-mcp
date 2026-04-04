@@ -378,6 +378,13 @@ fn validate_storage_config(storage: &StorageConfig) -> anyhow::Result<()> {
         ));
     }
 
+    if storage.cleanup_chunk_size > i64::MAX as usize {
+        return Err(anyhow::anyhow!(
+            "cleanup_chunk_size must be <= {}",
+            i64::MAX
+        ));
+    }
+
     Ok(())
 }
 
@@ -528,5 +535,29 @@ mod tests {
 
         let err = result.expect_err("Config::load() should reject invalid recovery_db_size_mb");
         assert!(err.to_string().contains("recovery_db_size_mb"));
+    }
+
+    #[test]
+    #[serial]
+    fn rejects_cleanup_chunk_size_zero() {
+        std::env::set_var("SYSLOG_MCP_CLEANUP_CHUNK_SIZE", "0");
+        let result = Config::load();
+        std::env::remove_var("SYSLOG_MCP_CLEANUP_CHUNK_SIZE");
+
+        let err = result.expect_err("Config::load() should reject cleanup_chunk_size == 0");
+        assert!(err.to_string().contains("cleanup_chunk_size"));
+    }
+
+    #[test]
+    #[serial]
+    fn rejects_cleanup_chunk_size_overflow() {
+        // Values larger than i64::MAX overflow the SQLite LIMIT cast
+        let overflow = (i64::MAX as u128 + 1).to_string();
+        std::env::set_var("SYSLOG_MCP_CLEANUP_CHUNK_SIZE", &overflow);
+        let result = Config::load();
+        std::env::remove_var("SYSLOG_MCP_CLEANUP_CHUNK_SIZE");
+
+        // Either the parse fails (value exceeds usize) or validation rejects it
+        assert!(result.is_err(), "Config::load() should reject oversized cleanup_chunk_size");
     }
 }
