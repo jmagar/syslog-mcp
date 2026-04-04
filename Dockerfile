@@ -32,5 +32,7 @@ EXPOSE 514/udp 514/tcp 3100/tcp
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD curl -sf http://localhost:3100/health || exit 1
 
+LABEL io.modelcontextprotocol.server.name="tv.tootie/syslog-mcp"
+
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["syslog-mcp"]
