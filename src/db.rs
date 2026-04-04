@@ -378,15 +378,10 @@ pub fn enforce_storage_budget_with_probe(
 
     if deleted_rows > 0 {
         // Incremental FTS merge — clean up phantom rows left by bulk deletes
-        // (DELETE trigger is intentionally absent). Best-effort, matching
-        // the pattern in purge_old_logs.
-        let conn = pool.get()?;
-        if let Err(e) =
-            conn.execute_batch("INSERT INTO logs_fts(logs_fts) VALUES('merge=500,250');")
-        {
-            tracing::warn!(error = %e, "FTS merge after storage enforcement skipped (non-fatal)");
-        }
-        drop(conn);
+        // (DELETE trigger is intentionally absent).
+        // drop the connection before checkpoint_wal_and_incremental_vacuum to
+        // avoid pool exhaustion when pool_size = 1.
+        fts_incremental_merge(pool);
 
         checkpoint_wal_and_incremental_vacuum(pool)?;
     }
@@ -658,6 +653,23 @@ pub fn list_hosts(pool: &DbPool) -> Result<Vec<HostEntry>> {
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// Run an incremental FTS5 merge to clean up phantom rows left by bulk DELETEs.
+///
+/// Best-effort: a small or empty index may return an error, which is logged and ignored.
+/// Must be called with no other connections holding the pool when `pool_size = 1`.
+fn fts_incremental_merge(pool: &DbPool) {
+    match pool.get() {
+        Ok(conn) => {
+            if let Err(e) =
+                conn.execute_batch("INSERT INTO logs_fts(logs_fts) VALUES('merge=500,250');")
+            {
+                tracing::warn!(error = %e, "FTS incremental merge skipped (non-fatal)");
+            }
+        }
+        Err(e) => tracing::warn!(error = %e, "FTS incremental merge: failed to get connection"),
+    }
+}
+
 /// Purge logs older than N days.
 ///
 /// Uses chunked DELETEs (10 000 rows per iteration) so the WAL write lock is
@@ -703,14 +715,8 @@ pub fn purge_old_logs(pool: &DbPool, retention_days: u32) -> Result<usize> {
     }
 
     // Incremental FTS merge — much shorter write-lock duration than full rebuild.
-    // Best-effort: a small/empty index may return an error; log and continue.
     if total_deleted > 0 {
-        let conn = pool.get()?;
-        if let Err(e) =
-            conn.execute_batch("INSERT INTO logs_fts(logs_fts) VALUES('merge=500,250');")
-        {
-            tracing::warn!(error = %e, "FTS merge skipped (non-fatal)");
-        }
+        fts_incremental_merge(pool);
     }
 
     // Passive WAL checkpoint: attempt to move WAL pages into the main DB file
