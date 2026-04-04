@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.6] — 2026-04-04
+
+### Changed
+
+- **`src/db.rs`**: Extracted `fts_incremental_merge()` helper — eliminates duplicated FTS merge string across `purge_old_logs` and `enforce_storage_budget`
+- **`src/mcp.rs`**: `test_state()` now delegates to `test_state_with_token(None)`; `mcp_post()` gains optional `auth` param — auth integration tests no longer inline the request builder
+
+### Fixed
+
+- **`src/config.rs`**: Added `accepts_cleanup_chunk_size_at_i64_max` boundary test; tightened overflow test to assert error message; added `SYSLOG_MCP_CLEANUP_CHUNK_SIZE` to `defaults_are_applied_without_env_vars` clear list and assertion
+- **`src/db.rs`**: Migrated `test_storage_config()` to `StorageConfig::for_test()`
+- **`src/syslog.rs`**: `TryAcquireError::Closed` branch now logs at `error!` before breaking
+- **`CHANGELOG.md`**: Corrected v0.2.2 date (`2026-04-04` → `2026-04-03`)
+
 ## [0.2.5] — 2026-04-03
 
 ### Added
