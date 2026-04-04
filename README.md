@@ -1,104 +1,108 @@
-# Syslog MCP Server
+# Syslog MCP
 
-> **Unified homelab log aggregation and AI-powered correlation via the Model Context Protocol.**
+Rust syslog receiver and MCP server for homelab log intelligence. This repo ingests syslog over UDP/TCP, stores it in SQLite with FTS5 indexing, and exposes search, tail, error summary, correlation, and stats tools to MCP clients.
 
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](CHANGELOG.md)
-[![Rust Version](https://img.shields.io/badge/rust-1.75+-orange.svg)](https://www.rust-lang.org/)
-[![FastMCP](https://img.shields.io/badge/FastMCP-Enabled-brightgreen.svg)](https://github.com/jlowin/fastmcp)
-[![License](https://img.shields.io/badge/license-MIT-purple.svg)](LICENSE)
+## What this repository ships
 
----
+- `src/`: Rust server, ingestion, storage, HTTP, and MCP implementation
+- `config/`: runtime configuration
+- `SETUP.md`: deployment/setup notes
+- `.claude-plugin/`, `.codex-plugin/`, `gemini-extension.json`: client manifests
+- `Dockerfile`, `docker-compose*`: container deployment
+- `tests/`: live and unit validation
 
-## ✨ Overview
-Syslog MCP is a high-performance log receiver and search engine built in Rust. It aggregates syslog data (UDP/TCP) from all your homelab hosts into a central SQLite database, providing AI assistants with full-text search, real-time tailing, and cross-host event correlation.
+## MCP surface
 
-### 🎯 Key Features
-| Feature | Description |
-|---------|-------------|
-| **Log Aggregator** | Supports RFC 3164/5424 via UDP and TCP on port 1514 |
-| **FTS5 Search** | Blazing fast full-text search across all aggregated logs |
-| **Event Correlation** | Analyze related events across multiple hosts in specific time windows |
-| **Storage Budget** | Automatic retention policies and emergency disk-space guards |
+### Main tools
 
----
+| Tool | Purpose |
+| --- | --- |
+| `search_logs` | Full-text search across syslog messages |
+| `tail_logs` | Return the N most recent entries |
+| `get_errors` | Summarize warnings/errors by host and severity |
+| `list_hosts` | List known hosts with first/last seen timestamps |
+| `correlate_events` | Search across hosts around a reference timestamp |
+| `get_stats` | Database/storage stats and write-block state |
+| `syslog_help` | Return markdown help for the MCP toolset |
 
-## 🎯 Claude Code Integration
-The easiest way to use this plugin is through the Claude Code marketplace:
+## Installation
+
+### Marketplace
 
 ```bash
-# Add the marketplace
 /plugin marketplace add jmagar/claude-homelab
-
-# Install the plugin
 /plugin install syslog-mcp @jmagar-claude-homelab
 ```
 
----
+### Local development
 
-## ⚙️ Configuration & Credentials
-Credentials follow the standardized `homelab-core` pattern.
-
-**Location:** `~/.syslog-mcp/.env`
-
-### Required Variables
 ```bash
-SYSLOG_PORT=1514
-SYSLOG_MCP_PORT=3100
-SYSLOG_MCP_API_TOKEN="your-secret-token"
+cargo build
+cargo run
+```
+
+## Configuration
+
+Create `.env` from `.env.example` and set:
+
+```bash
+SYSLOG_MCP_TOKEN=your_bearer_token
+SYSLOG_MCP_PORT=8080
+SYSLOG_MCP_TRANSPORT=http
+NO_AUTH=false
+ALLOW_DESTRUCTIVE=false
+ALLOW_YOLO=false
+SYSLOG_HOST=your-syslog-host
+SYSLOG_PORT=514
+SYSLOG_MCP_HOST=0.0.0.0
+SYSLOG_MCP_DB_PATH=/data/syslog.db
+SYSLOG_MCP_POOL_SIZE=4
 SYSLOG_MCP_RETENTION_DAYS=90
+RUST_LOG=info
 ```
 
-> **Security Note:** Set `SYSLOG_MCP_API_TOKEN` to enable Bearer authentication. Without it, the search endpoint is unauthenticated within your LAN.
+Notes:
 
----
+- the README previously hardcoded ports that did not match `.env.example`; use the explicit values in your deployment
+- SQLite FTS5 is enabled through the bundled `rusqlite` feature set
+- Bearer auth is optional but strongly recommended for HTTP exposure
 
-## 🛠️ Available Tools & Resources
+## Development commands
 
-### 🔧 Primary Tools
-| Tool | Parameters | Description |
-|------|------------|-------------|
-| **`search_logs`** | `query`, `host`, `limit` | Full-text search with FTS5 syntax |
-| **`tail_logs`** | `host`, `n` | Recent entries across hosts (distributed tail) |
-| **`get_errors`** | `none` | Aggregated error summary by host and severity |
-| **`correlate_events`**| `window_secs` | Cross-host event mapping in a time window |
-| **`get_stats`** | `none` | Database size, log counts, and retention status |
-
----
-
-## 🏗️ Architecture & Design
-Built as a single Rust binary for maximum efficiency:
-- **Batch Writer:** Uses `mpsc` channels for non-blocking SQLite persistence.
-- **Axum Web Server:** Provides the MCP interface over high-speed HTTP.
-- **Storage Guard:** Hourly cleanup tasks enforce retention and disk quotas.
-
----
-
-## 🔧 Development
-### Prerequisites
-- Rust 1.75+
-- Docker (optional)
-
-### Setup
 ```bash
-cargo build --release
-./target/release/syslog-mcp
+just dev
+just check
+just lint
+just fmt
+just test
+just build
+just up
+just logs
 ```
 
-### Docker Deployment
+## Verification
+
+Recommended:
+
 ```bash
-docker compose up -d
+just check
+just lint
+just test
 ```
 
----
+Optional runtime verification:
 
-## 🐛 Troubleshooting
-| Issue | Cause | Solution |
-|-------|-------|----------|
-| **No Logs Found** | Firewall Block | Allow port 1514 (UDP/TCP) on host |
-| **Disk Full** | DB Growth | Adjust `SYSLOG_MCP_MAX_DB_SIZE_MB` |
-| **401 Unauthorized** | Token Mismatch | Verify `SYSLOG_MCP_API_TOKEN` |
+```bash
+just health
+```
 
----
+## Related files
 
-## 📄 License
-MIT © jmagar
+- `Cargo.toml`: crate metadata and dependency surface
+- `SETUP.md`: deployment setup
+- `.env.example`: canonical runtime configuration
+- `CHANGELOG.md`: release history
+
+## License
+
+MIT
