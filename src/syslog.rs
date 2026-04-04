@@ -270,22 +270,33 @@ async fn tcp_listener(
         match listener.accept().await {
             Ok((stream, addr)) => {
                 accept_backoff_ms = 100; // reset on success
-                let available_permits = sem.available_permits();
-                let permit = match Arc::clone(&sem).acquire_owned().await {
-                    Ok(p) => p,
-                    Err(_) => break, // semaphore closed — shouldn't happen
-                };
-                let tx = tx.clone();
-                tokio::spawn(async move {
-                    let _permit = permit; // released automatically when task drops
-                    handle_tcp_connection(stream, addr, tx, max_size, idle_timeout_secs).await;
-                });
-                debug!(
-                    peer = %addr,
-                    active_connections = max_connections.saturating_sub(available_permits),
-                    max_connections,
-                    "TCP syslog connection dispatched"
-                );
+                match Arc::clone(&sem).try_acquire_owned() {
+                    Ok(permit) => {
+                        let available_permits = sem.available_permits();
+                        let tx = tx.clone();
+                        tokio::spawn(async move {
+                            let _permit = permit;
+                            handle_tcp_connection(stream, addr, tx, max_size, idle_timeout_secs).await;
+                        });
+                        debug!(
+                            peer = %addr,
+                            active_connections = max_connections.saturating_sub(available_permits),
+                            max_connections,
+                            "TCP syslog connection dispatched"
+                        );
+                    }
+                    Err(tokio::sync::TryAcquireError::NoPermits) => {
+                        warn!(
+                            peer = %addr,
+                            max_connections,
+                            "TCP connection limit reached — rejecting connection"
+                        );
+                        // stream is dropped here, closing the connection
+                    }
+                    Err(tokio::sync::TryAcquireError::Closed) => {
+                        break; // semaphore closed — should never happen
+                    }
+                }
             }
             Err(e) => {
                 error!(error = %e, accept_backoff_ms, "TCP accept error");
