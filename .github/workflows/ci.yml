@@ -72,3 +72,15 @@ jobs:
         run: bash scripts/check-no-baked-env.sh .
       - name: Check ignore files
         run: bash scripts/ensure-ignore-files.sh --check .
+
+  mcp-integration:
+    name: MCP Integration Tests
+    runs-on: ubuntu-latest
+    needs: [test, docker-security]
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run integration tests
+        env:
+          SYSLOG_MCP_API_TOKEN: ci-integration-token
+        run: bash tests/test_live.sh
