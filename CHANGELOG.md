@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.6] — 2026-04-04
+
+### Changed
+
+- **`src/db.rs`**: Extracted `fts_incremental_merge()` helper — eliminates duplicated FTS merge string across `purge_old_logs` and `enforce_storage_budget`
+- **`src/mcp.rs`**: `test_state()` now delegates to `test_state_with_token(None)`; `mcp_post()` gains optional `auth` param — auth integration tests no longer inline the request builder
+
+### Fixed
+
+- **`src/config.rs`**: Added `accepts_cleanup_chunk_size_at_i64_max` boundary test; tightened overflow test to assert error message; added `SYSLOG_MCP_CLEANUP_CHUNK_SIZE` to `defaults_are_applied_without_env_vars` clear list and assertion
+- **`src/db.rs`**: Migrated `test_storage_config()` to `StorageConfig::for_test()`
+- **`src/syslog.rs`**: `TryAcquireError::Closed` branch now logs at `error!` before breaking
+- **`CHANGELOG.md`**: Corrected v0.2.2 date (`2026-04-04` → `2026-04-03`)
+
+## [0.2.5] — 2026-04-03
+
+### Added
+
+- **`src/mcp.rs`**: 9 HTTP-level integration tests for all 6 MCP tools and auth middleware using `tower::util::ServiceExt::oneshot` — covers health endpoint, initialize, tools/list, get_stats, tail_logs, search_logs, unknown method error, auth rejection (missing token), and auth success (correct token)
+- **`Cargo.toml`**: `tower` 0.5 added to dev-dependencies for axum router integration testing
+
+## [0.2.4] — 2026-04-03
+
+### Fixed
+
+- **`src/db.rs`**: FTS5 write-lock contention during retention purge and storage-budget bulk deletes — removed `logs_ad` (AFTER DELETE) and `logs_au` (AFTER UPDATE) triggers that fired per-row inside 10k-chunk transactions, starving the batch writer. Added migration to drop triggers from existing databases. FTS5 phantom rows are cleaned up by incremental merge (syslog-mcp-eg5)
+
+### Added
+
+- **`src/db.rs`**: Incremental FTS merge (`merge=500,250`) after storage-budget enforcement bulk deletes, matching the existing `purge_old_logs` pattern
+
+## [0.2.3] — 2026-04-03
+
+### Fixed
+
+- **`src/syslog.rs`**: TCP accept loop blocked when connection semaphore was at capacity — replaced blocking `acquire_owned().await` with non-blocking `try_acquire_owned()` so the accept loop rejects new connections immediately instead of stalling for up to 300s (idle timeout)
+
+## [0.2.2] — 2026-04-03
+
+### Fixed
+
+- **`src/mcp.rs`**: `summarize_json_value` panicked on multi-byte UTF-8 input (non-ASCII syslog messages) — replaced `&raw[..limit]` with a char-boundary-aware walk-back loop; added test covering Greek/CJK input
+- **`src/db.rs`**: Storage enforcement deleted 1 row per cycle (extremely slow for large overages) — now configurable via `SYSLOG_MCP_CLEANUP_CHUNK_SIZE` (default 2000); WAL checkpoint moved outside the recovery loop
+- **`src/config.rs`**: Added validation rejecting `cleanup_chunk_size == 0` (would cause an infinite enforcement loop)
+- **Clippy**: Fixed 4 `-D warnings` errors blocking `cargo test` — `derivable_impls` on `Config::Default`, `match_like_matches_macro` in `is_transient_sqlite_lock`, `needless_late_init` for `close_reason`, `len_zero` in `batch_writer`
+
+### Added
+
+- **`src/config.rs`**: `cleanup_chunk_size` field in `StorageConfig` with env var `SYSLOG_MCP_CLEANUP_CHUNK_SIZE` (default 2000 rows per enforcement chunk)
+- **`src/config.rs`**: `#[cfg(test)] StorageConfig::for_test()` constructor — centralizes test config; `mcp.rs` and `syslog.rs` test helpers now delegate to it
+- **`docs/sessions/2026-04-03-mcp-test-code-review-simplify.md`**: Full session documentation
+
 ## [0.2.1] - 2026-04-03
 
 ### Fixed

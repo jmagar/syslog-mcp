@@ -1,0 +1,40 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "tv.tootie/syslog-mcp",
+  "title": "Syslog MCP",
+  "description": "Syslog receiver and MCP server for homelab log intelligence.",
+  "repository": {
+    "url": "https://github.com/jmagar/syslog-mcp",
+    "source": "github"
+  },
+  "version": "0.2.6",
+  "packages": [
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/jmagar/syslog-mcp:0.2.6",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "SYSLOG_HOST",
+          "description": "Hostname or IP of the syslog listener.",
+          "isRequired": true,
+          "isSecret": false
+        },
+        {
+          "name": "SYSLOG_MCP_TOKEN",
+          "description": "Bearer token for MCP endpoint authentication.",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "SYSLOG_PORT",
+          "description": "Syslog listener port (UDP + TCP). Default: 514.",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}

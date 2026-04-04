@@ -1,6 +1,6 @@
 {
   "name": "syslog-mcp",
-  "version": "0.2.1",
+  "version": "0.2.6",
   "description": "Syslog management via MCP.",
   "homepage": "https://github.com/jmagar/syslog-mcp",
   "repository": "https://github.com/jmagar/syslog-mcp",

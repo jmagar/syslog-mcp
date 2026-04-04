@@ -206,17 +206,14 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
             tokenize='porter unicode61'
         );
 
-        -- Triggers to keep FTS in sync
+        -- Trigger to keep FTS in sync on INSERT only.
+        -- DELETE and UPDATE triggers are intentionally absent: bulk DELETEs during
+        -- retention purge and storage-budget enforcement fire the trigger for every
+        -- deleted row inside a single implicit transaction, holding the SQLite write
+        -- lock long enough to starve the batch writer. FTS5 content tables tolerate
+        -- phantom rows — stale entries are skipped at query time and cleaned up by
+        -- periodic incremental merge (merge=500,250).
         CREATE TRIGGER IF NOT EXISTS logs_ai AFTER INSERT ON logs BEGIN
-            INSERT INTO logs_fts(rowid, message) VALUES (new.id, new.message);
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS logs_ad AFTER DELETE ON logs BEGIN
-            INSERT INTO logs_fts(logs_fts, rowid, message) VALUES('delete', old.id, old.message);
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS logs_au AFTER UPDATE ON logs BEGIN
-            INSERT INTO logs_fts(logs_fts, rowid, message) VALUES('delete', old.id, old.message);
             INSERT INTO logs_fts(rowid, message) VALUES (new.id, new.message);
         END;
 
@@ -245,6 +242,14 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
         conn.execute_batch("ALTER TABLE logs ADD COLUMN source_ip TEXT NOT NULL DEFAULT ''")?;
         tracing::info!("Migration: added source_ip column to logs table");
     }
+
+    // Migration: drop FTS5 DELETE/UPDATE triggers from existing databases.
+    // These triggers caused write-lock contention during bulk deletes (retention
+    // purge, storage enforcement). See schema comment above for rationale.
+    conn.execute_batch(
+        "DROP TRIGGER IF EXISTS logs_ad;
+         DROP TRIGGER IF EXISTS logs_au;",
+    )?;
 
     tracing::info!(path = %config.db_path.display(), "Database initialized");
     Ok(pool)
@@ -372,6 +377,12 @@ pub fn enforce_storage_budget_with_probe(
     }
 
     if deleted_rows > 0 {
+        // Incremental FTS merge — clean up phantom rows left by bulk deletes
+        // (DELETE trigger is intentionally absent).
+        // drop the connection before checkpoint_wal_and_incremental_vacuum to
+        // avoid pool exhaustion when pool_size = 1.
+        fts_incremental_merge(pool);
+
         checkpoint_wal_and_incremental_vacuum(pool)?;
     }
 
@@ -642,6 +653,23 @@ pub fn list_hosts(pool: &DbPool) -> Result<Vec<HostEntry>> {
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// Run an incremental FTS5 merge to clean up phantom rows left by bulk DELETEs.
+///
+/// Best-effort: a small or empty index may return an error, which is logged and ignored.
+/// Must be called with no other connections holding the pool when `pool_size = 1`.
+fn fts_incremental_merge(pool: &DbPool) {
+    match pool.get() {
+        Ok(conn) => {
+            if let Err(e) =
+                conn.execute_batch("INSERT INTO logs_fts(logs_fts) VALUES('merge=500,250');")
+            {
+                tracing::warn!(error = %e, "FTS incremental merge skipped (non-fatal)");
+            }
+        }
+        Err(e) => tracing::warn!(error = %e, "FTS incremental merge: failed to get connection"),
+    }
+}
+
 /// Purge logs older than N days.
 ///
 /// Uses chunked DELETEs (10 000 rows per iteration) so the WAL write lock is
@@ -687,14 +715,8 @@ pub fn purge_old_logs(pool: &DbPool, retention_days: u32) -> Result<usize> {
     }
 
     // Incremental FTS merge — much shorter write-lock duration than full rebuild.
-    // Best-effort: a small/empty index may return an error; log and continue.
     if total_deleted > 0 {
-        let conn = pool.get()?;
-        if let Err(e) =
-            conn.execute_batch("INSERT INTO logs_fts(logs_fts) VALUES('merge=500,250');")
-        {
-            tracing::warn!(error = %e, "FTS merge skipped (non-fatal)");
-        }
+        fts_incremental_merge(pool);
     }
 
     // Passive WAL checkpoint: attempt to move WAL pages into the main DB file
@@ -992,18 +1014,7 @@ mod tests {
     use crate::config::StorageConfig;
 
     fn test_storage_config(db_path: std::path::PathBuf) -> StorageConfig {
-        StorageConfig {
-            db_path,
-            pool_size: 1,
-            retention_days: 90,
-            wal_mode: false, // WAL not needed for tests
-            max_db_size_mb: 1024,
-            recovery_db_size_mb: 900,
-            min_free_disk_mb: 512,
-            recovery_free_disk_mb: 768,
-            cleanup_interval_secs: 60,
-            cleanup_chunk_size: 1,
-        }
+        StorageConfig::for_test(db_path)
     }
 
     /// Create an isolated test pool using a temp file (not :memory: — FTS5 needs file)

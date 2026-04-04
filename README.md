@@ -1,5 +1,7 @@
 # Syslog MCP
 
+[![crates.io](https://img.shields.io/crates/v/syslog-mcp)](https://crates.io/crates/syslog-mcp) [![ghcr.io](https://img.shields.io/badge/ghcr.io-jmagar%2Fsyslog--mcp-blue?logo=docker)](https://github.com/jmagar/syslog-mcp/pkgs/container/syslog-mcp)
+
 Rust syslog receiver and MCP server for homelab log intelligence. Ingests syslog over UDP and TCP, stores it in SQLite with FTS5 full-text indexing, and exposes search, tail, error summary, correlation, and stats tools to MCP clients.
 
 ## Overview

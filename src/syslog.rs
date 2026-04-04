@@ -270,22 +270,34 @@ async fn tcp_listener(
         match listener.accept().await {
             Ok((stream, addr)) => {
                 accept_backoff_ms = 100; // reset on success
-                let available_permits = sem.available_permits();
-                let permit = match Arc::clone(&sem).acquire_owned().await {
-                    Ok(p) => p,
-                    Err(_) => break, // semaphore closed — shouldn't happen
-                };
-                let tx = tx.clone();
-                tokio::spawn(async move {
-                    let _permit = permit; // released automatically when task drops
-                    handle_tcp_connection(stream, addr, tx, max_size, idle_timeout_secs).await;
-                });
-                debug!(
-                    peer = %addr,
-                    active_connections = max_connections.saturating_sub(available_permits),
-                    max_connections,
-                    "TCP syslog connection dispatched"
-                );
+                match Arc::clone(&sem).try_acquire_owned() {
+                    Ok(permit) => {
+                        let available_permits = sem.available_permits();
+                        let tx = tx.clone();
+                        tokio::spawn(async move {
+                            let _permit = permit;
+                            handle_tcp_connection(stream, addr, tx, max_size, idle_timeout_secs).await;
+                        });
+                        debug!(
+                            peer = %addr,
+                            active_connections = max_connections.saturating_sub(available_permits),
+                            max_connections,
+                            "TCP syslog connection dispatched"
+                        );
+                    }
+                    Err(tokio::sync::TryAcquireError::NoPermits) => {
+                        warn!(
+                            peer = %addr,
+                            max_connections,
+                            "TCP connection limit reached — rejecting connection"
+                        );
+                        // stream is dropped here, closing the connection
+                    }
+                    Err(tokio::sync::TryAcquireError::Closed) => {
+                        error!("TCP connection semaphore unexpectedly closed — TCP listener exiting");
+                        break;
+                    }
+                }
             }
             Err(e) => {
                 error!(error = %e, accept_backoff_ms, "TCP accept error");
@@ -831,18 +843,7 @@ mod tests {
     use crate::config::StorageConfig;
 
     fn test_storage_config(db_path: std::path::PathBuf) -> StorageConfig {
-        StorageConfig {
-            db_path,
-            pool_size: 1,
-            retention_days: 90,
-            wal_mode: false,
-            max_db_size_mb: 1024,
-            recovery_db_size_mb: 900,
-            min_free_disk_mb: 0,
-            recovery_free_disk_mb: 0,
-            cleanup_interval_secs: 60,
-            cleanup_chunk_size: 1,
-        }
+        StorageConfig::for_test(db_path)
     }
 
     fn test_pool() -> (Arc<DbPool>, StorageConfig, tempfile::TempDir) {
