@@ -30,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`src/syslog.rs`**: TCP accept loop blocked when connection semaphore was at capacity — replaced blocking `acquire_owned().await` with non-blocking `try_acquire_owned()` so the accept loop rejects new connections immediately instead of stalling for up to 300s (idle timeout)
 
-## [0.2.2] — 2026-04-04
+## [0.2.2] — 2026-04-03
 
 ### Fixed
 

@@ -294,7 +294,8 @@ async fn tcp_listener(
                         // stream is dropped here, closing the connection
                     }
                     Err(tokio::sync::TryAcquireError::Closed) => {
-                        break; // semaphore closed — should never happen
+                        error!("TCP connection semaphore unexpectedly closed — TCP listener exiting");
+                        break;
                     }
                 }
             }

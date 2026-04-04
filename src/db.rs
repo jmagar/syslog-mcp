@@ -1008,18 +1008,7 @@ mod tests {
     use crate::config::StorageConfig;
 
     fn test_storage_config(db_path: std::path::PathBuf) -> StorageConfig {
-        StorageConfig {
-            db_path,
-            pool_size: 1,
-            retention_days: 90,
-            wal_mode: false, // WAL not needed for tests
-            max_db_size_mb: 1024,
-            recovery_db_size_mb: 900,
-            min_free_disk_mb: 512,
-            recovery_free_disk_mb: 768,
-            cleanup_interval_secs: 60,
-            cleanup_chunk_size: 1,
-        }
+        StorageConfig::for_test(db_path)
     }
 
     /// Create an isolated test pool using a temp file (not :memory: — FTS5 needs file)

@@ -453,6 +453,7 @@ mod tests {
             "SYSLOG_MCP_MIN_FREE_DISK_MB",
             "SYSLOG_MCP_RECOVERY_FREE_DISK_MB",
             "SYSLOG_MCP_CLEANUP_INTERVAL_SECS",
+            "SYSLOG_MCP_CLEANUP_CHUNK_SIZE",
         ] {
             std::env::remove_var(key);
         }
@@ -472,6 +473,7 @@ mod tests {
         assert_eq!(cfg.storage.min_free_disk_mb, 512);
         assert_eq!(cfg.storage.recovery_free_disk_mb, 768);
         assert_eq!(cfg.storage.cleanup_interval_secs, 60);
+        assert_eq!(cfg.storage.cleanup_chunk_size, 2_000);
         assert!(cfg.mcp.api_token.is_none());
     }
 
@@ -551,13 +553,29 @@ mod tests {
     #[test]
     #[serial]
     fn rejects_cleanup_chunk_size_overflow() {
-        // Values larger than i64::MAX overflow the SQLite LIMIT cast
+        // On 64-bit: i64::MAX+1 fits in usize, so validate_storage_config fires.
+        // On 32-bit: the parse itself fails (value exceeds u32::MAX). Either way Err.
         let overflow = (i64::MAX as u128 + 1).to_string();
         std::env::set_var("SYSLOG_MCP_CLEANUP_CHUNK_SIZE", &overflow);
         let result = Config::load();
         std::env::remove_var("SYSLOG_MCP_CLEANUP_CHUNK_SIZE");
 
-        // Either the parse fails (value exceeds usize) or validation rejects it
-        assert!(result.is_err(), "Config::load() should reject oversized cleanup_chunk_size");
+        let err = result.expect_err("Config::load() should reject oversized cleanup_chunk_size");
+        assert!(
+            err.to_string().contains("cleanup_chunk_size")
+                || err.to_string().contains("SYSLOG_MCP_CLEANUP_CHUNK_SIZE"),
+            "Expected error referencing cleanup_chunk_size, got: {err}"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn accepts_cleanup_chunk_size_at_i64_max() {
+        std::env::set_var("SYSLOG_MCP_CLEANUP_CHUNK_SIZE", &i64::MAX.to_string());
+        let result = Config::load();
+        std::env::remove_var("SYSLOG_MCP_CLEANUP_CHUNK_SIZE");
+
+        let cfg = result.expect("cleanup_chunk_size == i64::MAX should be accepted");
+        assert_eq!(cfg.storage.cleanup_chunk_size, i64::MAX as usize);
     }
 }
