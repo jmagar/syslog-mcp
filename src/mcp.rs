@@ -891,4 +891,198 @@ mod tests {
         assert!(summary.is_char_boundary(summary.len()));
         assert!(summary.ends_with('…'));
     }
+
+    // ---- Integration tests: HTTP-level through the axum router ----
+
+    mod integration_tests {
+        use super::*;
+        use axum::http::Request;
+        use tower::util::ServiceExt;
+
+        /// Build a JSON-RPC request body
+        fn jsonrpc_request(
+            id: u64,
+            method: &str,
+            params: Option<serde_json::Value>,
+        ) -> serde_json::Value {
+            let mut req = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": method,
+            });
+            if let Some(p) = params {
+                req.as_object_mut().unwrap().insert("params".into(), p);
+            }
+            req
+        }
+
+        /// Send a POST /mcp request through the router and return (status, parsed body)
+        async fn mcp_post(
+            app: Router,
+            body: serde_json::Value,
+        ) -> (axum::http::StatusCode, serde_json::Value) {
+            let request = Request::builder()
+                .method("POST")
+                .uri("/mcp")
+                .header("Content-Type", "application/json")
+                .body(axum::body::Body::from(
+                    serde_json::to_vec(&body).unwrap(),
+                ))
+                .unwrap();
+            let response = app.oneshot(request).await.unwrap();
+            let status = response.status();
+            let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let value: serde_json::Value =
+                serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+            (status, value)
+        }
+
+        fn test_state_with_token(token: Option<String>) -> (AppState, tempfile::TempDir) {
+            let dir = tempfile::tempdir().unwrap();
+            let storage = test_storage_config(dir.path().join("integ-test.db"));
+            let pool = std::sync::Arc::new(db::init_pool(&storage).unwrap());
+            (
+                AppState {
+                    pool,
+                    config: McpConfig {
+                        host: "127.0.0.1".into(),
+                        port: 3100,
+                        server_name: "syslog-mcp".into(),
+                        api_token: token,
+                    },
+                    storage,
+                },
+                dir,
+            )
+        }
+
+        #[tokio::test]
+        async fn integration_health_returns_200() {
+            let (state, _dir) = test_state();
+            let app = router(state);
+            let request = Request::builder()
+                .method("GET")
+                .uri("/health")
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let response = app.oneshot(request).await.unwrap();
+            assert_eq!(response.status(), axum::http::StatusCode::OK);
+        }
+
+        #[tokio::test]
+        async fn integration_initialize() {
+            let (state, _dir) = test_state();
+            let body = jsonrpc_request(1, "initialize", None);
+            let (status, value) = mcp_post(router(state), body).await;
+            assert_eq!(status, axum::http::StatusCode::OK);
+            assert!(value["result"]["protocolVersion"].is_string());
+            assert!(value["result"]["serverInfo"]["name"].is_string());
+        }
+
+        #[tokio::test]
+        async fn integration_tools_list() {
+            let (state, _dir) = test_state();
+            let body = jsonrpc_request(2, "tools/list", None);
+            let (status, value) = mcp_post(router(state), body).await;
+            assert_eq!(status, axum::http::StatusCode::OK);
+            let tools = value["result"]["tools"].as_array().unwrap();
+            let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+            for expected in &[
+                "search_logs",
+                "tail_logs",
+                "get_errors",
+                "list_hosts",
+                "correlate_events",
+                "get_stats",
+            ] {
+                assert!(names.contains(expected), "missing tool: {}", expected);
+            }
+        }
+
+        #[tokio::test]
+        async fn integration_get_stats() {
+            let (state, _dir) = test_state();
+            let body = jsonrpc_request(
+                3,
+                "tools/call",
+                Some(serde_json::json!({"name": "get_stats", "arguments": {}})),
+            );
+            let (status, value) = mcp_post(router(state), body).await;
+            assert_eq!(status, axum::http::StatusCode::OK);
+            let content = value["result"]["content"][0]["text"].as_str().unwrap();
+            assert!(
+                content.contains("total_logs"),
+                "expected total_logs in: {}",
+                content
+            );
+        }
+
+        #[tokio::test]
+        async fn integration_tail_logs_empty_db() {
+            let (state, _dir) = test_state();
+            let body = jsonrpc_request(
+                4,
+                "tools/call",
+                Some(serde_json::json!({"name": "tail_logs", "arguments": {"n": 10}})),
+            );
+            let (status, value) = mcp_post(router(state), body).await;
+            assert_eq!(status, axum::http::StatusCode::OK);
+            assert!(value["error"].is_null(), "unexpected error: {}", value);
+        }
+
+        #[tokio::test]
+        async fn integration_search_logs_empty_db() {
+            let (state, _dir) = test_state();
+            let body = jsonrpc_request(
+                5,
+                "tools/call",
+                Some(serde_json::json!({"name": "search_logs", "arguments": {"query": "error", "limit": 5}})),
+            );
+            let (status, value) = mcp_post(router(state), body).await;
+            assert_eq!(status, axum::http::StatusCode::OK);
+            assert!(value["error"].is_null(), "unexpected error: {}", value);
+        }
+
+        #[tokio::test]
+        async fn integration_unknown_method_returns_error() {
+            let (state, _dir) = test_state();
+            let body = jsonrpc_request(6, "nonexistent/method", None);
+            let (status, value) = mcp_post(router(state), body).await;
+            assert_eq!(status, axum::http::StatusCode::OK);
+            assert_eq!(value["error"]["code"].as_i64().unwrap(), -32601);
+        }
+
+        #[tokio::test]
+        async fn integration_auth_missing_token_returns_401() {
+            let (state, _dir) = test_state_with_token(Some("secret-token".into()));
+            let body = jsonrpc_request(7, "tools/list", None);
+            let request = Request::builder()
+                .method("POST")
+                .uri("/mcp")
+                .header("Content-Type", "application/json")
+                .body(axum::body::Body::from(
+                    serde_json::to_vec(&body).unwrap(),
+                ))
+                .unwrap();
+            let response = router(state).oneshot(request).await.unwrap();
+            assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+        }
+
+        #[tokio::test]
+        async fn integration_auth_correct_token_succeeds() {
+            let (state, _dir) = test_state_with_token(Some("secret-token".into()));
+            let body = jsonrpc_request(8, "tools/list", None);
+            let request = Request::builder()
+                .method("POST")
+                .uri("/mcp")
+                .header("Content-Type", "application/json")
+                .header("Authorization", "Bearer secret-token")
+                .body(axum::body::Body::from(
+                    serde_json::to_vec(&body).unwrap(),
+                ))
+                .unwrap();
+            let response = router(state).oneshot(request).await.unwrap();
+            assert_eq!(response.status(), axum::http::StatusCode::OK);
+        }
+    }
 }

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.5] — 2026-04-03
+
+### Added
+
+- **`src/mcp.rs`**: 9 HTTP-level integration tests for all 6 MCP tools and auth middleware using `tower::util::ServiceExt::oneshot` — covers health endpoint, initialize, tools/list, get_stats, tail_logs, search_logs, unknown method error, auth rejection (missing token), and auth success (correct token)
+- **`Cargo.toml`**: `tower` 0.5 added to dev-dependencies for axum router integration testing
+
 ## [0.2.4] — 2026-04-03
 
 ### Fixed
