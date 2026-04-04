@@ -372,7 +372,32 @@ fn validate_storage_config(storage: &StorageConfig) -> anyhow::Result<()> {
         ));
     }
 
+    if storage.cleanup_chunk_size == 0 {
+        return Err(anyhow::anyhow!(
+            "cleanup_chunk_size must be > 0"
+        ));
+    }
+
     Ok(())
+}
+
+#[cfg(test)]
+impl StorageConfig {
+    /// Returns a minimal StorageConfig for use in unit tests.
+    pub fn for_test(db_path: std::path::PathBuf) -> Self {
+        Self {
+            db_path,
+            pool_size: 1,
+            retention_days: 90,
+            wal_mode: false,
+            max_db_size_mb: 1024,
+            recovery_db_size_mb: 900,
+            min_free_disk_mb: 0,
+            recovery_free_disk_mb: 0,
+            cleanup_interval_secs: 60,
+            cleanup_chunk_size: 1,
+        }
+    }
 }
 
 #[cfg(test)]

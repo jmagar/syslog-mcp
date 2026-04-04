@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] — 2026-04-04
+
+### Fixed
+- **`src/mcp.rs`**: `summarize_json_value` panicked on multi-byte UTF-8 input (non-ASCII syslog messages) — replaced `&raw[..limit]` with a char-boundary-aware walk-back loop; added test covering Greek/CJK input
+- **`src/db.rs`**: Storage enforcement deleted 1 row per cycle (extremely slow for large overages) — now configurable via `SYSLOG_MCP_CLEANUP_CHUNK_SIZE` (default 2000); WAL checkpoint moved outside the recovery loop
+- **`src/config.rs`**: Added validation rejecting `cleanup_chunk_size == 0` (would cause an infinite enforcement loop)
+- **Clippy**: Fixed 4 `-D warnings` errors blocking `cargo test` — `derivable_impls` on `Config::Default`, `match_like_matches_macro` in `is_transient_sqlite_lock`, `needless_late_init` for `close_reason`, `len_zero` in `batch_writer`
+
+### Added
+- **`src/config.rs`**: `cleanup_chunk_size` field in `StorageConfig` with env var `SYSLOG_MCP_CLEANUP_CHUNK_SIZE` (default 2000 rows per enforcement chunk)
+- **`src/config.rs`**: `#[cfg(test)] StorageConfig::for_test()` constructor — centralizes test config; `mcp.rs` and `syslog.rs` test helpers now delegate to it
+- **`docs/sessions/2026-04-03-mcp-test-code-review-simplify.md`**: Full session documentation
+
 ## [0.2.1] - 2026-04-03
 
 ### Fixed
