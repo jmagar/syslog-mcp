@@ -69,3 +69,12 @@ data/
 *.key
 *.pem
 *.cert
+
+backups/*
+!backups/.gitkeep
+logs/*
+!logs/.gitkeep
+.worktrees
+
+# Personal local cheatsheet (never commit)
+CLAUDE.md.local
