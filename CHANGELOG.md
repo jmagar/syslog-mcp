@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-04-04
+
+### Added
+
+- **`src/db.rs`**: `DbStats` now includes `phantom_fts_rows` — count of FTS5 index entries without a matching live log row (merge lag indicator, visible via `get_stats`)
+- **`src/db.rs`**: `schema_migrations` table guards idempotent migrations; DROP TRIGGER migration now runs exactly once per database (version 1)
+- **`src/db.rs`**: Composite index `idx_logs_hostname_received_at ON logs(hostname, received_at)` — makes `reconcile_hosts` MIN/MAX queries O(1) instead of O(rows_per_host)
+- **`CLAUDE.md`**: FTS5 phantom row gotcha with GDPR/HIPAA compliance guidance
+
+### Fixed
+
+- **`src/db.rs`**: P1 — `delete_oldest_logs_chunk` rewritten with subquery DELETE; old dynamic IN-list exceeded SQLite's 1000-node expression depth limit at default `cleanup_chunk_size=2000`, silently failing every storage enforcement cycle
+- **`src/db.rs`**: P1 — `fts_incremental_merge` now runs `ceil(deleted_rows/5000)` iterations capped at 20; escalates to forced `rebuild` after 3 consecutive failures
+- **`src/db.rs`**: `reconcile_hosts` moved outside the enforcement delete loop — batches all host updates to one call per enforcement cycle instead of one per chunk
+- **`src/syslog.rs`**: TCP rejection `warn!` is now rate-limited (once on first rejection, once per 10s thereafter with `total_rejected` count) to prevent log storms under connection floods
+
+### Changed
+
+- **`src/config.rs`**: `StorageConfig::for_test` demoted to `pub(crate)`
+- **`src/mcp.rs`**: `TestHarness` struct wraps `AppState + TempDir` in tests to prevent accidental early TempDir drop; all 10 test functions updated
+- **`src/mcp.rs`**: `test_storage_config` wrapper removed; callers use `StorageConfig::for_test` directly
+
 ## [0.2.6] — 2026-04-04
 
 ### Changed
