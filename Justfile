@@ -50,6 +50,30 @@ gen-token:
 validate-skills:
     @test -f skills/syslog/SKILL.md && echo "OK" || { echo "MISSING: skills/syslog/SKILL.md"; exit 1; }
 
+# Generate a standalone CLI for this server (requires running server; HTTP-only transport)
+generate-cli:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "⚠  Server must be running on port 3100 (run 'just dev' first)"
+    echo "⚠  Generated CLI embeds your OAuth token — do not commit or share"
+    mkdir -p dist dist/.cache
+    current_hash=$(timeout 10 curl -sf \
+      -H "Authorization: Bearer $MCP_TOKEN" \
+      -H "Accept: application/json, text/event-stream" \
+      http://localhost:3100/mcp/tools/list 2>/dev/null | sha256sum | cut -d' ' -f1 || echo "nohash")
+    cache_file="dist/.cache/syslog-mcp-cli.schema_hash"
+    if [[ -f "$cache_file" ]] && [[ "$(cat "$cache_file")" == "$current_hash" ]] && [[ -f "dist/syslog-mcp-cli" ]]; then
+      echo "SKIP: syslog-mcp tool schema unchanged — use existing dist/syslog-mcp-cli"
+      exit 0
+    fi
+    timeout 30 mcporter generate-cli \
+      --command http://localhost:3100/mcp \
+      --header "Authorization: Bearer $MCP_TOKEN" \
+      --name syslog-mcp-cli \
+      --output dist/syslog-mcp-cli
+    printf '%s' "$current_hash" > "$cache_file"
+    echo "✓ Generated dist/syslog-mcp-cli (requires bun at runtime)"
+
 clean:
     cargo clean
     rm -rf .cache/
