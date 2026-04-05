@@ -225,6 +225,13 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
             last_seen   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
             log_count   INTEGER NOT NULL DEFAULT 0
         );
+
+        -- Migration version table: each row records a completed schema migration.
+        -- Guards migrations so they run exactly once per database, not on every startup.
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            version     INTEGER PRIMARY KEY,
+            applied_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        );
         ",
     )?;
 
@@ -244,13 +251,26 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
         tracing::info!("Migration: added source_ip column to logs table");
     }
 
-    // Migration: drop FTS5 DELETE/UPDATE triggers from existing databases.
+    // Migration 1: drop FTS5 DELETE/UPDATE triggers from existing databases.
     // These triggers caused write-lock contention during bulk deletes (retention
     // purge, storage enforcement). See schema comment above for rationale.
-    conn.execute_batch(
-        "DROP TRIGGER IF EXISTS logs_ad;
-         DROP TRIGGER IF EXISTS logs_au;",
-    )?;
+    // Guarded by schema_migrations so it runs exactly once per database.
+    let migration_1_applied: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 1",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
+    if !migration_1_applied {
+        conn.execute_batch(
+            "DROP TRIGGER IF EXISTS logs_ad;
+             DROP TRIGGER IF EXISTS logs_au;
+             INSERT INTO schema_migrations (version) VALUES (1);",
+        )?;
+        tracing::info!("Migration 1: dropped FTS5 DELETE/UPDATE triggers");
+    }
 
     tracing::info!(path = %config.db_path.display(), "Database initialized");
     Ok(pool)
