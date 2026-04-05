@@ -69,6 +69,10 @@ pub struct DbStats {
     pub max_db_size_mb: u64,
     pub min_free_disk_mb: u64,
     pub write_blocked: bool,
+    /// Phantom FTS rows: entries in logs_fts that no longer have a matching log row.
+    /// Accumulate between merge cycles; non-zero value is normal and cleaned up by
+    /// periodic fts_incremental_merge. High values indicate merge is falling behind.
+    pub phantom_fts_rows: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -829,6 +833,10 @@ pub fn get_stats(pool: &DbPool, config: &StorageConfig) -> Result<DbStats> {
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Deferred)?;
     let total_logs: i64 = tx.query_row("SELECT COUNT(*) FROM logs", [], |r| r.get(0))?;
     let total_hosts: i64 = tx.query_row("SELECT COUNT(*) FROM hosts", [], |r| r.get(0))?;
+    let fts_rows: i64 = tx
+        .query_row("SELECT COUNT(*) FROM logs_fts", [], |r| r.get(0))
+        .unwrap_or(0);
+    let phantom_fts_rows = (fts_rows - total_logs).max(0);
     // MIN/MAX return a single nullable row; use get::<_, Option<_>> so NULL becomes
     // None while real query errors (e.g. missing table) still propagate via `?`.
     let oldest: Option<String> = tx.query_row("SELECT MIN(timestamp) FROM logs", [], |r| {
@@ -852,6 +860,7 @@ pub fn get_stats(pool: &DbPool, config: &StorageConfig) -> Result<DbStats> {
         max_db_size_mb: config.max_db_size_mb,
         min_free_disk_mb: config.min_free_disk_mb,
         write_blocked,
+        phantom_fts_rows,
     })
 }
 

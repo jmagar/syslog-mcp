@@ -693,6 +693,7 @@ async fn tool_get_stats(state: &AppState, _args: Value) -> anyhow::Result<Value>
         logical_db_size_mb = %stats.logical_db_size_mb,
         physical_db_size_mb = %stats.physical_db_size_mb,
         write_blocked = stats.write_blocked,
+        phantom_fts_rows = stats.phantom_fts_rows,
         "get_stats completed"
     );
     Ok(serde_json::to_value(&stats)?)
@@ -852,6 +853,7 @@ mod tests {
         assert!(value.get("logical_db_size_mb").is_some());
         assert!(value.get("physical_db_size_mb").is_some());
         assert!(value.get("write_blocked").is_some());
+        assert!(value.get("phantom_fts_rows").is_some());
     }
 
     #[tokio::test]
