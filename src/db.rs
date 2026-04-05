@@ -381,7 +381,7 @@ pub fn enforce_storage_budget_with_probe(
         // (DELETE trigger is intentionally absent).
         // drop the connection before checkpoint_wal_and_incremental_vacuum to
         // avoid pool exhaustion when pool_size = 1.
-        fts_incremental_merge(pool);
+        fts_incremental_merge(pool, deleted_rows);
 
         checkpoint_wal_and_incremental_vacuum(pool)?;
     }
@@ -655,18 +655,78 @@ pub fn list_hosts(pool: &DbPool) -> Result<Vec<HostEntry>> {
 
 /// Run an incremental FTS5 merge to clean up phantom rows left by bulk DELETEs.
 ///
-/// Best-effort: a small or empty index may return an error, which is logged and ignored.
-/// Must be called with no other connections holding the pool when `pool_size = 1`.
-fn fts_incremental_merge(pool: &DbPool) {
-    match pool.get() {
-        Ok(conn) => {
-            if let Err(e) =
-                conn.execute_batch("INSERT INTO logs_fts(logs_fts) VALUES('merge=500,250');")
-            {
-                tracing::warn!(error = %e, "FTS incremental merge skipped (non-fatal)");
+/// A single `merge=500,250` call processes at most ~500 FTS index pages, which
+/// covers <1% of phantoms after a 500k-row delete. This function scales the
+/// number of merge iterations proportionally to `deleted_rows` (one iteration
+/// per 5 000 rows, capped at 20) and falls back to a forced `rebuild` after
+/// 3 consecutive failures — a last-resort recovery for a corrupt or severely
+/// fragmented FTS index.
+///
+/// Best-effort: errors are logged but never propagated.
+fn fts_incremental_merge(pool: &DbPool, deleted_rows: usize) {
+    // Budget one merge=500,250 call per 5 000 deleted rows (rough heuristic),
+    // with a floor of 1 and a ceiling of 20 to bound wall-clock time.
+    let iterations = deleted_rows.div_ceil(5000).clamp(1, 20);
+    let mut consecutive_failures: u32 = 0;
+
+    for i in 0..iterations {
+        match pool.get() {
+            Ok(conn) => {
+                match conn.execute_batch("INSERT INTO logs_fts(logs_fts) VALUES('merge=500,250');") {
+                    Ok(()) => {
+                        consecutive_failures = 0;
+                        tracing::trace!(
+                            iteration = i + 1,
+                            total_iterations = iterations,
+                            "FTS incremental merge iteration"
+                        );
+                    }
+                    Err(e) => {
+                        consecutive_failures += 1;
+                        tracing::warn!(
+                            error = %e,
+                            iteration = i + 1,
+                            consecutive_failures,
+                            "FTS incremental merge failed"
+                        );
+                        if consecutive_failures >= 3 {
+                            // Escalate to full rebuild — last-resort recovery for a
+                            // corrupt or severely fragmented FTS index.
+                            match pool.get() {
+                                Ok(rebuild_conn) => {
+                                    if let Err(e) = rebuild_conn.execute_batch(
+                                        "INSERT INTO logs_fts(logs_fts) VALUES('rebuild');",
+                                    ) {
+                                        tracing::error!(error = %e, "FTS forced rebuild failed");
+                                    } else {
+                                        tracing::error!(
+                                            "FTS incremental merge failed 3 times; forced rebuild completed"
+                                        );
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        error = %e,
+                                        "FTS forced rebuild: failed to get connection"
+                                    );
+                                }
+                            }
+                            return;
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "FTS incremental merge: failed to get connection");
+                consecutive_failures += 1;
+                if consecutive_failures >= 3 {
+                    tracing::error!(
+                        "FTS incremental merge: 3 consecutive connection failures, giving up"
+                    );
+                    return;
+                }
             }
         }
-        Err(e) => tracing::warn!(error = %e, "FTS incremental merge: failed to get connection"),
     }
 }
 
@@ -716,7 +776,7 @@ pub fn purge_old_logs(pool: &DbPool, retention_days: u32) -> Result<usize> {
 
     // Incremental FTS merge — much shorter write-lock duration than full rebuild.
     if total_deleted > 0 {
-        fts_incremental_merge(pool);
+        fts_incremental_merge(pool, total_deleted);
     }
 
     // Passive WAL checkpoint: attempt to move WAL pages into the main DB file
