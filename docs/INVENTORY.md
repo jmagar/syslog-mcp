@@ -1,0 +1,139 @@
+# Component Inventory -- syslog-mcp
+
+Complete listing of all plugin components.
+
+## MCP tools
+
+syslog-mcp uses a flat tool pattern (7 independent tools) rather than the action/subaction router pattern.
+
+| Tool | Description | Destructive |
+| --- | --- | --- |
+| `search_logs` | Full-text search across syslog messages with FTS5 syntax, host/severity/app/time filters | no |
+| `tail_logs` | Get N most recent log entries, optionally filtered by host and/or application | no |
+| `get_errors` | Error/warning summary grouped by hostname and severity level with counts | no |
+| `list_hosts` | List all hosts with first/last seen timestamps and total log counts | no |
+| `correlate_events` | Cross-host event correlation within a time window around a reference timestamp | no |
+| `get_stats` | Database statistics: total logs, hosts, time range, DB size, free disk, write-block status | no |
+| `syslog_help` | Returns markdown documentation for all tools | no |
+
+All tools are read-only. syslog-mcp exposes no destructive operations via MCP.
+
+## MCP resources
+
+| URI | Description | MIME type |
+| --- | --- | --- |
+| -- | No resources exposed | -- |
+
+## Environment variables
+
+| Variable | Required | Default | Sensitive |
+| --- | --- | --- | --- |
+| `SYSLOG_HOST` | no | `0.0.0.0` | no |
+| `SYSLOG_PORT` | no | `1514` | no |
+| `SYSLOG_MAX_MESSAGE_SIZE` | no | `8192` | no |
+| `SYSLOG_BATCH_SIZE` | no | `100` | no |
+| `SYSLOG_FLUSH_INTERVAL` | no | `500` | no |
+| `SYSLOG_MCP_HOST` | no | `0.0.0.0` | no |
+| `SYSLOG_MCP_PORT` | no | `3100` | no |
+| `SYSLOG_MCP_API_TOKEN` | no | (none) | yes |
+| `SYSLOG_MCP_DB_PATH` | no | `/data/syslog.db` | no |
+| `SYSLOG_MCP_POOL_SIZE` | no | `4` | no |
+| `SYSLOG_MCP_RETENTION_DAYS` | no | `90` | no |
+| `SYSLOG_MCP_MAX_DB_SIZE_MB` | no | `1024` | no |
+| `SYSLOG_MCP_RECOVERY_DB_SIZE_MB` | no | `900` | no |
+| `SYSLOG_MCP_MIN_FREE_DISK_MB` | no | `512` | no |
+| `SYSLOG_MCP_RECOVERY_FREE_DISK_MB` | no | `768` | no |
+| `SYSLOG_MCP_CLEANUP_INTERVAL_SECS` | no | `60` | no |
+| `SYSLOG_MCP_CLEANUP_CHUNK_SIZE` | no | `2000` | no |
+| `RUST_LOG` | no | `info` | no |
+
+## Plugin surfaces
+
+| Surface | Present | Path |
+| --- | --- | --- |
+| Skills | yes | `skills/syslog/SKILL.md` |
+| Agents | no | -- |
+| Commands | no | -- |
+| Hooks | yes | `hooks/` |
+| Channels | no | -- |
+| Output styles | no | -- |
+| Schedules | no | -- |
+
+## Network ports
+
+| Port | Protocol | Purpose |
+| --- | --- | --- |
+| 1514 | UDP + TCP | Syslog receiver (RFC 3164/5424) |
+| 3100 | TCP | MCP HTTP endpoint (JSON-RPC 2.0) |
+
+## HTTP endpoints
+
+| Endpoint | Method | Auth required | Description |
+| --- | --- | --- | --- |
+| `/mcp` | POST | yes (when token set) | MCP JSON-RPC 2.0 endpoint |
+| `/sse` | GET | yes (when token set) | Server-Sent Events (legacy transport) |
+| `/health` | GET | no | Health check -- verifies DB connectivity |
+
+## Docker
+
+| Component | Value |
+| --- | --- |
+| Image | `ghcr.io/jmagar/syslog-mcp:latest` |
+| Syslog port | `1514/udp`, `1514/tcp` |
+| MCP port | `3100/tcp` |
+| Health endpoint | `GET /health` (unauthenticated) |
+| Compose file | `docker-compose.yml` |
+| Entrypoint | `entrypoint.sh` |
+| User | `1000:1000` |
+| Data volume | `/data` (SQLite database) |
+
+## CI/CD workflows
+
+| Workflow | Trigger | Purpose |
+| --- | --- | --- |
+| `ci.yml` | push, PR | Lint (clippy), check, test |
+| `docker-publish.yml` | tag push | Build and publish Docker image to GHCR |
+| `publish-crates.yml` | tag push | Publish to crates.io |
+| `codex-plugin-scanner.yml` | PR | Validate Codex plugin manifest |
+
+## Scripts
+
+| Script | Purpose |
+| --- | --- |
+| `scripts/smoke-test.sh` | Live smoke test -- all 7 MCP tools via mcporter (25 assertions) |
+| `scripts/backup.sh` | WAL-safe SQLite backup (checkpoint + `.backup` method) |
+| `scripts/reset-db.sh` | WAL-safe backup + destructive DB reset for dev recovery |
+| `scripts/lint-plugin.sh` | Validate plugin manifests and contract compliance |
+| `scripts/check-docker-security.sh` | Verify Docker security practices |
+| `scripts/check-no-baked-env.sh` | Verify no credentials baked into Docker image |
+| `scripts/check-outdated-deps.sh` | Check for outdated cargo dependencies |
+| `scripts/ensure-ignore-files.sh` | Verify .gitignore and .dockerignore patterns |
+
+## Dependencies
+
+### Runtime
+
+| Crate | Purpose |
+| --- | --- |
+| `tokio` | Async runtime (full features) |
+| `axum` | HTTP framework for MCP server |
+| `tower-http` | CORS and tracing middleware |
+| `rusqlite` | SQLite driver (bundled, with FTS5) |
+| `r2d2` / `r2d2_sqlite` | Connection pooling |
+| `syslog_loose` | RFC 3164/5424 syslog parsing |
+| `serde` / `serde_json` | Serialization |
+| `chrono` | Timestamps |
+| `toml` | Config file parsing |
+| `tracing` / `tracing-subscriber` | Structured logging |
+| `anyhow` | Error handling |
+| `subtle` | Constant-time token comparison |
+| `rustix` | Filesystem stats (free disk space) |
+| `tokio-stream` / `futures-core` | SSE support |
+
+### Development
+
+| Crate | Purpose |
+| --- | --- |
+| `tempfile` | Temporary directories for test databases |
+| `serial_test` | Serialized test execution for env var tests |
+| `tower` | HTTP testing utilities |

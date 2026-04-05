@@ -1,0 +1,128 @@
+# Common MCP Code Patterns -- syslog-mcp
+
+Reusable patterns in the syslog-mcp implementation.
+
+## Flat tool dispatch
+
+syslog-mcp uses a flat match on tool name rather than an action/subaction router:
+
+```rust
+async fn execute_tool(state: &AppState, name: &str, args: Value) -> anyhow::Result<Value> {
+    match name {
+        "search_logs" => tool_search_logs(&state.pool, args).await,
+        "tail_logs" => tool_tail_logs(&state.pool, args).await,
+        "get_errors" => tool_get_errors(&state.pool, args).await,
+        "list_hosts" => tool_list_hosts(&state.pool, args).await,
+        "correlate_events" => tool_correlate_events(&state.pool, args).await,
+        "get_stats" => tool_get_stats(state, args).await,
+        "syslog_help" => tool_syslog_help().await,
+        _ => Err(anyhow::anyhow!("Unknown tool: {name}")),
+    }
+}
+```
+
+This pattern is appropriate when each tool has distinct parameters and behavior. The action/subaction router is better when tools share CRUD patterns on multiple resource types.
+
+## run_db helper
+
+All database operations run on tokio's blocking threadpool via a shared helper:
+
+```rust
+async fn run_db<F, T>(pool: &Arc<DbPool>, f: F) -> anyhow::Result<T>
+where
+    F: FnOnce(&DbPool) -> anyhow::Result<T> + Send + 'static,
+    T: Send + 'static,
+{
+    let pool = Arc::clone(pool);
+    tokio::task::spawn_blocking(move || f(&pool))
+        .await
+        .map_err(|e| anyhow::anyhow!("Task join error: {e}"))?
+}
+```
+
+This prevents blocking the tokio runtime with synchronous rusqlite calls.
+
+## Batch writer
+
+Syslog messages flow through an mpsc channel to a batched writer:
+
+```
+UDP/TCP listener -> parse_syslog() -> mpsc::channel -> batch_writer() -> insert_logs_batch()
+```
+
+The batch writer collects entries and flushes when either:
+- The batch reaches `batch_size` entries (default 100)
+- The `flush_interval` timer fires (default 500ms)
+
+This amortizes SQLite transaction overhead across many inserts.
+
+## Storage budget with hysteresis
+
+The storage enforcement uses a two-threshold system:
+
+1. **Trigger**: DB size > `max_db_size_mb` or free disk < `min_free_disk_mb`
+2. **Recovery**: Delete oldest logs until DB size < `recovery_db_size_mb` and free disk > `recovery_free_disk_mb`
+3. **Write block**: If cleanup cannot recover, block the batch writer
+
+The gap between trigger and recovery thresholds prevents oscillation (delete-write-delete cycles).
+
+## Constant-time auth
+
+Bearer token comparison uses the `subtle` crate:
+
+```rust
+let authorized = match provided {
+    Some(token) => token.as_bytes().ct_eq(expected.as_bytes()).unwrap_u8() == 1,
+    None => false,
+};
+```
+
+This prevents timing side-channel attacks against the bearer token.
+
+## Backpressure logging
+
+State-transition logging prevents log storms under load:
+
+```rust
+let at_capacity = tx.capacity() == 0;
+if at_capacity && !backpressure {
+    warn!("syslog write channel full - backpressure applied");
+    backpressure = true;
+} else if !at_capacity && backpressure {
+    info!("syslog write channel cleared - backpressure lifted");
+    backpressure = false;
+}
+```
+
+Only the transitions are logged, not every message during backpressure.
+
+## TCP connection limiting
+
+A semaphore caps concurrent TCP connections:
+
+```rust
+let sem = Arc::new(Semaphore::new(max_connections));
+// ...
+match Arc::clone(&sem).try_acquire_owned() {
+    Ok(permit) => { /* handle connection, permit drops on close */ }
+    Err(_) => { /* reject connection */ }
+}
+```
+
+Rejection logging is rate-limited to once per 10 seconds.
+
+## SQLite retry with backoff
+
+Transient SQLite lock errors trigger retry:
+
+```rust
+const RETRY_DELAYS_MS: &[u64] = &[25, 100, 250];
+```
+
+Three attempts with increasing delay before surfacing the error.
+
+## See also
+
+- [TOOLS.md](TOOLS.md) -- tool definitions
+- [SCHEMA.md](SCHEMA.md) -- schema patterns
+- [../stack/ARCH.md](../stack/ARCH.md) -- architecture overview
