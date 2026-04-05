@@ -316,6 +316,7 @@ pub fn enforce_storage_budget_with_probe(
 ) -> Result<StorageEnforcementOutcome> {
     let recovery = recovery_targets(config);
     let mut deleted_rows = 0usize;
+    let mut all_hosts: std::collections::HashSet<String> = Default::default();
 
     let mut metrics = get_storage_metrics_with_probe(pool, config, probe)?;
     tracing::debug!(
@@ -372,11 +373,16 @@ pub fn enforce_storage_budget_with_probe(
             affected_hosts = deleted.hostnames.len(),
             "Deleted oldest log chunk for storage recovery"
         );
-        reconcile_hosts(pool, &deleted.hostnames)?;
+        all_hosts.extend(deleted.hostnames);
         metrics = get_storage_metrics_with_probe(pool, config, probe)?;
     }
 
     if deleted_rows > 0 {
+        // Reconcile hosts once after all chunks — avoids N×3 SQL round-trips
+        // (one per chunk × 3 queries per hostname) competing with the batch writer.
+        let host_list: Vec<String> = all_hosts.into_iter().collect();
+        reconcile_hosts(pool, &host_list)?;
+
         // Incremental FTS merge — clean up phantom rows left by bulk deletes
         // (DELETE trigger is intentionally absent).
         // drop the connection before checkpoint_wal_and_incremental_vacuum to
