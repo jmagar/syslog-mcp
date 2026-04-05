@@ -265,6 +265,9 @@ async fn tcp_listener(
     info!(bind = %bind, max_connections, idle_timeout_secs, "TCP syslog listener bound");
     let sem = Arc::new(Semaphore::new(max_connections));
     let mut accept_backoff_ms: u64 = 100;
+    let mut reject_logged = false;
+    let mut last_reject_log = std::time::Instant::now();
+    let mut total_rejected: u64 = 0;
 
     loop {
         match listener.accept().await {
@@ -286,11 +289,22 @@ async fn tcp_listener(
                         );
                     }
                     Err(tokio::sync::TryAcquireError::NoPermits) => {
-                        warn!(
-                            peer = %addr,
-                            max_connections,
-                            "TCP connection limit reached — rejecting connection"
-                        );
+                        total_rejected += 1;
+                        // Emit warn! only on first rejection and once per 10 seconds
+                        // thereafter to avoid log storms under connection floods.
+                        if !reject_logged
+                            || last_reject_log.elapsed()
+                                >= std::time::Duration::from_secs(10)
+                        {
+                            warn!(
+                                peer = %addr,
+                                max_connections,
+                                total_rejected,
+                                "TCP connection limit reached — rejecting connection"
+                            );
+                            reject_logged = true;
+                            last_reject_log = std::time::Instant::now();
+                        }
                         // stream is dropped here, closing the connection
                     }
                     Err(tokio::sync::TryAcquireError::Closed) => {
