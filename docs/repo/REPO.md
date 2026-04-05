@@ -31,7 +31,6 @@ syslog-mcp/
 │   ├── smoke-test.sh            # Live smoke test (25 assertions)
 │   ├── backup.sh                # WAL-safe SQLite backup
 │   ├── reset-db.sh              # Backup + destructive DB reset
-│   ├── lint-plugin.sh           # Plugin manifest validation
 │   ├── check-docker-security.sh # Docker security checks
 │   ├── check-no-baked-env.sh    # No credentials in Docker image
 │   ├── check-outdated-deps.sh   # Outdated cargo dependencies

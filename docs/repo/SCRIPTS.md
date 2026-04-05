@@ -9,7 +9,6 @@ Scripts used for maintenance, hooks, and testing.
 | `smoke-test.sh` | Live smoke test with 25 assertions across all 7 MCP tools | `bash scripts/smoke-test.sh` |
 | `backup.sh` | WAL-safe SQLite backup using PRAGMA wal_checkpoint + .backup | `bash scripts/backup.sh` |
 | `reset-db.sh` | Backup first, then destructive DB reset (stop server first) | `bash scripts/reset-db.sh` |
-| `lint-plugin.sh` | Validate plugin manifests, tool schemas, contract compliance | `just check-contract` |
 | `check-docker-security.sh` | Verify Docker security: non-root user, no baked secrets | `bash scripts/check-docker-security.sh` |
 | `check-no-baked-env.sh` | Verify no credentials baked into Docker image | `bash scripts/check-no-baked-env.sh` |
 | `check-outdated-deps.sh` | Check for outdated cargo dependencies | `bash scripts/check-outdated-deps.sh` |

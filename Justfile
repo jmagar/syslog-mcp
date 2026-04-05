@@ -46,8 +46,6 @@ setup:
 gen-token:
     openssl rand -hex 32
 
-check-contract:
-    bash scripts/lint-plugin.sh
 
 validate-skills:
     @test -f skills/syslog/SKILL.md && echo "OK" || { echo "MISSING: skills/syslog/SKILL.md"; exit 1; }

@@ -38,7 +38,6 @@ Run `just --list` to see all available recipes.
 | --- | --- | --- |
 | `just setup` | `cp -n .env.example .env` | Initialize .env file |
 | `just gen-token` | `openssl rand -hex 32` | Generate bearer token |
-| `just check-contract` | `bash scripts/lint-plugin.sh` | Validate plugin manifests |
 | `just validate-skills` | Check SKILL.md exists | Verify skill files |
 
 ## Publishing
