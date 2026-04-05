@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] — 2026-04-04
+
+### Fixed
+
+- **Version sync**: Aligned `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, and `gemini-extension.json` from 0.2.6 to 0.3.2 to match `Cargo.toml`
+
+### Added
+
+- **`tests/TEST_COVERAGE.md`**: Test coverage documentation
+- **`tests/mcporter/`**: MCPorter test infrastructure
+- **Full documentation structure**: Added plugin-lab template docs (README, CLAUDE.md, references, runbooks)
+
 ## [0.3.1] — 2026-04-04
 
 ### Fixed
