@@ -840,32 +840,30 @@ struct DeletedChunk {
 
 fn delete_oldest_logs_chunk(pool: &DbPool, chunk_size: usize) -> Result<DeletedChunk> {
     let conn = pool.get()?;
-    let mut stmt =
-        conn.prepare("SELECT id, hostname FROM logs ORDER BY received_at ASC, id ASC LIMIT ?1")?;
-    let selected: Vec<(i64, String)> = stmt
-        .query_map([chunk_size as i64], |row| Ok((row.get(0)?, row.get(1)?)))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    drop(stmt);
 
-    if selected.is_empty() {
-        return Ok(DeletedChunk {
-            deleted_rows: 0,
-            hostnames: Vec::new(),
-        });
-    }
+    // Collect distinct hostnames from the chunk we're about to delete.
+    // Use a subquery instead of a dynamic IN-list to avoid SQLite expression
+    // depth limit (default 1000) at large chunk sizes.
+    let hostnames: Vec<String> = {
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT hostname FROM logs \
+             WHERE id IN (SELECT id FROM logs ORDER BY received_at ASC, id ASC LIMIT ?1)",
+        )?;
+        let result = stmt
+            .query_map([chunk_size as i64], |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        result
+    };
 
-    let mut hostnames: Vec<String> = selected.iter().map(|(_, host)| host.clone()).collect();
-    hostnames.sort();
-    hostnames.dedup();
+    // Delete the oldest chunk using a subquery — O(1) SQL string size regardless
+    // of chunk_size, no expression depth issues.
+    let deleted_rows = conn.execute(
+        "DELETE FROM logs \
+         WHERE id IN (SELECT id FROM logs ORDER BY received_at ASC, id ASC LIMIT ?1)",
+        [chunk_size as i64],
+    )?;
 
-    let ids: Vec<i64> = selected.iter().map(|(id, _)| *id).collect();
-    let placeholders = std::iter::repeat_n("?", ids.len())
-        .collect::<Vec<_>>()
-        .join(", ");
-    let sql = format!("DELETE FROM logs WHERE id IN ({placeholders})");
-    let deleted_rows = conn.execute(&sql, rusqlite::params_from_iter(ids.iter()))?;
     tracing::debug!(
-        selected_rows = selected.len(),
         deleted_rows,
         affected_hosts = hostnames.len(),
         chunk_size,
