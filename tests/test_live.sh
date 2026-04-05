@@ -569,7 +569,8 @@ run_docker_mode() {
     # Expose MCP HTTP port
     "-p" "0:3100"
     # Use a tmpfs for SQLite (no volume needed for CI)
-    "--tmpfs" "/data:rw,noexec,nosuid,size=64m"
+    # uid=1000,gid=1000 matches the 'syslog' user in the container image
+    "--tmpfs" "/data:rw,noexec,nosuid,size=64m,uid=1000,gid=1000"
   )
 
   if [[ -n "${TOKEN}" ]]; then

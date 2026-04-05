@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] — 2026-04-05
+
+### Fixed
+
+- **`tests/test_live.sh`**: Added `uid=1000,gid=1000` to the `--tmpfs /data` mount so the `syslog` container user (uid 1000) can write the SQLite database; previously the tmpfs was owned by root, causing `unable to open database file: /data/syslog.db` and CI health-check timeout
+- **`.github/workflows/docker-publish.yml`**: Trivy scan now references `steps.meta.outputs.version` (e.g. `main`) instead of the bare `github.sha` (full 40-char SHA); the image is pushed with the branch/tag name, not the full commit SHA, so the old ref caused `MANIFEST_UNKNOWN` scan failures
+
 ## [0.3.2] — 2026-04-04
 
 ### Fixed
