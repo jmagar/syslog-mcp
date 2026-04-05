@@ -822,17 +822,13 @@ mod tests {
     use super::*;
     use axum::body::to_bytes;
 
-    fn test_storage_config(db_path: std::path::PathBuf) -> StorageConfig {
-        StorageConfig::for_test(db_path)
-    }
-
     fn test_state() -> (AppState, tempfile::TempDir) {
         test_state_with_token(None)
     }
 
     fn test_state_with_token(token: Option<String>) -> (AppState, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
-        let storage = test_storage_config(dir.path().join("mcp-test.db"));
+        let storage = StorageConfig::for_test(dir.path().join("mcp-test.db"));
         let pool = Arc::new(db::init_pool(&storage).unwrap());
         (
             AppState {
