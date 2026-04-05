@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-04-04
+
+### Fixed
+
+- **`src/config.rs`**: `cleanup_chunk_size` upper bound replaced from `i64::MAX` with operational limit of `1_000_000`; values above this hold the SQLite write lock indefinitely. Error message now explains why the limit exists.
+
 ## [0.3.0] — 2026-04-04
 
 ### Added

@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+const MAX_CLEANUP_CHUNK_SIZE: usize = 1_000_000;
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     pub syslog: SyslogConfig,
@@ -378,10 +380,10 @@ fn validate_storage_config(storage: &StorageConfig) -> anyhow::Result<()> {
         ));
     }
 
-    if storage.cleanup_chunk_size > i64::MAX as usize {
+    if storage.cleanup_chunk_size > MAX_CLEANUP_CHUNK_SIZE {
         return Err(anyhow::anyhow!(
-            "cleanup_chunk_size must be <= {}",
-            i64::MAX
+            "cleanup_chunk_size must be <= {} (larger values hold the write lock too long)",
+            MAX_CLEANUP_CHUNK_SIZE
         ));
     }
 
@@ -552,30 +554,26 @@ mod tests {
 
     #[test]
     #[serial]
-    fn rejects_cleanup_chunk_size_overflow() {
-        // On 64-bit: i64::MAX+1 fits in usize, so validate_storage_config fires.
-        // On 32-bit: the parse itself fails (value exceeds u32::MAX). Either way Err.
-        let overflow = (i64::MAX as u128 + 1).to_string();
-        std::env::set_var("SYSLOG_MCP_CLEANUP_CHUNK_SIZE", &overflow);
+    fn rejects_cleanup_chunk_size_over_max() {
+        std::env::set_var("SYSLOG_MCP_CLEANUP_CHUNK_SIZE", "1000001");
         let result = Config::load();
         std::env::remove_var("SYSLOG_MCP_CLEANUP_CHUNK_SIZE");
 
-        let err = result.expect_err("Config::load() should reject oversized cleanup_chunk_size");
+        let err = result.expect_err("Config::load() should reject cleanup_chunk_size > 1_000_000");
         assert!(
-            err.to_string().contains("cleanup_chunk_size")
-                || err.to_string().contains("SYSLOG_MCP_CLEANUP_CHUNK_SIZE"),
+            err.to_string().contains("cleanup_chunk_size"),
             "Expected error referencing cleanup_chunk_size, got: {err}"
         );
     }
 
     #[test]
     #[serial]
-    fn accepts_cleanup_chunk_size_at_i64_max() {
-        std::env::set_var("SYSLOG_MCP_CLEANUP_CHUNK_SIZE", &i64::MAX.to_string());
+    fn accepts_cleanup_chunk_size_at_max() {
+        std::env::set_var("SYSLOG_MCP_CLEANUP_CHUNK_SIZE", "1000000");
         let result = Config::load();
         std::env::remove_var("SYSLOG_MCP_CLEANUP_CHUNK_SIZE");
 
-        let cfg = result.expect("cleanup_chunk_size == i64::MAX should be accepted");
-        assert_eq!(cfg.storage.cleanup_chunk_size, i64::MAX as usize);
+        let cfg = result.expect("cleanup_chunk_size == 1_000_000 should be accepted");
+        assert_eq!(cfg.storage.cleanup_chunk_size, 1_000_000);
     }
 }
