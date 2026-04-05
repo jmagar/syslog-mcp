@@ -1045,7 +1045,9 @@ mod tests {
             let body = jsonrpc_request(
                 5,
                 "tools/call",
-                Some(serde_json::json!({"name": "search_logs", "arguments": {"query": "error", "limit": 5}})),
+                Some(
+                    serde_json::json!({"name": "search_logs", "arguments": {"query": "error", "limit": 5}}),
+                ),
             );
             let (status, value) = mcp_post(router(h.state), body, None).await;
             assert_eq!(status, axum::http::StatusCode::OK);

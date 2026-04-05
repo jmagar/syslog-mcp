@@ -207,7 +207,6 @@ impl Default for McpConfig {
     }
 }
 
-
 impl Config {
     pub fn load() -> anyhow::Result<Self> {
         // 1. Start with defaults
@@ -375,9 +374,7 @@ fn validate_storage_config(storage: &StorageConfig) -> anyhow::Result<()> {
     }
 
     if storage.cleanup_chunk_size == 0 {
-        return Err(anyhow::anyhow!(
-            "cleanup_chunk_size must be > 0"
-        ));
+        return Err(anyhow::anyhow!("cleanup_chunk_size must be > 0"));
     }
 
     if storage.cleanup_chunk_size > MAX_CLEANUP_CHUNK_SIZE {

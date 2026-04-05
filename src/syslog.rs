@@ -279,7 +279,8 @@ async fn tcp_listener(
                         let tx = tx.clone();
                         tokio::spawn(async move {
                             let _permit = permit;
-                            handle_tcp_connection(stream, addr, tx, max_size, idle_timeout_secs).await;
+                            handle_tcp_connection(stream, addr, tx, max_size, idle_timeout_secs)
+                                .await;
                         });
                         debug!(
                             peer = %addr,
@@ -293,8 +294,7 @@ async fn tcp_listener(
                         // Emit warn! only on first rejection and once per 10 seconds
                         // thereafter to avoid log storms under connection floods.
                         if !reject_logged
-                            || last_reject_log.elapsed()
-                                >= std::time::Duration::from_secs(10)
+                            || last_reject_log.elapsed() >= std::time::Duration::from_secs(10)
                         {
                             warn!(
                                 peer = %addr,
@@ -308,7 +308,9 @@ async fn tcp_listener(
                         // stream is dropped here, closing the connection
                     }
                     Err(tokio::sync::TryAcquireError::Closed) => {
-                        error!("TCP connection semaphore unexpectedly closed — TCP listener exiting");
+                        error!(
+                            "TCP connection semaphore unexpectedly closed — TCP listener exiting"
+                        );
                         break;
                     }
                 }
@@ -1183,7 +1185,10 @@ mod tests {
         let raw = "just a plain log line with no syslog structure at all";
         let parsed = parse_syslog(raw, "192.168.1.1:514".to_string());
         // When syslog_loose returns no hostname the code inserts "unknown"
-        assert_eq!(parsed.hostname, "unknown", "bare string with no hostname should fall back to 'unknown'");
+        assert_eq!(
+            parsed.hostname, "unknown",
+            "bare string with no hostname should fall back to 'unknown'"
+        );
     }
 
     /// Empty string input must not panic and must return a valid db::LogBatchEntry.

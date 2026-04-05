@@ -703,7 +703,8 @@ fn fts_incremental_merge(pool: &DbPool, deleted_rows: usize) {
     for i in 0..iterations {
         match pool.get() {
             Ok(conn) => {
-                match conn.execute_batch("INSERT INTO logs_fts(logs_fts) VALUES('merge=500,250');") {
+                match conn.execute_batch("INSERT INTO logs_fts(logs_fts) VALUES('merge=500,250');")
+                {
                     Ok(()) => {
                         consecutive_failures = 0;
                         tracing::trace!(
