@@ -197,6 +197,7 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
         CREATE INDEX IF NOT EXISTS idx_logs_host_time ON logs(hostname, timestamp);
         CREATE INDEX IF NOT EXISTS idx_logs_sev_time ON logs(severity, timestamp);
         CREATE INDEX IF NOT EXISTS idx_logs_received_at ON logs(received_at);
+        CREATE INDEX IF NOT EXISTS idx_logs_hostname_received_at ON logs(hostname, received_at);
 
         -- FTS5 virtual table for full-text search on messages
         CREATE VIRTUAL TABLE IF NOT EXISTS logs_fts USING fts5(
