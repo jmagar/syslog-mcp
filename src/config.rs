@@ -391,7 +391,7 @@ fn validate_storage_config(storage: &StorageConfig) -> anyhow::Result<()> {
 #[cfg(test)]
 impl StorageConfig {
     /// Returns a minimal StorageConfig for use in unit tests.
-    pub fn for_test(db_path: std::path::PathBuf) -> Self {
+    pub(crate) fn for_test(db_path: std::path::PathBuf) -> Self {
         Self {
             db_path,
             pool_size: 1,

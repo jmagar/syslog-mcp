@@ -846,9 +846,30 @@ mod tests {
         )
     }
 
+    /// Owns both `AppState` and the `TempDir` backing the SQLite DB so the
+    /// directory cannot be accidentally dropped (e.g. via `let (state, _) = …`)
+    /// while the connection pool still holds the path.
+    struct TestHarness {
+        state: AppState,
+        _dir: tempfile::TempDir,
+    }
+
+    impl TestHarness {
+        fn new() -> Self {
+            let (state, dir) = test_state_with_token(None);
+            TestHarness { state, _dir: dir }
+        }
+
+        fn with_token(token: String) -> Self {
+            let (state, dir) = test_state_with_token(Some(token));
+            TestHarness { state, _dir: dir }
+        }
+    }
+
     #[tokio::test]
     async fn tool_get_stats_returns_storage_guard_fields() {
-        let (state, _dir) = test_state();
+        let h = TestHarness::new();
+        let state = h.state;
         let value = tool_get_stats(&state, json!({})).await.unwrap();
         assert!(value.get("logical_db_size_mb").is_some());
         assert!(value.get("physical_db_size_mb").is_some());
@@ -858,7 +879,8 @@ mod tests {
 
     #[tokio::test]
     async fn initialized_notification_returns_no_jsonrpc_body() {
-        let (state, _dir) = test_state();
+        let h = TestHarness::new();
+        let state = h.state;
         let response = handle_mcp_post(
             State(state),
             Json(JsonRpcRequest {
@@ -945,8 +967,8 @@ mod tests {
 
         #[tokio::test]
         async fn integration_health_returns_200() {
-            let (state, _dir) = test_state();
-            let app = router(state);
+            let h = TestHarness::new();
+            let app = router(h.state);
             let request = Request::builder()
                 .method("GET")
                 .uri("/health")
@@ -958,9 +980,9 @@ mod tests {
 
         #[tokio::test]
         async fn integration_initialize() {
-            let (state, _dir) = test_state();
+            let h = TestHarness::new();
             let body = jsonrpc_request(1, "initialize", None);
-            let (status, value) = mcp_post(router(state), body, None).await;
+            let (status, value) = mcp_post(router(h.state), body, None).await;
             assert_eq!(status, axum::http::StatusCode::OK);
             assert!(value["result"]["protocolVersion"].is_string());
             assert!(value["result"]["serverInfo"]["name"].is_string());
@@ -968,9 +990,9 @@ mod tests {
 
         #[tokio::test]
         async fn integration_tools_list() {
-            let (state, _dir) = test_state();
+            let h = TestHarness::new();
             let body = jsonrpc_request(2, "tools/list", None);
-            let (status, value) = mcp_post(router(state), body, None).await;
+            let (status, value) = mcp_post(router(h.state), body, None).await;
             assert_eq!(status, axum::http::StatusCode::OK);
             let tools = value["result"]["tools"].as_array().unwrap();
             let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -988,13 +1010,13 @@ mod tests {
 
         #[tokio::test]
         async fn integration_get_stats() {
-            let (state, _dir) = test_state();
+            let h = TestHarness::new();
             let body = jsonrpc_request(
                 3,
                 "tools/call",
                 Some(serde_json::json!({"name": "get_stats", "arguments": {}})),
             );
-            let (status, value) = mcp_post(router(state), body, None).await;
+            let (status, value) = mcp_post(router(h.state), body, None).await;
             assert_eq!(status, axum::http::StatusCode::OK);
             let content = value["result"]["content"][0]["text"].as_str().unwrap();
             assert!(
@@ -1006,52 +1028,52 @@ mod tests {
 
         #[tokio::test]
         async fn integration_tail_logs_empty_db() {
-            let (state, _dir) = test_state();
+            let h = TestHarness::new();
             let body = jsonrpc_request(
                 4,
                 "tools/call",
                 Some(serde_json::json!({"name": "tail_logs", "arguments": {"n": 10}})),
             );
-            let (status, value) = mcp_post(router(state), body, None).await;
+            let (status, value) = mcp_post(router(h.state), body, None).await;
             assert_eq!(status, axum::http::StatusCode::OK);
             assert!(value["error"].is_null(), "unexpected error: {}", value);
         }
 
         #[tokio::test]
         async fn integration_search_logs_empty_db() {
-            let (state, _dir) = test_state();
+            let h = TestHarness::new();
             let body = jsonrpc_request(
                 5,
                 "tools/call",
                 Some(serde_json::json!({"name": "search_logs", "arguments": {"query": "error", "limit": 5}})),
             );
-            let (status, value) = mcp_post(router(state), body, None).await;
+            let (status, value) = mcp_post(router(h.state), body, None).await;
             assert_eq!(status, axum::http::StatusCode::OK);
             assert!(value["error"].is_null(), "unexpected error: {}", value);
         }
 
         #[tokio::test]
         async fn integration_unknown_method_returns_error() {
-            let (state, _dir) = test_state();
+            let h = TestHarness::new();
             let body = jsonrpc_request(6, "nonexistent/method", None);
-            let (status, value) = mcp_post(router(state), body, None).await;
+            let (status, value) = mcp_post(router(h.state), body, None).await;
             assert_eq!(status, axum::http::StatusCode::OK);
             assert_eq!(value["error"]["code"].as_i64().unwrap(), -32601);
         }
 
         #[tokio::test]
         async fn integration_auth_missing_token_returns_401() {
-            let (state, _dir) = test_state_with_token(Some("secret-token".into()));
+            let h = TestHarness::with_token("secret-token".into());
             let body = jsonrpc_request(7, "tools/list", None);
-            let (status, _) = mcp_post(router(state), body, None).await;
+            let (status, _) = mcp_post(router(h.state), body, None).await;
             assert_eq!(status, axum::http::StatusCode::UNAUTHORIZED);
         }
 
         #[tokio::test]
         async fn integration_auth_correct_token_succeeds() {
-            let (state, _dir) = test_state_with_token(Some("secret-token".into()));
+            let h = TestHarness::with_token("secret-token".into());
             let body = jsonrpc_request(8, "tools/list", None);
-            let (status, _) = mcp_post(router(state), body, Some("secret-token")).await;
+            let (status, _) = mcp_post(router(h.state), body, Some("secret-token")).await;
             assert_eq!(status, axum::http::StatusCode::OK);
         }
     }
