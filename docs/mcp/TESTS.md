@@ -39,7 +39,7 @@ just test-live
 # or: bash tests/test_live.sh
 ```
 
-The smoke test (`scripts/smoke-test.sh`) exercises all 7 MCP tools via mcporter with 25 assertions.
+The smoke test (`bin/smoke-test.sh`) exercises all 7 MCP tools via mcporter with 25 assertions.
 
 ### mcporter-based testing
 

@@ -10,7 +10,7 @@ hooks/
   scripts/
     sync-env.sh                 # Sync .env.example with server variables
     fix-env-perms.sh            # Fix .env file permissions
-    ensure-ignore-files.sh      # Verify .gitignore/.dockerignore patterns
+
 ```
 
 ## Hook definitions
@@ -38,9 +38,9 @@ Verifies that `.gitignore` and `.dockerignore` contain required patterns:
 Run hooks outside of Claude Code:
 
 ```bash
-bash hooks/scripts/sync-env.sh
-bash hooks/scripts/fix-env-perms.sh
-bash hooks/scripts/ensure-ignore-files.sh
+bash bin/sync-env.sh
+bash bin/fix-env-perms.sh
+
 ```
 
 ## See also

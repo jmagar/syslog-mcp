@@ -4,12 +4,12 @@ End-to-end verification against a running syslog-mcp server. Complements unit te
 
 ## Purpose
 
-`scripts/smoke-test.sh` exercises the full MCP server stack: auth, tool dispatch, and response validation against a live syslog-mcp instance with 25 assertions.
+`bin/smoke-test.sh` exercises the full MCP server stack: auth, tool dispatch, and response validation against a live syslog-mcp instance with 25 assertions.
 
 ## Location
 
 ```
-scripts/smoke-test.sh       # Full smoke test (25 assertions)
+bin/smoke-test.sh       # Full smoke test (25 assertions)
 tests/test_live.sh          # Extended live integration tests
 tests/mcporter/test-tools.sh  # mcporter-based tool tests
 ```
@@ -22,7 +22,7 @@ just up
 
 # Run smoke tests
 just test-live
-# or: bash scripts/smoke-test.sh
+# or: bash bin/smoke-test.sh
 ```
 
 ## mcporter configuration

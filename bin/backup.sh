@@ -2,13 +2,13 @@
 # backup.sh — WAL-safe SQLite backup for syslog-mcp
 #
 # Usage:
-#   bash scripts/backup.sh [/path/to/backup/dir]
+#   bash bin/backup.sh [/path/to/backup/dir]
 #
 # Default backup dir: ./backups/
 # Backup file: syslog-YYYY-MM-DD-HHMMSS.db
 #
 # Schedule via cron:
-#   0 */6 * * * cd /path/to/syslog-mcp && bash scripts/backup.sh
+#   0 */6 * * * cd /path/to/syslog-mcp && bash bin/backup.sh
 
 set -euo pipefail
 

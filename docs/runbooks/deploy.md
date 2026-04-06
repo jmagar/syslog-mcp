@@ -10,7 +10,7 @@ git pull origin main
 docker compose build
 
 # 3. Run smoke test against current running instance (optional)
-bash scripts/smoke-test.sh
+bash bin/smoke-test.sh
 
 # 4. Rolling restart — new container replaces old
 docker compose up -d

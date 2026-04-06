@@ -8,9 +8,9 @@ Hooks are defined in `hooks/hooks.json` and enforced by Claude Code during sessi
 
 | Hook | Script | Purpose |
 | --- | --- | --- |
-| `sync-env` | `hooks/scripts/sync-env.sh` | Ensures `.env.example` documents all variables read by the server |
-| `fix-env-perms` | `hooks/scripts/fix-env-perms.sh` | Sets `.env` to `chmod 600` if present |
-| `ensure-ignore-files` | `hooks/scripts/ensure-ignore-files.sh` | Verifies `.gitignore` and `.dockerignore` contain required patterns |
+| `sync-env` | `bin/sync-env.sh` | Ensures `.env.example` documents all variables read by the server |
+| `fix-env-perms` | `bin/fix-env-perms.sh` | Sets `.env` to `chmod 600` if present |
+
 
 ## Manual checks
 
@@ -21,16 +21,16 @@ Run checks manually outside of Claude Code:
 just check-contract
 
 # Docker security check
-bash scripts/check-docker-security.sh
+
 
 # No baked env vars in Docker image
-bash scripts/check-no-baked-env.sh
+
 
 # Outdated dependencies
-bash scripts/check-outdated-deps.sh
+
 
 # Ignore file patterns
-bash scripts/ensure-ignore-files.sh
+
 ```
 
 ## Rust-specific checks
