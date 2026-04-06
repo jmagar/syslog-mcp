@@ -1,33 +1,38 @@
 # Plugin Settings -- syslog-mcp
 
-Plugin configuration, user-facing settings, and environment sync.
+Plugin configuration and user-facing settings for Claude Code plugin deployment.
 
-## Configuration layers
+## How it works
 
-| Layer | File | Scope |
-| --- | --- | --- |
-| Plugin userConfig | `.claude-plugin/plugin.json` | Per-plugin settings prompted at install |
-| Hook-synced .env | `.env` | Runtime environment variables |
-| config.toml | `config.toml` | Local development overrides |
-| Compiled defaults | `src/config.rs` | Fallback values |
+syslog-mcp is a Rust binary that runs as a long-lived daemon (syslog listener + MCP HTTP server). The plugin connects via HTTP transport, not stdio.
+
+Credentials flow through two files:
+
+1. **`plugin.json`** -- declares `userConfig` fields that Claude Code prompts for at install time
+2. **`.mcp.json`** -- references those fields as `${userConfig.<key>}` in the URL and headers
+
+```
+plugin.json userConfig (user enters values)
+  --> .mcp.json (${userConfig.*} interpolated by Claude Code)
+    --> HTTP connection to running syslog-mcp server
+```
+
+The syslog-mcp server must be running separately (Docker Compose or systemd). The plugin only connects to it.
 
 ## userConfig fields
 
-When installed as a Claude Code plugin, users are prompted for:
-
 | Field | Type | Sensitive | Description |
 | --- | --- | --- | --- |
-| `SYSLOG_MCP_URL` | string | no | Base URL of the syslog-mcp server |
-| `SYSLOG_MCP_API_TOKEN` | string | yes | Bearer token for MCP authentication |
+| `syslog_mcp_url` | string | no | Full MCP endpoint URL (e.g. `https://syslog.example.com/mcp`) |
+| `syslog_mcp_token` | string | yes | Bearer token for MCP authentication (leave empty if auth disabled) |
 
-Sensitive fields are stored encrypted by Claude Code. The `sync-env.sh` hook writes these values to `.env` at session start.
+Sensitive fields are stored encrypted by Claude Code and masked in the UI.
 
-## settings.json
+## Why HTTP (not stdio)
 
-syslog-mcp does not currently ship a `settings.json` for additional plugin settings beyond userConfig.
+syslog-mcp is fundamentally a daemon: it listens on UDP/TCP for syslog messages and stores them in SQLite. It cannot run as a short-lived stdio process. The plugin connects to a running instance over HTTP.
 
 ## See also
 
 - [PLUGINS.md](PLUGINS.md) -- plugin manifest reference
-- [HOOKS.md](HOOKS.md) -- sync-env hook that bridges userConfig to .env
 - [../CONFIG.md](../CONFIG.md) -- full configuration reference
