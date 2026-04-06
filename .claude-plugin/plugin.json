@@ -29,7 +29,7 @@
       "sensitive": false,
       "default": "https://syslog.tootie.tv/mcp"
     },
-    "SYSLOG_MCP_API_TOKEN": {
+    "SYSLOG_MCP_TOKEN": {
       "type": "string",
       "title": "API Token",
       "description": "Bearer token for authenticating MCP requests (leave empty if auth is disabled)",

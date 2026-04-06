@@ -10,8 +10,8 @@
 # Credentials are sourced from ~/.claude-homelab/.env:
 #   SYSLOG_MCP_HOST  (default: localhost)
 #   SYSLOG_MCP_PORT  (default: 3100)
-#   NO_AUTH          (if "true", no Authorization header sent)
-#   SYSLOG_MCP_TOKEN (optional; only used when NO_AUTH != true)
+#   SYSLOG_MCP_NO_AUTH  (if "true", no Authorization header sent)
+#   SYSLOG_MCP_TOKEN    (optional; only used when SYSLOG_MCP_NO_AUTH != true)
 #
 # Usage:
 #   ./tests/mcporter/test-tools.sh [--timeout-ms N] [--parallel] [--verbose]
@@ -148,23 +148,23 @@ load_env() {
   local port="${SYSLOG_MCP_PORT:-3100}"
   MCP_URL="http://${host}:${port}/mcp"
 
-  # Auth: NO_AUTH=true in .env means the server runs without token validation.
+  # Auth: SYSLOG_MCP_NO_AUTH=true means the server runs without token validation.
   # Honour an explicit SYSLOG_MCP_TOKEN if set regardless.
   local token="${SYSLOG_MCP_TOKEN:-}"
-  local no_auth="${NO_AUTH:-true}"
+  local no_auth="${SYSLOG_MCP_NO_AUTH:-true}"
 
   MCPORTER_HEADER_ARGS=()
   if [[ -n "${token}" ]]; then
     MCPORTER_HEADER_ARGS+=(--header "Authorization: Bearer ${token}")
   elif [[ "${no_auth}" != "true" ]]; then
-    log_warn "NO_AUTH is not 'true' and SYSLOG_MCP_TOKEN is unset — calls may return 401"
+    log_warn "SYSLOG_MCP_NO_AUTH is not 'true' and SYSLOG_MCP_TOKEN is unset — calls may return 401"
   fi
 
   log_info "MCP URL: ${MCP_URL}"
   if [[ ${#MCPORTER_HEADER_ARGS[@]} -gt 0 ]]; then
     log_info "Auth: Bearer token configured"
   else
-    log_info "Auth: none (NO_AUTH=true)"
+    log_info "Auth: none (SYSLOG_MCP_NO_AUTH=true)"
   fi
 }
 
@@ -593,14 +593,14 @@ suite_correlate() {
 }
 
 # ---------------------------------------------------------------------------
-# Auth enforcement tests (only run when NO_AUTH != "true")
+# Auth enforcement tests (only run when SYSLOG_MCP_NO_AUTH != "true")
 # ---------------------------------------------------------------------------
 suite_auth() {
-  local no_auth="${NO_AUTH:-true}"
+  local no_auth="${SYSLOG_MCP_NO_AUTH:-true}"
   if [[ "${no_auth}" == "true" ]]; then
-    printf '\n%b== auth (skipped — NO_AUTH=true) ==%b\n' "${C_BOLD}" "${C_RESET}" | tee -a "${LOG_FILE}"
-    skip_test "auth: unauthenticated request returns 401" "NO_AUTH=true"
-    skip_test "auth: bad token returns 401"                "NO_AUTH=true"
+    printf '\n%b== auth (skipped — SYSLOG_MCP_NO_AUTH=true) ==%b\n' "${C_BOLD}" "${C_RESET}" | tee -a "${LOG_FILE}"
+    skip_test "auth: unauthenticated request returns 401" "SYSLOG_MCP_NO_AUTH=true"
+    skip_test "auth: bad token returns 401"                "SYSLOG_MCP_NO_AUTH=true"
     return
   fi
 

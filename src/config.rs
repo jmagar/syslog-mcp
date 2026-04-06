@@ -237,7 +237,19 @@ impl Config {
 
         env_override_str("SYSLOG_MCP_HOST", &mut config.mcp.host);
         env_override_parse("SYSLOG_MCP_PORT", &mut config.mcp.port)?;
-        env_override_opt_str("SYSLOG_MCP_API_TOKEN", &mut config.mcp.api_token);
+        // Primary name: SYSLOG_MCP_TOKEN
+        env_override_opt_str("SYSLOG_MCP_TOKEN", &mut config.mcp.api_token);
+        // Deprecated: SYSLOG_MCP_API_TOKEN (removed in a future version)
+        if config.mcp.api_token.is_none() {
+            if let Ok(v) = std::env::var("SYSLOG_MCP_API_TOKEN") {
+                if !v.is_empty() {
+                    tracing::warn!(
+                        "SYSLOG_MCP_API_TOKEN is deprecated; rename to SYSLOG_MCP_TOKEN"
+                    );
+                    config.mcp.api_token = Some(v);
+                }
+            }
+        }
         env_override_path("SYSLOG_MCP_DB_PATH", &mut config.storage.db_path);
         env_override_parse("SYSLOG_MCP_POOL_SIZE", &mut config.storage.pool_size)?;
         env_override_parse(
@@ -413,6 +425,43 @@ mod tests {
 
     #[test]
     #[serial]
+    fn syslog_mcp_token_sets_api_token() {
+        std::env::set_var("SYSLOG_MCP_TOKEN", "test-token");
+        std::env::remove_var("SYSLOG_MCP_API_TOKEN");
+        let result = Config::load();
+        std::env::remove_var("SYSLOG_MCP_TOKEN");
+
+        let cfg = result.expect("Config::load() should succeed");
+        assert_eq!(cfg.mcp.api_token, Some("test-token".into()));
+    }
+
+    #[test]
+    #[serial]
+    fn deprecated_api_token_still_works() {
+        std::env::remove_var("SYSLOG_MCP_TOKEN");
+        std::env::set_var("SYSLOG_MCP_API_TOKEN", "legacy-token");
+        let result = Config::load();
+        std::env::remove_var("SYSLOG_MCP_API_TOKEN");
+
+        let cfg = result.expect("Config::load() should succeed with deprecated var");
+        assert_eq!(cfg.mcp.api_token, Some("legacy-token".into()));
+    }
+
+    #[test]
+    #[serial]
+    fn new_token_takes_precedence_over_deprecated() {
+        std::env::set_var("SYSLOG_MCP_TOKEN", "new-token");
+        std::env::set_var("SYSLOG_MCP_API_TOKEN", "old-token");
+        let result = Config::load();
+        std::env::remove_var("SYSLOG_MCP_TOKEN");
+        std::env::remove_var("SYSLOG_MCP_API_TOKEN");
+
+        let cfg = result.expect("Config::load() should succeed");
+        assert_eq!(cfg.mcp.api_token, Some("new-token".into()));
+    }
+
+    #[test]
+    #[serial]
     fn env_var_overrides_mcp_port() {
         std::env::set_var("SYSLOG_MCP_PORT", "3200");
         let result = Config::load();
@@ -446,6 +495,7 @@ mod tests {
             "SYSLOG_MCP_DB_PATH",
             "SYSLOG_MCP_POOL_SIZE",
             "SYSLOG_MCP_RETENTION_DAYS",
+            "SYSLOG_MCP_TOKEN",
             "SYSLOG_MCP_API_TOKEN",
             "SYSLOG_MCP_MAX_DB_SIZE_MB",
             "SYSLOG_MCP_RECOVERY_DB_SIZE_MB",
