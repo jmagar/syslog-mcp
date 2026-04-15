@@ -10,7 +10,7 @@ hooks/
   scripts/
     sync-env.sh                 # Sync .env.example with server variables
     fix-env-perms.sh            # Fix .env file permissions
-    ensure-ignore-files.sh      # Verify .gitignore/.dockerignore patterns
+
 ```
 
 ## Hook definitions
@@ -25,25 +25,17 @@ Ensures `.env.example` documents all environment variables that the server reads
 
 Sets `.env` to `chmod 600` (owner read/write only) if the file exists. Prevents accidental world-readable credential files.
 
-### ensure-ignore-files
-
-Verifies that `.gitignore` and `.dockerignore` contain required patterns:
-- `.env`
-- `*.secret`
-- `credentials.*`
-- `data/` (SQLite database files)
-
 ## Manual execution
 
 Run hooks outside of Claude Code:
 
 ```bash
-bash hooks/scripts/sync-env.sh
-bash hooks/scripts/fix-env-perms.sh
-bash hooks/scripts/ensure-ignore-files.sh
+bash bin/sync-env.sh
+bash bin/fix-env-perms.sh
+
 ```
 
 ## See also
 
 - [../GUARDRAILS.md](../GUARDRAILS.md) -- security patterns enforced by hooks
-- [../mcp/PRE-COMMIT.md](../mcp/PRE-COMMIT.md) -- pre-commit checks
+- [../mcp/PRE-COMMIT.md](../mcp/PRE-COMMIT.md) -- git hook checks

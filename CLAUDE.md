@@ -87,19 +87,19 @@ RUST_LOG=info
 |------|---------|
 | `config.toml` | Runtime config (syslog bind, DB path, retention) |
 | `docker-compose.yml` | Production deployment (ports 1514, 3100) |
-| `SETUP.md` | Per-host syslog forwarding (rsyslog, UniFi, ATT router, WSL) |
+| `docs/SETUP.md` | Per-host syslog forwarding (rsyslog, UniFi, ATT router, WSL) |
 | `src/db.rs` | Schema definition, FTS5 table, all SQL queries |
 | `src/mcp.rs` | All 6 MCP tool implementations |
 | `config/mcporter.json` | mcporter config (HTTP transport to localhost:3100) |
-| `scripts/smoke-test.sh` | Live smoke test — all 6 MCP tools via mcporter, strict 25-assertion PASS/FAIL |
-| `scripts/backup.sh` | WAL-safe SQLite backup script (checkpoint + `.backup` method) |
-| `scripts/reset-db.sh` | WAL-safe backup + destructive DB reset helper for local/dev recovery |
+| `bin/smoke-test.sh` | Live smoke test — all 6 MCP tools via mcporter, strict 25-assertion PASS/FAIL |
+| `bin/backup.sh` | WAL-safe SQLite backup script (checkpoint + `.backup` method) |
+| `bin/reset-db.sh` | WAL-safe backup + destructive DB reset helper for local/dev recovery |
 | `CHANGELOG.md` | Version history; updated by `quick-push` on each release |
 | `.lavra/memory/recall.sh` | Query the local knowledge DB: `bash .lavra/memory/recall.sh <keyword>` |
 
 ## Gotchas
 
-- **Port 1514 not 514** — avoids needing root; use iptables PREROUTING to redirect 514→1514 for devices that can't be reconfigured (see SETUP.md)
+- **Port 1514 not 514** — avoids needing root; use iptables PREROUTING to redirect 514→1514 for devices that can't be reconfigured (see docs/SETUP.md)
 - **Cargo.lock is tracked** — binary crates should commit Cargo.lock for reproducible builds (Cargo docs guidance)
 - **FTS5 query syntax** — `search_logs` uses SQLite FTS5: `error AND nginx`, `"disk full"`, `kern OR syslog`; invalid FTS5 syntax returns a db error. **Hyphen is the FTS5 NOT operator** — to search for hyphenated terms, use phrase syntax: `"smoke-test"` not `smoke-test`
 - **WAL mode** — SQLite runs in WAL mode; copying `.db`, `.db-wal`, and `.db-shm` together without a checkpoint captures potentially inconsistent state. Safe backup options: (1) run `PRAGMA wal_checkpoint(FULL);` first, then copy all three files, or (2) use `sqlite3 source.db '.backup dest.db'` which is WAL-safe and requires no manual checkpoint
@@ -117,10 +117,10 @@ RUST_LOG=info
 
 ```bash
 # Full smoke test (requires server running)
-bash scripts/smoke-test.sh
+bash bin/smoke-test.sh
 
 # WAL-safe backup, then destructive DB reset (service should be stopped first)
-bash scripts/reset-db.sh
+bash bin/reset-db.sh
 
 # Using mcporter (project config at config/mcporter.json)
 mcporter list syslog-mcp --config config/mcporter.json

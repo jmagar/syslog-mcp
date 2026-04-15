@@ -2,6 +2,16 @@
 
 Concise reference. See [CONFIG.md](../CONFIG.md) for full documentation including config.toml overlay and validation rules.
 
+## Deployment paths
+
+syslog-mcp always runs as an HTTP daemon (it needs persistent syslog UDP/TCP listeners):
+
+| Path | How | Credentials |
+|------|-----|-------------|
+| **Plugin** | Claude Code connects via HTTP to a running instance | `${userConfig.*}` in `.mcp.json` for URL and token |
+| **Docker** | `docker compose up -d` | `.env` file |
+| **Bare metal** | `cargo run --release` or compiled binary | `config.toml` or env vars |
+
 ## Syslog listener
 
 | Variable | Required | Default | Description | Sensitive |
@@ -18,7 +28,7 @@ Concise reference. See [CONFIG.md](../CONFIG.md) for full documentation includin
 | --- | --- | --- | --- | --- |
 | `SYSLOG_MCP_HOST` | no | `0.0.0.0` | HTTP bind address | no |
 | `SYSLOG_MCP_PORT` | no | `3100` | HTTP listen port | no |
-| `SYSLOG_MCP_API_TOKEN` | no | (none) | Bearer token for `/mcp` and `/sse`. Generate: `openssl rand -hex 32` | **yes** |
+| `SYSLOG_MCP_TOKEN` | no | (none) | Bearer token for `/mcp` and `/sse`. Generate: `openssl rand -hex 32` | **yes** |
 
 ## Storage
 
@@ -59,7 +69,7 @@ Concise reference. See [CONFIG.md](../CONFIG.md) for full documentation includin
 openssl rand -hex 32
 ```
 
-Store the result in `SYSLOG_MCP_API_TOKEN` in your `.env` file.
+Store the result in `SYSLOG_MCP_TOKEN` in your `.env` file.
 
 ## See also
 

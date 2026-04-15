@@ -1,6 +1,6 @@
 {
   "name": "syslog-mcp",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Syslog management via MCP",
   "author": "jmagar",
   "repository": "https://github.com/jmagar/syslog-mcp",
@@ -19,20 +19,19 @@
     "correlate_events",
     "get_stats"
   ],
-  "transport": "http",
-  "port": 3100,
+  "mcpServers": "./.mcp.json",
   "userConfig": {
-    "SYSLOG_MCP_URL": {
+    "syslog_mcp_url": {
       "type": "string",
       "title": "Syslog MCP URL",
-      "description": "Base URL of the syslog-mcp server (e.g. http://localhost:3100)",
-      "sensitive": false,
-      "default": "https://syslog.tootie.tv/mcp"
+      "description": "Full MCP endpoint URL including /mcp path (e.g. https://syslog.example.com/mcp)",
+      "default": "https://syslog.tootie.tv/mcp",
+      "sensitive": false
     },
-    "SYSLOG_MCP_TOKEN": {
+    "syslog_mcp_token": {
       "type": "string",
       "title": "API Token",
-      "description": "Bearer token for authenticating MCP requests (leave empty if auth is disabled)",
+      "description": "Bearer token for authenticating MCP requests. Leave empty if auth is disabled on the server.",
       "sensitive": true
     }
   }

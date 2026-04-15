@@ -144,7 +144,7 @@ Configure the plugin with your MCP URL and optional API token when prompted.
 
 ## 9. Configure syslog sources
 
-See the root [SETUP.md](../SETUP.md) for per-host configuration:
+See [docs/](.) for per-host configuration:
 
 - **Linux hosts**: rsyslog `/etc/rsyslog.d/99-remote.conf`
 - **WSL hosts**: rsyslog with Tailscale IP

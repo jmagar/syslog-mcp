@@ -112,29 +112,18 @@ Set both `max_db_size_mb` and `min_free_disk_mb` to 0 to disable all storage enf
 - `cleanup_chunk_size` must be between 1 and 1,000,000
 - Host fields must not contain a colon (port is a separate setting)
 
-## Plugin userConfig
+## Plugin deployment
 
-When installed as a Claude Code plugin, credentials are managed via `userConfig` in `.claude-plugin/plugin.json`:
+syslog-mcp runs as a daemon (syslog listener + HTTP MCP server), so the plugin connects via HTTP -- not stdio.
 
-```json
-{
-  "userConfig": {
-    "SYSLOG_MCP_URL": {
-      "type": "string",
-      "title": "Syslog MCP URL",
-      "description": "Base URL of the syslog-mcp server (e.g. http://localhost:3100)",
-      "sensitive": false,
-      "default": "https://syslog.tootie.tv/mcp"
-    },
-    "SYSLOG_MCP_API_TOKEN": {
-      "type": "string",
-      "title": "API Token",
-      "description": "Bearer token for authenticating MCP requests (leave empty if auth is disabled)",
-      "sensitive": true
-    }
-  }
-}
-```
+When installed as a Claude Code plugin, users are prompted for:
+
+| Field | Sensitive | Description |
+| --- | --- | --- |
+| `syslog_mcp_url` | no | Full MCP endpoint URL (e.g. `https://syslog.example.com/mcp`) |
+| `syslog_mcp_token` | yes | Bearer token for authentication |
+
+These values are interpolated into `.mcp.json` via `${userConfig.*}` syntax. See [plugin/CONFIG.md](plugin/CONFIG.md) for details.
 
 ## .env.example conventions
 

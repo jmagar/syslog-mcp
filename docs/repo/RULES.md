@@ -69,7 +69,7 @@ All files must have the same version. Never bump only one file.
 
 - `Cargo.lock` is tracked (binary crate -- reproducible builds)
 - Pin major versions in `Cargo.toml` (e.g., `tokio = { version = "1", ... }`)
-- Run `scripts/check-outdated-deps.sh` periodically
+
 
 ## See also
 

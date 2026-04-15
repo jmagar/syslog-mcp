@@ -31,7 +31,7 @@ Pre-commit hooks verify security invariants:
 | --- | --- |
 | `sync-env.sh` | Ensures `.env.example` documents all variables read by the server |
 | `fix-env-perms.sh` | Sets `.env` to `chmod 600` if present |
-| `ensure-ignore-files.sh` | Verifies `.gitignore` and `.dockerignore` contain required patterns |
+
 
 ### Credential rotation
 

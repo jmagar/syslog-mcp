@@ -9,7 +9,7 @@ Complete documentation for `syslog-mcp` -- a Rust syslog receiver and MCP server
 | File | Purpose |
 | --- | --- |
 | `README.md` | This file -- documentation index |
-| `SETUP.md` | Step-by-step setup guide -- clone, build, configure, deploy, verify |
+| `SETUP.md` | Step-by-step setup guide -- clone, build, configure, deploy, verify (at `docs/SETUP.md`) |
 | `CONFIG.md` | Configuration reference -- config.toml, env vars, storage budget |
 | `CHECKLIST.md` | Pre-release quality checklist -- version sync, security, CI, registry |
 | `GUARDRAILS.md` | Security guardrails -- credentials, Docker, auth, input handling |
@@ -38,5 +38,5 @@ Complete documentation for `syslog-mcp` -- a Rust syslog receiver and MCP server
 
 - [CLAUDE.md](../CLAUDE.md) -- project instructions for Claude Code sessions
 - [README.md](../README.md) -- user-facing project overview
-- [SETUP.md](../SETUP.md) -- host configuration guide (rsyslog, UniFi, ATT router)
+- [SETUP.md](SETUP.md) -- host configuration guide (rsyslog, UniFi, ATT router)
 - [CHANGELOG.md](../CHANGELOG.md) -- version history

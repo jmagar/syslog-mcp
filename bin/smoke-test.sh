@@ -4,8 +4,8 @@
 # Exit code 0 = all passed. Exit code 1 = one or more failures.
 #
 # Usage:
-#   bash scripts/smoke-test.sh [--url http://host:3100/mcp]
-#   bash scripts/smoke-test.sh --skip-seed   # if data already exists
+#   bash bin/smoke-test.sh [--url http://host:3100/mcp]
+#   bash bin/smoke-test.sh --skip-seed   # if data already exists
 #
 # Requirements: mcporter, nc, curl, jq (or python3)
 

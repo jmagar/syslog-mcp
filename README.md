@@ -284,13 +284,21 @@ Ordered from most to least severe:
 
 ## Installation
 
-### Docker (recommended)
+### Claude Code plugin (recommended)
+
+Install as a Claude Code plugin. You will be prompted for:
+- **Syslog MCP URL** -- full endpoint URL of your running syslog-mcp server
+- **API Token** -- bearer token for authentication (leave empty if auth is disabled)
+
+The plugin connects to a running syslog-mcp instance over HTTP. The server must be deployed separately (Docker or bare metal).
+
+### Docker
 
 ```bash
 git clone https://github.com/jmagar/syslog-mcp
 cd syslog-mcp
 cp .env.example .env
-# Edit .env — set SYSLOG_MCP_API_TOKEN at minimum
+# Edit .env — set SYSLOG_MCP_TOKEN at minimum
 docker compose up -d
 ```
 
@@ -305,13 +313,6 @@ Requires Rust 1.86+.
 ```bash
 cargo build --release
 ./target/release/syslog-mcp
-```
-
-### Marketplace
-
-```bash
-/plugin marketplace add jmagar/claude-homelab
-/plugin install syslog-mcp @jmagar-claude-homelab
 ```
 
 ---
@@ -733,7 +734,7 @@ Authorization: Bearer <token>
 | `Cargo.toml` | Crate metadata and dependency surface |
 | `config.toml` | Default runtime configuration |
 | `.env.example` | Canonical environment variable reference |
-| `SETUP.md` | Per-device syslog forwarder setup notes |
+| `docs/SETUP.md` | Per-device syslog forwarder setup notes |
 | `CHANGELOG.md` | Release history |
 | `Dockerfile` | Container image definition |
 | `docker-compose.yml` | Docker Compose stack |

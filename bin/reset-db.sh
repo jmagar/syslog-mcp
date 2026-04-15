@@ -2,9 +2,9 @@
 # reset-db.sh — WAL-safe backup + destructive SQLite reset for syslog-mcp
 #
 # Usage:
-#   bash scripts/reset-db.sh
-#   bash scripts/reset-db.sh --force
-#   bash scripts/reset-db.sh --backup-dir ./backups
+#   bash bin/reset-db.sh
+#   bash bin/reset-db.sh --force
+#   bash bin/reset-db.sh --backup-dir ./backups
 #
 # Default backup dir: ./backups/
 # Default DB path: ${SYSLOG_MCP_DB_PATH:-./data/syslog.db}
@@ -17,7 +17,7 @@ FORCE=0
 
 usage() {
     cat <<'EOF'
-Usage: bash scripts/reset-db.sh [--force] [--backup-dir DIR] [--help]
+Usage: bash bin/reset-db.sh [--force] [--backup-dir DIR] [--help]
 
 Creates a WAL-safe SQLite backup first, then deletes the live DB files:
   - <db>

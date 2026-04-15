@@ -100,13 +100,13 @@ All tools are read-only. syslog-mcp exposes no destructive operations via MCP.
 
 | Script | Purpose |
 | --- | --- |
-| `scripts/smoke-test.sh` | Live smoke test -- all 7 MCP tools via mcporter (25 assertions) |
-| `scripts/backup.sh` | WAL-safe SQLite backup (checkpoint + `.backup` method) |
-| `scripts/reset-db.sh` | WAL-safe backup + destructive DB reset for dev recovery |
-| `scripts/check-docker-security.sh` | Verify Docker security practices |
-| `scripts/check-no-baked-env.sh` | Verify no credentials baked into Docker image |
-| `scripts/check-outdated-deps.sh` | Check for outdated cargo dependencies |
-| `scripts/ensure-ignore-files.sh` | Verify .gitignore and .dockerignore patterns |
+| `bin/smoke-test.sh` | Live smoke test -- all 7 MCP tools via mcporter (25 assertions) |
+| `bin/backup.sh` | WAL-safe SQLite backup (checkpoint + `.backup` method) |
+| `bin/reset-db.sh` | WAL-safe backup + destructive DB reset for dev recovery |
+
+
+
+
 
 ## Dependencies
 
