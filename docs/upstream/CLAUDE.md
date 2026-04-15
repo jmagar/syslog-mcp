@@ -23,7 +23,7 @@ Instead of an upstream API, syslog-mcp receives data from syslog sources:
 | UniFi Cloud Gateway | UDP | Settings > System > Remote Syslog |
 | ATT BGW-320 Router | UDP | Diagnostics > Syslog > Remote Syslog |
 
-See [SETUP.md](../../SETUP.md) for per-host configuration.
+See [SETUP.md](../../docs/SETUP.md) for per-host configuration.
 
 ## Syslog protocol support
 

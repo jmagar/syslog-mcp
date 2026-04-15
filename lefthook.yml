@@ -1,0 +1,21 @@
+pre-commit:
+  parallel: true
+  commands:
+    diff_check:
+      run: git diff --check --cached
+    yaml:
+      glob: "*.{yml,yaml}"
+      run: uv run python -c 'import sys, yaml; [yaml.safe_load(open(path, "r", encoding="utf-8")) for path in sys.argv[1:]]' {staged_files}
+    lint:
+      run: just lint
+    format:
+      run: just fmt
+    skills:
+      run: just validate-skills
+    env_guard:
+      run: bash bin/block-env-commits.sh
+
+pre-push:
+  commands:
+    test:
+      run: cargo test --all-targets --all-features

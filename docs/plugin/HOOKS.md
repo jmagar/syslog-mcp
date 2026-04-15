@@ -25,14 +25,6 @@ Ensures `.env.example` documents all environment variables that the server reads
 
 Sets `.env` to `chmod 600` (owner read/write only) if the file exists. Prevents accidental world-readable credential files.
 
-### ensure-ignore-files
-
-Verifies that `.gitignore` and `.dockerignore` contain required patterns:
-- `.env`
-- `*.secret`
-- `credentials.*`
-- `data/` (SQLite database files)
-
 ## Manual execution
 
 Run hooks outside of Claude Code:
@@ -46,4 +38,4 @@ bash bin/fix-env-perms.sh
 ## See also
 
 - [../GUARDRAILS.md](../GUARDRAILS.md) -- security patterns enforced by hooks
-- [../mcp/PRE-COMMIT.md](../mcp/PRE-COMMIT.md) -- pre-commit checks
+- [../mcp/PRE-COMMIT.md](../mcp/PRE-COMMIT.md) -- git hook checks

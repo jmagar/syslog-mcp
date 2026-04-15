@@ -49,5 +49,5 @@ SQLite is statically linked via `rusqlite` with the `bundled` feature -- no syst
 
 ## See also
 
-- [../SETUP.md](../SETUP.md) -- full setup guide
+- [SETUP.md](../SETUP.md) -- full setup guide
 - [TECH.md](TECH.md) -- technology choices

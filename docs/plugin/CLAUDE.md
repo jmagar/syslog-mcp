@@ -10,7 +10,7 @@ Index for the `plugin/` documentation subdirectory. These docs cover every Claud
 | `CHANNELS.md` | Channel integration (none) |
 | `COMMANDS.md` | Slash commands (none) |
 | `CONFIG.md` | Plugin settings: userConfig, settings.json |
-| `HOOKS.md` | Lifecycle hooks: sync-env, fix-env-perms, ensure-ignore-files |
+| `HOOKS.md` | Lifecycle hooks: sync-env, fix-env-perms |
 | `MARKETPLACES.md` | Marketplace publishing: Claude, Codex, Gemini, MCP Registry |
 | `OUTPUT-STYLES.md` | Output style definitions (none) |
 | `PLUGINS.md` | Plugin manifest reference: .claude-plugin, .codex-plugin, gemini-extension |

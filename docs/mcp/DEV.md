@@ -25,7 +25,7 @@ syslog-mcp/
     mcp.rs               # Axum HTTP, JSON-RPC dispatch, all 7 tool handlers
   tests/                 # Live integration tests
   scripts/               # Smoke tests, backups, plugin checks
-  hooks/                 # Claude Code hooks (pre-commit, sync-env)
+  hooks/                 # Claude Code hooks (sync-env and related session checks)
   skills/syslog/         # Skill definition (SKILL.md)
   .claude-plugin/        # Claude Code plugin manifest
   .codex-plugin/         # Codex CLI plugin manifest

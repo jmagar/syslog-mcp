@@ -68,7 +68,6 @@ syslog-mcp/
 ├── LICENSE                      # MIT license
 ├── README.md                    # User-facing documentation
 ├── server.json                  # MCP Registry entry
-└── SETUP.md                     # Per-host syslog forwarding guide
 ```
 
 ## Source code

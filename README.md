@@ -734,7 +734,7 @@ Authorization: Bearer <token>
 | `Cargo.toml` | Crate metadata and dependency surface |
 | `config.toml` | Default runtime configuration |
 | `.env.example` | Canonical environment variable reference |
-| `SETUP.md` | Per-device syslog forwarder setup notes |
+| `docs/SETUP.md` | Per-device syslog forwarder setup notes |
 | `CHANGELOG.md` | Release history |
 | `Dockerfile` | Container image definition |
 | `docker-compose.yml` | Docker Compose stack |
