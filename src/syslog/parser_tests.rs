@@ -1,144 +1,4 @@
 use super::*;
-use crate::config::StorageConfig;
-
-fn test_storage_config(db_path: std::path::PathBuf) -> StorageConfig {
-    StorageConfig::for_test(db_path)
-}
-
-fn test_pool() -> (Arc<DbPool>, StorageConfig, tempfile::TempDir) {
-    let dir = tempfile::tempdir().unwrap();
-    let config = test_storage_config(dir.path().join("syslog-test.db"));
-    let pool = Arc::new(db::init_pool(&config).unwrap());
-    (pool, config, dir)
-}
-
-#[tokio::test]
-async fn flush_batch_retains_entries_while_storage_is_write_blocked() {
-    let (pool, mut storage, _dir) = test_pool();
-    let storage_state = Arc::new(Mutex::new(None));
-    let free_disk_mb = db::get_storage_metrics(&pool, &storage)
-        .unwrap()
-        .free_disk_bytes
-        .unwrap()
-        / 1_048_576;
-    storage.min_free_disk_mb = free_disk_mb + 1024;
-    storage.recovery_free_disk_mb = free_disk_mb + 2048;
-    *storage_state.lock().unwrap() = Some(db::StorageBudgetState {
-        metrics: db::get_storage_metrics(&pool, &storage).unwrap(),
-        write_blocked: true,
-    });
-    let mut batch = vec![parse_syslog(
-        "<34>Oct 11 22:14:15 mymachine su: blocked write",
-        "127.0.0.1:514".to_string(),
-    )];
-    let mut storage_blocked = false;
-    let mut summary = IngestSummary::default();
-
-    flush_batch(
-        &pool,
-        &storage,
-        &storage_state,
-        &mut batch,
-        &mut storage_blocked,
-        &mut summary,
-    )
-    .await;
-
-    assert_eq!(batch.len(), 1);
-    assert!(storage_blocked);
-}
-
-#[tokio::test]
-async fn flush_batch_resumes_after_storage_recovers() {
-    let (pool, storage, _dir) = test_pool();
-    let storage_state = Arc::new(Mutex::new(Some(db::StorageBudgetState {
-        metrics: db::get_storage_metrics(&pool, &storage).unwrap(),
-        write_blocked: false,
-    })));
-    let mut batch = vec![parse_syslog(
-        "<34>Oct 11 22:14:15 mymachine su: resumed write",
-        "127.0.0.1:514".to_string(),
-    )];
-    let mut storage_blocked = true;
-    let mut summary = IngestSummary::default();
-
-    flush_batch(
-        &pool,
-        &storage,
-        &storage_state,
-        &mut batch,
-        &mut storage_blocked,
-        &mut summary,
-    )
-    .await;
-
-    assert!(batch.is_empty());
-    assert!(!storage_blocked);
-    let rows = db::tail_logs(&pool, None, None, 10).unwrap();
-    assert_eq!(rows.len(), 1);
-}
-
-#[test]
-fn source_addr_ip_strips_socket_ports() {
-    assert_eq!(source_addr_ip("100.75.111.118:49238"), "100.75.111.118");
-    assert_eq!(
-        source_addr_ip("[fd7a:115c:a1e0::4f32:104f]:1514"),
-        "fd7a:115c:a1e0::4f32:104f"
-    );
-    assert_eq!(source_addr_ip("unknown-source"), "unknown-source");
-}
-
-#[test]
-fn summarize_top_senders_pairs_hostnames_with_source_ips() {
-    let counts = HashMap::from([
-        (("dookie".to_string(), "172.19.0.1".to_string()), 29),
-        (("squirts".to_string(), "100.75.111.118".to_string()), 15),
-        (("vivobook".to_string(), "100.104.50.17".to_string()), 28),
-    ]);
-
-    assert_eq!(
-        summarize_top_senders(&counts, 2),
-        "dookie@172.19.0.1=29, vivobook@100.104.50.17=28"
-    );
-}
-
-#[tokio::test]
-async fn tcp_connection_allows_multiple_lines_beyond_connection_total_size() {
-    let (_pool, _storage, _dir) = test_pool();
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<db::LogBatchEntry>(16);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    let accept_task = tokio::spawn(async move {
-        let (server_stream, peer) = listener.accept().await.unwrap();
-        handle_tcp_connection(server_stream, peer, tx, 64, 5).await;
-    });
-
-    let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
-    use tokio::io::AsyncWriteExt;
-    client
-        .write_all(
-            b"<34>Oct 11 22:14:15 host app: first message\n<34>Oct 11 22:14:16 host app: second message\n",
-        )
-        .await
-        .unwrap();
-    client.shutdown().await.unwrap();
-
-    let first = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
-        .await
-        .unwrap()
-        .unwrap();
-    let second = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
-        .await
-        .unwrap()
-        .unwrap();
-
-    assert!(first.message.contains("first message"));
-    assert!(second.message.contains("second message"));
-
-    accept_task.await.unwrap();
-}
-
 #[test]
 fn test_looks_like_timestamp_true() {
     assert!(looks_like_timestamp("2026-03-29T02:52:21.587Z"));
@@ -449,4 +309,13 @@ fn test_parse_syslog_raw_field_preserved() {
     let raw = "<34>Oct 11 22:14:15 mymachine su: verbatim check";
     let parsed = parse_syslog(raw, "192.168.1.1:514".to_string());
     assert_eq!(parsed.raw, raw);
+}
+
+#[test]
+fn unifi_device_name_is_hostname_but_source_ip_remains_network_sender() {
+    let raw = "<14>1 2026-03-29T02:52:21+00:00 2026-03-29T02:52:21.587Z The - - - Mothership CEF:0|Ubiquiti|UniFi OS|5.1.5|1|Test Syslog|1|UNIFIdeviceName=trusted-router msg=hello";
+    let parsed = parse_syslog(raw, "198.51.100.44:5514".to_string());
+
+    assert_eq!(parsed.hostname, "trusted-router");
+    assert_eq!(parsed.source_ip, "198.51.100.44:5514");
 }

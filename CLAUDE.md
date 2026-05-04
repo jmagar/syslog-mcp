@@ -17,6 +17,16 @@ docker compose logs -f           # follow logs
 docker compose build             # rebuild image
 ```
 
+```bash
+just dev                         # cargo run alias
+just test                        # cargo test alias
+just health                      # curl /health | jq (server must be running)
+just gen-token                   # openssl rand -hex 32 (generate API token)
+just build-plugin                # release build → installs binary to bin/ (Linux; requires git lfs install)
+just publish [major|minor|patch] # bump version, tag, push (triggers CI)
+just generate-cli                # build standalone CLI (server must be running)
+```
+
 ## Architecture
 
 Five modules in `src/`:
@@ -29,7 +39,7 @@ Five modules in `src/`:
 | `mcp.rs` | Axum HTTP server, JSON-RPC 2.0 handler, all 6 MCP tool implementations |
 | `main.rs` | Wires everything, starts hourly retention purge + storage-budget enforcement tasks, graceful shutdown |
 
-Tests: unit tests across `syslog.rs`, `db.rs`, `config.rs`, and `mcp.rs`. Run with `cargo test`.
+Tests: unit tests live in sidecar files beside their source modules: `src/config_tests.rs`, `src/db_tests.rs`, `src/syslog_tests.rs`, `src/mcp_tests.rs`, and `src/main_tests.rs`. Source files keep only the `#[cfg(test)] #[path = "..._tests.rs"] mod tests;` hook, so sidecar tests still compile as module-local unit tests with `use super::*` access to private items. Run with `cargo test`.
 
 ## Ports
 
@@ -90,11 +100,15 @@ RUST_LOG=info
 | `docs/SETUP.md` | Per-host syslog forwarding (rsyslog, UniFi, ATT router, WSL) |
 | `src/db.rs` | Schema definition, FTS5 table, all SQL queries |
 | `src/mcp.rs` | All 6 MCP tool implementations |
+| `src/*_tests.rs` | Sidecar unit tests included from source modules via `#[path = "..._tests.rs"] mod tests;` |
 | `config/mcporter.json` | mcporter config (HTTP transport to localhost:3100) |
 | `bin/smoke-test.sh` | Live smoke test — all 6 MCP tools via mcporter, strict 25-assertion PASS/FAIL |
 | `bin/backup.sh` | WAL-safe SQLite backup script (checkpoint + `.backup` method) |
 | `bin/reset-db.sh` | WAL-safe backup + destructive DB reset helper for local/dev recovery |
-| `CHANGELOG.md` | Version history; updated by `quick-push` on each release |
+| `bin/bump-version.sh` | Bump version across all version-bearing files; called by `just publish` |
+| `bin/check-version-sync.sh` | Assert all version-bearing files have the same version (used in CI) |
+| `bin/block-env-commits.sh` | Pre-commit hook that blocks commits containing env credential patterns |
+| `CHANGELOG.md` | Version history; entry required per version bump |
 | `.lavra/memory/recall.sh` | Query the local knowledge DB: `bash .lavra/memory/recall.sh <keyword>` |
 
 ## Gotchas

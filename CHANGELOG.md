@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-05-04
+
+### Changed
+- **Module layout**: Split `src/db.rs`, `src/mcp.rs`, and `src/syslog.rs` into focused submodules under `src/db/`, `src/mcp/`, and `src/syslog/` while preserving facade modules for existing callers.
+- **Docs/tooling**: Updated project guidance, MCP tool docs, and Justfile helpers for the new module/test layout.
+
 ## [0.4.1] - 2026-05-04
 
 ### Changed

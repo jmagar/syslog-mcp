@@ -2,7 +2,7 @@
 
 ## Design philosophy
 
-syslog-mcp exposes 7 independent MCP tools using a flat dispatch pattern. Each tool has its own name, input schema, and handler -- there is no action/subaction router. All tools are read-only.
+syslog-mcp exposes 6 independent MCP tools using a flat dispatch pattern. Each tool has its own name, input schema, and handler -- there is no action/subaction router. All tools are read-only.
 
 | Tool | Purpose |
 | --- | --- |
@@ -12,7 +12,6 @@ syslog-mcp exposes 7 independent MCP tools using a flat dispatch pattern. Each t
 | `list_hosts` | Host registry with first/last seen |
 | `correlate_events` | Cross-host event correlation in a time window |
 | `get_stats` | Database statistics and storage health |
-| `syslog_help` | Markdown documentation for all tools |
 
 ## search_logs
 
@@ -197,14 +196,6 @@ Fields:
 - `free_disk_mb`: Available disk space on the database filesystem
 - `write_blocked`: Whether the batch writer is currently blocked due to storage budget exhaustion
 - `phantom_fts_rows`: FTS5 entries for deleted logs (cleaned up by periodic merge)
-
-## syslog_help
-
-Returns markdown documentation for all tools. Call this to discover available operations and parameters.
-
-**Parameters:** none
-
-**Response:** MCP text content block containing the full tool reference as markdown.
 
 ## Error responses
 

@@ -78,6 +78,10 @@ clean:
     cargo clean
     rm -rf .cache/
 
+# Linux only — Windows would need syslog-mcp.exe; requires git lfs install
+build-plugin: release
+    install -m 755 target/release/syslog-mcp bin/syslog-mcp
+
 # Publish: bump version, tag, push (triggers crates.io + Docker publish)
 publish bump="patch":
     #!/usr/bin/env bash
