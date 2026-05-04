@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-05-04
+
+### Changed
+- **Test layout**: Inline `#[cfg(test)] mod tests { ... }` blocks moved out of `src/{config,db,main,mcp,syslog}.rs` into sibling `*_tests.rs` files, included via `#[path = "..."] #[cfg(test)] mod tests;`. Pure refactor — same tests, smaller production source files. Reduces noise in `cargo doc`, makes the production code easier to scan, and lets the test files grow without bloating the module they test. No behavior change; 87 tests still pass.
+
 ## [0.4.0] - 2026-05-04
 
 ### Added
