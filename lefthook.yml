@@ -2,10 +2,10 @@ pre-commit:
   parallel: true
   commands:
     diff_check:
-      run: git diff --check --cached
+      run: git --no-pager diff --check --cached
     yaml:
       glob: "*.{yml,yaml}"
-      run: uv run python -c 'import sys, yaml; [yaml.safe_load(open(path, "r", encoding="utf-8")) for path in sys.argv[1:]]' {staged_files}
+      run: uv run --with pyyaml python -c 'import sys, yaml; [yaml.safe_load(open(path, "r", encoding="utf-8")) for path in sys.argv[1:]]' {staged_files}
     lint:
       run: just lint
     format:

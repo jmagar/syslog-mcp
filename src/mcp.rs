@@ -823,10 +823,6 @@ mod tests {
     use super::*;
     use axum::body::to_bytes;
 
-    fn test_state() -> (AppState, tempfile::TempDir) {
-        test_state_with_token(None)
-    }
-
     fn test_state_with_token(token: Option<String>) -> (AppState, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         let storage = StorageConfig::for_test(dir.path().join("mcp-test.db"));

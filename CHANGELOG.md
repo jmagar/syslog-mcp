@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-04
+
+### Added
+- **`src/syslog.rs`**: TCP connections now log the parsed syslog hostname on the first message via `"TCP syslog sender identified"`, and include `hostname` in the connection-close summary alongside `peer`/`close_reason`/`line_count`/`total_bytes` — makes it easier to correlate misbehaving senders by hostname rather than only by ephemeral source port.
+
+### Changed
+- **`lefthook.yml`**: `diff_check` now runs `git --no-pager diff --check --cached` so the hook never invokes `less` under lefthook's pseudo-TTY (caused indefinite hangs in non-interactive shells).
+
+### Removed
+- **`src/mcp.rs`**: dead `test_state()` helper.
+
 ## [0.3.5] - 2026-05-04
 
 ### Removed

@@ -166,6 +166,7 @@ async fn handle_tcp_connection(
     let mut backpressure = false;
     let mut line_count: u64 = 0;
     let mut total_bytes: usize = 0;
+    let mut peer_hostname: Option<String> = None;
     let started = Instant::now();
     let close_reason = loop {
         // Idle timeout: if no data arrives within idle_timeout_secs, drop the connection.
@@ -220,11 +221,17 @@ async fn handle_tcp_connection(
                     queue_depth = queue_depth(&tx),
                     "TCP syslog line received"
                 );
-                if tx
-                    .send(parse_syslog(&line, addr.to_string()))
-                    .await
-                    .is_err()
-                {
+                let entry = parse_syslog(&line, addr.to_string());
+                if peer_hostname.is_none() {
+                    peer_hostname = Some(entry.hostname.clone());
+                    info!(
+                        peer = %addr,
+                        hostname = %entry.hostname,
+                        source_ip = %source_addr_ip(&entry.source_ip),
+                        "TCP syslog sender identified"
+                    );
+                }
+                if tx.send(entry).await.is_err() {
                     break "write_channel_closed";
                 }
             }
@@ -241,6 +248,7 @@ async fn handle_tcp_connection(
     };
     info!(
         peer = %addr,
+        hostname = peer_hostname.as_deref().unwrap_or("unknown"),
         close_reason,
         line_count,
         total_bytes,
@@ -533,7 +541,8 @@ fn queue_depth<T>(tx: &mpsc::Sender<T>) -> usize {
 struct IngestSummary {
     total_logs: usize,
     host_counts: HashMap<String, usize>,
-    source_counts: HashMap<String, usize>,
+    source_ip_counts: HashMap<String, usize>,
+    sender_counts: HashMap<(String, String), usize>,
 }
 
 impl IngestSummary {
@@ -541,9 +550,11 @@ impl IngestSummary {
         self.total_logs += entries.len();
         for entry in entries {
             *self.host_counts.entry(entry.hostname.clone()).or_insert(0) += 1;
+            let source_ip = source_addr_ip(&entry.source_ip);
+            *self.source_ip_counts.entry(source_ip.clone()).or_insert(0) += 1;
             *self
-                .source_counts
-                .entry(entry.source_ip.clone())
+                .sender_counts
+                .entry((entry.hostname.clone(), source_ip))
                 .or_insert(0) += 1;
         }
     }
@@ -551,7 +562,8 @@ impl IngestSummary {
     fn reset(&mut self) {
         self.total_logs = 0;
         self.host_counts.clear();
-        self.source_counts.clear();
+        self.source_ip_counts.clear();
+        self.sender_counts.clear();
     }
 }
 
@@ -560,29 +572,38 @@ fn emit_ingest_summary(summary: &mut IngestSummary) {
         return;
     }
 
-    let top_hosts = summarize_top_counts(&summary.host_counts, 5);
-    let top_sources = summarize_top_counts(&summary.source_counts, 5);
+    let top_senders = summarize_top_senders(&summary.sender_counts, 5);
     info!(
         interval_secs = INGEST_SUMMARY_INTERVAL_SECS,
         total_logs = summary.total_logs,
         unique_hosts = summary.host_counts.len(),
-        unique_sources = summary.source_counts.len(),
-        top_hosts = %top_hosts,
-        top_sources = %top_sources,
+        unique_source_ips = summary.source_ip_counts.len(),
+        top_senders = %top_senders,
         "Syslog ingest summary"
     );
     summary.reset();
 }
 
-fn summarize_top_counts(counts: &HashMap<String, usize>, limit: usize) -> String {
+fn summarize_top_senders(counts: &HashMap<(String, String), usize>, limit: usize) -> String {
     let mut entries: Vec<_> = counts.iter().collect();
-    entries.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+    entries.sort_by(|a, b| {
+        b.1.cmp(a.1)
+            .then_with(|| a.0 .0.cmp(&b.0 .0))
+            .then_with(|| a.0 .1.cmp(&b.0 .1))
+    });
     entries
         .into_iter()
         .take(limit)
-        .map(|(key, count)| format!("{key}={count}"))
+        .map(|((host, source_ip), count)| format!("{host}@{source_ip}={count}"))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+fn source_addr_ip(source_addr: &str) -> String {
+    source_addr
+        .parse::<std::net::SocketAddr>()
+        .map(|addr| addr.ip().to_string())
+        .unwrap_or_else(|_| source_addr.to_string())
 }
 
 /// Truncate a string to at most `max` bytes, respecting UTF-8 char boundaries.
@@ -933,6 +954,30 @@ mod tests {
         assert!(!storage_blocked);
         let rows = db::tail_logs(&pool, None, None, 10).unwrap();
         assert_eq!(rows.len(), 1);
+    }
+
+    #[test]
+    fn source_addr_ip_strips_socket_ports() {
+        assert_eq!(source_addr_ip("100.75.111.118:49238"), "100.75.111.118");
+        assert_eq!(
+            source_addr_ip("[fd7a:115c:a1e0::4f32:104f]:1514"),
+            "fd7a:115c:a1e0::4f32:104f"
+        );
+        assert_eq!(source_addr_ip("unknown-source"), "unknown-source");
+    }
+
+    #[test]
+    fn summarize_top_senders_pairs_hostnames_with_source_ips() {
+        let counts = HashMap::from([
+            (("dookie".to_string(), "172.19.0.1".to_string()), 29),
+            (("squirts".to_string(), "100.75.111.118".to_string()), 15),
+            (("vivobook".to_string(), "100.104.50.17".to_string()), 28),
+        ]);
+
+        assert_eq!(
+            summarize_top_senders(&counts, 2),
+            "dookie@172.19.0.1=29, vivobook@100.104.50.17=28"
+        );
     }
 
     #[tokio::test]
