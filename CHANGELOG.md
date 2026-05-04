@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-05-04
+
+### Removed
+- Stale plugin scaffolding: `assets/icon.png`, `assets/logo.svg`, `assets/screenshots/.gitkeep`, `hooks/CLAUDE.md`, `hooks/hooks.json` — leftover stubs no longer referenced by any manifest.
+
 ## [0.3.4] - 2026-04-15
 
 ### Changed

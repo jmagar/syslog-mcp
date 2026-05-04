@@ -98,8 +98,7 @@ publish bump="patch":
     sed -i "s/^version = \"${CURRENT}\"/version = \"${NEW}\"/" Cargo.toml
     cargo check 2>/dev/null || true
     for f in .claude-plugin/plugin.json .codex-plugin/plugin.json gemini-extension.json; do
-      [ -f "$f" ] && python3 -c "import json; d=json.load(open(\"$f\")); d[\"version\"]=\"${NEW}\"; json.dump(d,open(\"$f\",\"w\"),indent=2); open(\"$f\",\"a\").write(\"
-\")"
+      [ -f "$f" ] && python3 -c 'import json,sys; p=sys.argv[1]; v=sys.argv[2]; d=json.load(open(p)); d["version"]=v; json.dump(d,open(p,"w"),indent=2); open(p,"a").write("\n")' "$f" "${NEW}"
     done
     git add -A && git commit -m "release: v${NEW}" && git tag "v${NEW}" && git push origin main --tags
     echo "Tagged v${NEW} — publish workflow will run automatically"
