@@ -22,6 +22,9 @@ pub struct ApiState {
 }
 
 pub fn router(state: ApiState) -> anyhow::Result<Router> {
+    if !state.config.enabled {
+        anyhow::bail!("non-MCP API is disabled");
+    }
     if state.config.enabled && state.config.api_token.is_none() {
         anyhow::bail!("non-MCP API requires SYSLOG_API_TOKEN when enabled");
     }

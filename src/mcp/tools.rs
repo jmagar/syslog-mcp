@@ -33,7 +33,7 @@ async fn tool_search_logs(state: &AppState, args: Value) -> anyhow::Result<Value
             app_name: string_arg(&args, "app_name"),
             from: string_arg(&args, "from"),
             to: string_arg(&args, "to"),
-            limit: u32_arg(&args, "limit"),
+            limit: u32_arg(&args, "limit")?,
         })
         .await?;
     tracing::debug!(result_count = response.count, "search_logs completed");
@@ -47,7 +47,7 @@ async fn tool_tail_logs(state: &AppState, args: Value) -> anyhow::Result<Value> 
             hostname: string_arg(&args, "hostname"),
             source_ip: string_arg(&args, "source_ip"),
             app_name: string_arg(&args, "app_name"),
-            n: u32_arg(&args, "n"),
+            n: u32_arg(&args, "n")?,
         })
         .await?;
     tracing::debug!(result_count = response.count, "tail_logs completed");
@@ -82,12 +82,12 @@ async fn tool_correlate_events(state: &AppState, args: Value) -> anyhow::Result<
         .service
         .correlate_events(CorrelateEventsRequest {
             reference_time,
-            window_minutes: u32_arg(&args, "window_minutes"),
+            window_minutes: u32_arg(&args, "window_minutes")?,
             severity_min: string_arg(&args, "severity_min"),
             hostname: string_arg(&args, "hostname"),
             source_ip: string_arg(&args, "source_ip"),
             query: string_arg(&args, "query"),
-            limit: u32_arg(&args, "limit"),
+            limit: u32_arg(&args, "limit")?,
         })
         .await?;
     Ok(serde_json::to_value(response)?)
@@ -111,10 +111,16 @@ fn string_arg(args: &Value, name: &str) -> Option<String> {
     args.get(name).and_then(|v| v.as_str()).map(String::from)
 }
 
-fn u32_arg(args: &Value, name: &str) -> Option<u32> {
-    args.get(name)
-        .and_then(|v| v.as_u64())
-        .and_then(|v| u32::try_from(v).ok())
+fn u32_arg(args: &Value, name: &str) -> anyhow::Result<Option<u32>> {
+    let Some(value) = args.get(name) else {
+        return Ok(None);
+    };
+    let Some(unsigned) = value.as_u64() else {
+        return Ok(None);
+    };
+    u32::try_from(unsigned)
+        .map(Some)
+        .map_err(|_| anyhow::anyhow!("{name} must be <= {}", u32::MAX))
 }
 
 async fn tool_syslog_help() -> anyhow::Result<Value> {

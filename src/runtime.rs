@@ -192,17 +192,17 @@ impl RuntimeCore {
                 .and_then(|r| r)
                 {
                     Ok(outcome) => {
-                        let previous_blocked = shared_storage_state
-                            .lock()
-                            .expect("storage state mutex poisoned")
-                            .as_ref()
-                            .map(|s| s.write_blocked);
-                        *shared_storage_state
-                            .lock()
-                            .expect("storage state mutex poisoned") = Some(StorageBudgetState {
-                            metrics: outcome.metrics.clone(),
-                            write_blocked: outcome.write_blocked,
-                        });
+                        let previous_blocked = {
+                            let mut state = shared_storage_state
+                                .lock()
+                                .expect("storage state mutex poisoned");
+                            let previous_blocked = state.as_ref().map(|s| s.write_blocked);
+                            *state = Some(StorageBudgetState {
+                                metrics: outcome.metrics.clone(),
+                                write_blocked: outcome.write_blocked,
+                            });
+                            previous_blocked
+                        };
 
                         if outcome.deleted_rows > 0
                             || outcome.write_blocked

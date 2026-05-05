@@ -47,6 +47,24 @@ async fn tool_get_stats_returns_storage_guard_fields() {
     assert!(value.get("phantom_fts_rows").is_some());
 }
 
+#[tokio::test]
+async fn numeric_args_reject_out_of_range_values() {
+    let h = TestHarness::new();
+    let err = execute_tool(&h.state, "tail_logs", json!({"n": u64::from(u32::MAX) + 1}))
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("n must be <="));
+}
+
+#[tokio::test]
+async fn numeric_args_preserve_lenient_wrong_type_behavior() {
+    let h = TestHarness::new();
+    let value = execute_tool(&h.state, "tail_logs", json!({"n": "not-a-number"}))
+        .await
+        .unwrap();
+    assert_eq!(value["count"], 0);
+}
+
 #[test]
 fn parse_optional_timestamp_normalizes_offsets_to_utc() {
     let parsed = crate::app::parse_optional_timestamp(Some("2026-01-01T01:00:00+01:00"), "from")

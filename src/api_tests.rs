@@ -66,6 +66,17 @@ fn router_requires_token_when_enabled() {
     assert!(router(state).is_err());
 }
 
+#[test]
+fn router_rejects_disabled_config_when_called_directly() {
+    let (mut state, _pool, _dir) = test_state(Some("secret".into()));
+    state.config.enabled = false;
+    let err = match router(state) {
+        Ok(_) => panic!("disabled API config should be rejected"),
+        Err(err) => err,
+    };
+    assert!(err.to_string().contains("disabled"));
+}
+
 #[tokio::test]
 async fn stats_route_requires_bearer_token() {
     let (state, _pool, _dir) = test_state(Some("secret".into()));
