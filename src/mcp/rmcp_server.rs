@@ -92,11 +92,12 @@ impl ServerHandler for SyslogRmcpServer {
     }
 
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new(
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_server_info(
+            Implementation::new(
                 self.state.config.server_name.clone(),
                 env!("CARGO_PKG_VERSION"),
-            ))
+            ),
+        )
     }
 }
 
@@ -149,8 +150,9 @@ fn rmcp_tool_from_json(value: Value) -> Result<Tool, ErrorData> {
 }
 
 fn tool_result_from_json(value: Value) -> Result<CallToolResult, ErrorData> {
-    let text = serde_json::to_string_pretty(&value)
-        .map_err(|error| ErrorData::internal_error(format!("serialization error: {error}"), None))?;
+    let text = serde_json::to_string_pretty(&value).map_err(|error| {
+        ErrorData::internal_error(format!("serialization error: {error}"), None)
+    })?;
     Ok(CallToolResult::success(vec![Content::text(text)]))
 }
 
@@ -172,7 +174,12 @@ fn safe_result_count(value: &Value) -> Option<usize> {
 }
 
 fn allowed_hosts(config: &McpConfig) -> Vec<String> {
-    let mut hosts = vec!["localhost".to_string(), "127.0.0.1".to_string(), "::1".to_string()];
+    let mut hosts = vec![
+        "localhost".to_string(),
+        "127.0.0.1".to_string(),
+        "::1".to_string(),
+    ];
+    hosts.extend(config.allowed_hosts.iter().cloned());
     push_host_variants(&mut hosts, &config.host, config.port);
     push_host_variants(&mut hosts, "localhost", config.port);
     push_host_variants(&mut hosts, "127.0.0.1", config.port);
@@ -190,10 +197,14 @@ fn push_host_variants(hosts: &mut Vec<String>, host: &str, port: u16) {
 }
 
 fn allowed_origins(config: &McpConfig) -> Vec<String> {
-    vec![
+    let mut origins = vec![
         format!("http://localhost:{}", config.port),
         format!("http://127.0.0.1:{}", config.port),
-    ]
+    ];
+    origins.extend(config.allowed_origins.iter().cloned());
+    origins.sort();
+    origins.dedup();
+    origins
 }
 
 #[cfg(test)]

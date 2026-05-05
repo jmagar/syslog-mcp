@@ -25,7 +25,11 @@ Minimal, composable HTTP framework built on tokio and tower:
 - Native tower middleware support (CORS, tracing)
 - Type-safe state extraction
 - Composable router with method routing
-- SSE support via `axum::response::sse`
+- Mounts RMCP's Tower-compatible Streamable HTTP service
+
+## MCP SDK: rmcp
+
+RMCP owns MCP lifecycle, Streamable HTTP framing, Host/Origin validation, tool listing, and tool calls. syslog-mcp uses stateless JSON-response mode so normal request/response calls return `Content-Type: application/json`.
 
 ## Database: SQLite (rusqlite + r2d2)
 
@@ -49,7 +53,7 @@ Lenient syslog parser that handles both RFC 3164 (BSD) and RFC 5424 (IETF) forma
 ## Serialization: serde + serde_json + toml
 
 - `serde` -- derive macros for all data structures
-- `serde_json` -- JSON-RPC request/response, MCP protocol, tool responses
+- `serde_json` -- tool argument/result payloads and JSON output formatting
 - `toml` -- config.toml parsing
 
 ## Time: chrono

@@ -7,14 +7,12 @@
     "url": "https://github.com/jmagar/syslog-mcp",
     "source": "github"
   },
-  "version": "0.2.6",
+  "version": "0.6.0",
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/jmagar/syslog-mcp:0.2.6",
-      "transport": {
-        "type": "stdio"
-      },
+      "identifier": "ghcr.io/jmagar/syslog-mcp:0.6.0",
+      "version": "0.6.0",
       "environmentVariables": [
         {
           "name": "SYSLOG_HOST",
@@ -35,6 +33,12 @@
           "isSecret": false
         }
       ]
+    }
+  ],
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://syslog.tootie.tv/mcp"
     }
   ]
 }

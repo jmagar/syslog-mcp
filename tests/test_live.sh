@@ -9,12 +9,12 @@
 #
 # Flags:
 #   --url URL        Base URL of the MCP server (default: http://localhost:3100)
-#   --token TOKEN    Bearer token (also read from SYSLOG_MCP_API_TOKEN env var)
+#   --token TOKEN    Bearer token (also read from SYSLOG_MCP_TOKEN env var)
 #   --verbose        Print raw JSON responses for every call
 #   --help           Show this help
 #
 # Environment variables:
-#   SYSLOG_MCP_API_TOKEN   Bearer token for auth (optional — server may run without it)
+#   SYSLOG_MCP_TOKEN       Bearer token for auth (optional — server may run without it)
 #   PORT                   Override server port (default: 3100)
 #
 # Exit codes:
@@ -24,7 +24,7 @@
 #
 # Examples:
 #   # Docker mode (default — builds image, runs tests, tears down)
-#   SYSLOG_MCP_API_TOKEN=ci-integration-token bash tests/test_live.sh
+#   SYSLOG_MCP_TOKEN=ci-integration-token bash tests/test_live.sh
 #
 #   # HTTP mode — test an already-running server
 #   bash tests/test_live.sh --mode http --url http://192.168.1.10:3100
@@ -113,7 +113,7 @@ parse_args() {
 
   # Env var fallback for token
   if [[ -z "${TOKEN}" ]]; then
-    TOKEN="${SYSLOG_MCP_API_TOKEN:-}"
+    TOKEN="${SYSLOG_MCP_TOKEN:-${SYSLOG_MCP_API_TOKEN:-}}"
   fi
 
   # Default BASE_URL
@@ -317,8 +317,8 @@ phase_auth() {
   section "Phase 2 — Auth"
 
   if [[ -z "${TOKEN}" ]]; then
-    _skip "auth: unauthenticated /mcp returns 401" "SYSLOG_MCP_API_TOKEN not set — auth assumed disabled"
-    _skip "auth: bad token returns 401"             "SYSLOG_MCP_API_TOKEN not set — auth assumed disabled"
+    _skip "auth: unauthenticated /mcp returns 401" "SYSLOG_MCP_TOKEN not set — auth assumed disabled"
+    _skip "auth: bad token returns 401"             "SYSLOG_MCP_TOKEN not set — auth assumed disabled"
     return 0
   fi
 
@@ -576,7 +576,7 @@ run_docker_mode() {
   )
 
   if [[ -n "${TOKEN}" ]]; then
-    docker_args+=("-e" "SYSLOG_MCP_API_TOKEN=${TOKEN}")
+    docker_args+=("-e" "SYSLOG_MCP_TOKEN=${TOKEN}")
   fi
 
   # Remove storage budget env vars that conflict with tmpfs size limits

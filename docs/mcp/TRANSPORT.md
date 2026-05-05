@@ -2,12 +2,13 @@
 
 ## Overview
 
-syslog-mcp supports HTTP transport for MCP communication. It does not support stdio transport -- the binary is a long-running syslog receiver that must bind UDP/TCP ports, which is incompatible with stdio's parent-process model.
+syslog-mcp supports RMCP Streamable HTTP for MCP communication. It does not support direct stdio transport -- the binary is a long-running syslog receiver that must bind UDP/TCP ports, which is incompatible with stdio's parent-process model.
 
 | Transport | Auth | Use Case | Default |
 | --- | --- | --- | --- |
-| HTTP (Streamable-HTTP) | Bearer token (optional) | Docker, remote servers, reverse proxy | yes |
-| SSE (legacy) | Bearer token (optional) | Older MCP clients | available |
+| RMCP Streamable HTTP, stateless JSON response | Bearer token (optional) | Docker, remote servers, reverse proxy | yes |
+| Stateful Streamable HTTP sessions/SSE | n/a | Deferred; not enabled in this release | no |
+| Direct stdio | n/a | Use an HTTP-to-stdio bridge such as `mcp-remote` | no |
 
 ## HTTP transport
 
@@ -23,8 +24,8 @@ SYSLOG_MCP_TOKEN=your-token-here   # optional
 
 | Endpoint | Method | Auth | Description |
 | --- | --- | --- | --- |
-| `/mcp` | POST | yes (when token set) | MCP JSON-RPC 2.0 endpoint |
-| `/sse` | GET | yes (when token set) | Server-Sent Events stream (returns endpoint URL) |
+| `/mcp` | POST | yes (when token set) | RMCP Streamable HTTP JSON-response endpoint |
+| `/mcp` | GET, DELETE | yes (when token set) | `405 Method Not Allowed` in stateless mode |
 | `/health` | GET | no | Health check (unauthenticated) |
 
 ### Claude Code configuration
@@ -81,30 +82,27 @@ SYSLOG_MCP_TOKEN=your-token-here   # optional
 }
 ```
 
-## SSE transport (legacy)
+## Stateless mode
 
-The `/sse` endpoint returns a single SSE event with the MCP endpoint URL:
+The production server uses `StreamableHttpServerConfig::with_stateful_mode(false)` and `with_json_response(true)`. Request/response calls return `Content-Type: application/json` instead of SSE framing. Full stateful sessions with `Mcp-Session-Id`, `GET /mcp` SSE streams, and `DELETE /mcp` session cleanup are not enabled.
 
-```
-event: endpoint
-data: /mcp
-```
+Raw HTTP clients must send:
 
-Older MCP clients use this to discover the JSON-RPC endpoint. Newer clients connect directly to `/mcp`.
-
-### SSE proxy requirements
-
-When running behind nginx/SWAG, configure SSE-compatible proxy settings:
-
-```nginx
-proxy_set_header Connection '';
-proxy_http_version 1.1;
-chunked_transfer_encoding off;
-proxy_buffering off;
-proxy_cache off;
+```bash
+curl -s -X POST http://localhost:3100/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
 ```
 
-Without these settings, nginx buffers SSE events and the connection appears to hang.
+## Reverse proxy Host/Origin validation
+
+RMCP validates the `Host` header to reduce DNS rebinding risk. Loopback hosts and the configured bind host are allowed by default. Add public names or proxy authorities with:
+
+```bash
+SYSLOG_MCP_ALLOWED_HOSTS=syslog.example.com,syslog.example.com:443
+SYSLOG_MCP_ALLOWED_ORIGINS=https://syslog.example.com
+```
 
 ## Why no stdio transport
 
@@ -112,7 +110,18 @@ syslog-mcp is a dual-port server:
 - Port 1514: UDP + TCP syslog receiver (must bind to receive logs)
 - Port 3100: HTTP MCP server
 
-stdio transport requires the MCP server to communicate exclusively over stdin/stdout with a parent process. A syslog receiver must bind network ports independently, making stdio unsuitable. Use HTTP transport with Docker or a direct binary for all deployments.
+stdio transport requires the MCP server to communicate exclusively over stdin/stdout with a parent process. A syslog receiver must bind network ports independently, making stdio unsuitable. Use HTTP transport directly, or bridge stdio-only clients with `mcp-remote`:
+
+```json
+{
+  "mcpServers": {
+    "syslog-mcp": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://localhost:3100/mcp", "--transport", "http-only"]
+    }
+  }
+}
+```
 
 ## Port assignment
 

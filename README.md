@@ -13,11 +13,11 @@ Rust syslog receiver and MCP server for homelab log intelligence. Ingests syslog
                     │   │  parse → batch writer     │   │
                     │   │  SQLite + FTS5 (WAL mode) │   │
                     │   └──────────────────────────┘   │
-  Claude / MCP ◀──── ▶  HTTP :3100/mcp (JSON-RPC)      │
+  Claude / MCP ◀──── ▶  RMCP HTTP :3100/mcp             │
                     └─────────────────────────────────┘
 ```
 
-The server listens on a single port for both UDP and TCP syslog (default `1514`). All inbound messages are parsed, batched, and written to SQLite with full-text indexing. The MCP HTTP server runs on a separate port (default `3100`) and accepts JSON-RPC 2.0 requests.
+The server listens on a single port for both UDP and TCP syslog (default `1514`). All inbound messages are parsed, batched, and written to SQLite with full-text indexing. The MCP HTTP server runs on a separate port (default `3100`) and uses RMCP Streamable HTTP in stateless JSON-response mode.
 
 ---
 
@@ -334,9 +334,11 @@ Configuration is loaded from three sources in priority order (highest wins):
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `SYSLOG_MCP_TOKEN` | no | — | Bearer token for `/mcp` and `/sse`. Omit to disable auth. |
+| `SYSLOG_MCP_TOKEN` | no | — | Bearer token for `/mcp`. Omit to disable auth. |
 | `SYSLOG_MCP_HOST` | no | `0.0.0.0` | Bind host for the MCP HTTP server |
 | `SYSLOG_MCP_PORT` | no | `3100` | Bind port for the MCP HTTP server |
+| `SYSLOG_MCP_ALLOWED_HOSTS` | no | — | Extra comma-separated Host header values accepted by RMCP Host validation |
+| `SYSLOG_MCP_ALLOWED_ORIGINS` | no | — | Extra comma-separated browser origins accepted by RMCP Origin validation |
 
 #### Non-MCP API
 
@@ -683,6 +685,7 @@ logger -n SYSLOG_SERVER -P 1514 --tcp "test from $(hostname)"
 # Tail recent logs via MCP (replace token if auth is enabled)
 curl -s -X POST http://localhost:3100/mcp \
   -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -d '{
     "jsonrpc": "2.0",
@@ -697,6 +700,7 @@ curl -s -X POST http://localhost:3100/mcp \
 # DB stats
 curl -s -X POST http://localhost:3100/mcp \
   -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -d '{
     "jsonrpc": "2.0",
@@ -738,13 +742,13 @@ For higher ingest rates (IoT, high-traffic network devices):
 
 ## MCP Transport
 
-The server implements MCP over HTTP (JSON-RPC 2.0).
+The server implements MCP through RMCP Streamable HTTP in stateless JSON-response mode.
 
-- `POST /mcp` — primary transport for tool calls
-- `GET /sse` — legacy SSE transport (returns endpoint redirect)
+- `POST /mcp` — RMCP Streamable HTTP request/response endpoint
+- `GET /mcp` and `DELETE /mcp` — `405 Method Not Allowed` in stateless mode
 - `GET /health` — unauthenticated health probe
 
-When `SYSLOG_MCP_TOKEN` is set, `/mcp` and `/sse` require:
+When `SYSLOG_MCP_TOKEN` is set, `/mcp` requires:
 
 ```
 Authorization: Bearer <token>
@@ -774,7 +778,7 @@ Authorization: Bearer <token>
 | `src/config.rs` | Configuration loading and validation |
 | `src/db.rs` | SQLite schema, FTS5, retention, storage budget |
 | `src/syslog.rs` | UDP/TCP listeners, syslog parser, batch writer |
-| `src/mcp.rs` | MCP HTTP server, JSON-RPC dispatch, tool implementations |
+| `src/mcp.rs` | MCP HTTP server, RMCP adapter, auth middleware, health endpoint |
 | `.claude-plugin/plugin.json` | Claude plugin manifest |
 | `.codex-plugin/plugin.json` | Codex plugin manifest |
 | `gemini-extension.json` | Gemini extension manifest |

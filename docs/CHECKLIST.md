@@ -27,7 +27,7 @@ Pre-release and quality checklist. Complete all items before tagging a release.
 - [ ] `.gitignore` includes `.env`, `*.secret`, credentials files
 - [ ] `.dockerignore` includes `.env`, `.git/`, `*.secret`
 
-- [ ] `/health` endpoint is unauthenticated; `/mcp` and `/sse` require bearer auth when `SYSLOG_MCP_TOKEN` is set
+- [ ] `/health` endpoint is unauthenticated; `/mcp` requires bearer auth when `SYSLOG_MCP_TOKEN` is set
 - [ ] Container runs as non-root (UID 1000)
 - [ ] No baked environment variables in Docker image
 - [ ] Bearer token comparison uses constant-time equality (`subtle::ConstantTimeEq`)

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-05
+
+### Added
+
+- **RMCP transport**: Production `/mcp` now uses RMCP Streamable HTTP in stateless JSON-response mode.
+- **RMCP validation**: Added compatibility and route tests for JSON responses, Host validation, auth, header behavior, unsupported protocol versions, method handling, and all seven tools.
+- **Reverse proxy config**: Added `SYSLOG_MCP_ALLOWED_HOSTS` and `SYSLOG_MCP_ALLOWED_ORIGINS` for RMCP Host/Origin validation behind public DNS names or browser clients.
+
+### Changed
+
+- **Protocol path**: Removed the hand-rolled MCP protocol dispatch module; RMCP now owns MCP lifecycle, tool listing, and tool calls.
+- **Transport contract**: Removed the legacy `/sse` discovery endpoint. Stateless RMCP supports `POST /mcp`; `GET /mcp` and `DELETE /mcp` return `405 Method Not Allowed`.
+- **Manifests/docs**: Updated plugin and registry metadata to describe HTTP/RMCP behavior instead of direct stdio execution.
+
 ## [0.5.0] - 2026-05-04
 
 ### Added

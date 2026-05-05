@@ -12,6 +12,8 @@ How to connect to the syslog-mcp server from every supported client.
 
 The plugin manifest handles transport and tool registration. Configure the MCP URL and optional API token when prompted.
 
+syslog-mcp uses RMCP Streamable HTTP in stateless JSON-response mode. Direct HTTP clients should connect to `/mcp`; stdio-only clients need a bridge such as `mcp-remote`.
+
 ## Claude Code CLI
 
 ```bash
@@ -70,6 +72,21 @@ claude mcp add --transport http \
 }
 ```
 
+## stdio-only clients
+
+The `syslog-mcp` binary is not a stdio MCP server. For clients that only support stdio, run an HTTP bridge:
+
+```json
+{
+  "mcpServers": {
+    "syslog-mcp": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://localhost:3100/mcp", "--transport", "http-only"]
+    }
+  }
+}
+```
+
 ## Manual configuration reference
 
 All clients use the same `mcpServers` JSON structure. The only difference is the file path.
@@ -105,11 +122,13 @@ curl -s http://localhost:3100/health
 # List available tools
 curl -s -X POST http://localhost:3100/mcp \
   -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
 
 # Test a tool call
 curl -s -X POST http://localhost:3100/mcp \
   -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_stats","arguments":{}}}'
 ```
 

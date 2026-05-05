@@ -95,6 +95,12 @@ pub struct McpConfig {
     /// Optional bearer token for authenticating MCP requests.
     #[serde(default)]
     pub api_token: Option<String>,
+    /// Optional additional Host header values accepted by RMCP Host validation.
+    #[serde(default)]
+    pub allowed_hosts: Vec<String>,
+    /// Optional browser Origin values accepted by RMCP Origin validation.
+    #[serde(default)]
+    pub allowed_origins: Vec<String>,
 }
 
 impl McpConfig {
@@ -216,6 +222,8 @@ impl Default for McpConfig {
             port: default_mcp_port(),
             server_name: default_server_name(),
             api_token: None,
+            allowed_hosts: Vec::new(),
+            allowed_origins: Vec::new(),
         }
     }
 }
@@ -250,6 +258,11 @@ impl Config {
 
         env_override_str("SYSLOG_MCP_HOST", &mut config.mcp.host);
         env_override_parse("SYSLOG_MCP_PORT", &mut config.mcp.port)?;
+        env_override_list("SYSLOG_MCP_ALLOWED_HOSTS", &mut config.mcp.allowed_hosts);
+        env_override_list(
+            "SYSLOG_MCP_ALLOWED_ORIGINS",
+            &mut config.mcp.allowed_origins,
+        );
         // Primary name: SYSLOG_MCP_TOKEN
         env_override_opt_str("SYSLOG_MCP_TOKEN", &mut config.mcp.api_token);
         // Deprecated: SYSLOG_MCP_API_TOKEN (removed in a future version)
@@ -333,6 +346,21 @@ fn env_override_path(key: &str, target: &mut PathBuf) {
         if !v.is_empty() {
             *target = PathBuf::from(v);
         }
+    }
+}
+
+fn env_override_list(key: &str, target: &mut Vec<String>) {
+    let Ok(v) = std::env::var(key) else {
+        return;
+    };
+    let values: Vec<String> = v
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+    if !values.is_empty() {
+        *target = values;
     }
 }
 

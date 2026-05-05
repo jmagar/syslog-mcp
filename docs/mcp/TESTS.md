@@ -63,16 +63,19 @@ curl http://localhost:3100/health
 # Tail recent logs
 curl -s -X POST http://localhost:3100/mcp \
   -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"tail_logs","arguments":{"n":10}}}'
 
 # Search
 curl -s -X POST http://localhost:3100/mcp \
   -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_logs","arguments":{"query":"error","limit":5}}}'
 
 # Stats
 curl -s -X POST http://localhost:3100/mcp \
   -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_stats","arguments":{}}}'
 ```
 
@@ -82,7 +85,7 @@ curl -s -X POST http://localhost:3100/mcp \
 - [ ] **Auth: valid token** -- 200 with correct Bearer token
 - [ ] **Auth: invalid token** -- 401 Unauthorized
 - [ ] **Auth: no token when required** -- 401 Unauthorized
-- [ ] **Auth: no-auth mode** -- all endpoints accessible when `SYSLOG_MCP_TOKEN` is unset
+- [ ] **Auth: token unset** -- `/mcp` accepts requests without `Authorization`; `/health` remains unauthenticated
 - [ ] **Health endpoint** -- `GET /health` returns 200 with no auth
 - [ ] **FTS5 query syntax** -- AND, OR, NOT, phrases, prefix matching
 - [ ] **Time range filtering** -- from/to parameters parse ISO 8601 correctly

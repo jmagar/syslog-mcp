@@ -18,7 +18,7 @@ All manifests must have the same `version` value.
 ```json
 {
   "name": "syslog-mcp",
-  "version": "0.2.6",
+  "version": "0.6.0",
   "description": "Syslog management via MCP",
   "author": "jmagar",
   "repository": "https://github.com/jmagar/syslog-mcp",
@@ -68,11 +68,11 @@ MCP Registry entry with OCI package reference:
 {
   "name": "tv.tootie/syslog-mcp",
   "title": "Syslog MCP",
-  "version": "0.2.6",
+  "version": "0.6.0",
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/jmagar/syslog-mcp:0.2.6"
+      "identifier": "ghcr.io/jmagar/syslog-mcp:0.6.0"
     }
   ]
 }

@@ -36,6 +36,8 @@ All tools are read-only. syslog-mcp exposes no destructive operations via MCP.
 | `SYSLOG_MCP_HOST` | no | `0.0.0.0` | no |
 | `SYSLOG_MCP_PORT` | no | `3100` | no |
 | `SYSLOG_MCP_TOKEN` | no | (none) | yes |
+| `SYSLOG_MCP_ALLOWED_HOSTS` | no | (none) | no |
+| `SYSLOG_MCP_ALLOWED_ORIGINS` | no | (none) | no |
 | `SYSLOG_API_ENABLED` | no | `false` | no |
 | `SYSLOG_API_TOKEN` | yes when enabled | (none) | yes |
 | `SYSLOG_MCP_DB_PATH` | no | `/data/syslog.db` | no |
@@ -66,14 +68,14 @@ All tools are read-only. syslog-mcp exposes no destructive operations via MCP.
 | Port | Protocol | Purpose |
 | --- | --- | --- |
 | 1514 | UDP + TCP | Syslog receiver (RFC 3164/5424) |
-| 3100 | TCP | MCP HTTP endpoint (JSON-RPC 2.0) |
+| 3100 | TCP | RMCP Streamable HTTP endpoint |
 
 ## HTTP endpoints
 
 | Endpoint | Method | Auth required | Description |
 | --- | --- | --- | --- |
-| `/mcp` | POST | yes (when token set) | MCP JSON-RPC 2.0 endpoint |
-| `/sse` | GET | yes (when token set) | Server-Sent Events (legacy transport) |
+| `/mcp` | POST | yes (when token set) | RMCP stateless Streamable HTTP endpoint |
+| `/mcp` | GET, DELETE | yes (when token set) | 405 in stateless mode |
 | `/health` | GET | no | Health check -- verifies DB connectivity |
 | `/api/search` | GET | yes when API enabled | Plain JSON log search |
 | `/api/tail` | GET | yes when API enabled | Plain JSON recent logs |

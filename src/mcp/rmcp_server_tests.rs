@@ -26,6 +26,8 @@ fn test_state() -> (AppState, Arc<DbPool>, tempfile::TempDir) {
             port: 3100,
             server_name: "syslog-mcp".into(),
             api_token: None,
+            allowed_hosts: Vec::new(),
+            allowed_origins: Vec::new(),
         },
     };
     (state, pool, dir)

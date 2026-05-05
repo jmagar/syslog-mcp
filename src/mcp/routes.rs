@@ -10,10 +10,13 @@ use axum::{
 };
 use serde_json::json;
 use subtle::ConstantTimeEq;
-use tower_http::{cors::{Any, CorsLayer}, limit::RequestBodyLimitLayer};
+use tower_http::{
+    cors::{Any, CorsLayer},
+    limit::RequestBodyLimitLayer,
+};
 
-use super::{streamable_http_config, streamable_http_service};
 use super::AppState;
+use super::{streamable_http_config, streamable_http_service};
 
 const MCP_BODY_LIMIT_BYTES: u64 = 65_536;
 

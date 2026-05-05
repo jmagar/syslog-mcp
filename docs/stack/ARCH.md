@@ -21,7 +21,7 @@ syslog-mcp is a dual-port server combining a syslog receiver and an MCP query in
                     │     SQLite + FTS5 (WAL mode)        │
                     │        ▲                            │
                     │        │                            │
-  MCP clients ◀────────▶ HTTP :3100/mcp (JSON-RPC 2.0)   │
+  MCP clients ◀────────▶ RMCP HTTP :3100/mcp             │
                     │                                    │
                     │     Background tasks:               │
                     │       - Hourly retention purge      │
@@ -41,10 +41,10 @@ HTTP Transport (axum, port 3100)
 Auth Middleware (bearer token via subtle::ConstantTimeEq)
     │
     ▼
-JSON-RPC Dispatch (match on method: initialize, tools/list, tools/call)
+RMCP Streamable HTTP service (stateless JSON-response mode)
     │
     ▼
-Tool Handler (validate input, build SearchParams)
+RMCP tool adapter (validate input, call LogService)
     │
     ▼
 run_db() — spawn_blocking to avoid blocking tokio
@@ -89,7 +89,7 @@ hosts table — UPSERT updates last_seen and log_count
 | Config | `config.rs` | Three-layer config (defaults + TOML + env vars), validation |
 | Database | `db.rs` | Connection pool, schema, migrations, all SQL queries, storage budget |
 | Syslog | `syslog.rs` | UDP/TCP listeners, message parsing, batch writer, backpressure |
-| MCP | `mcp.rs` | Axum router, auth middleware, JSON-RPC, tool dispatch, SSE |
+| MCP | `mcp.rs` | Axum router, auth middleware, RMCP Streamable HTTP, tool adapter |
 
 ## SQLite schema
 
@@ -137,9 +137,9 @@ CREATE INDEX idx_logs_hostname_received_at ON logs(hostname, received_at);
 
 | Source | Error | Response |
 | --- | --- | --- |
-| Auth middleware | Missing/invalid token | HTTP 401, JSON-RPC error -32001 |
-| Tool dispatch | Unknown tool name | JSON-RPC error -32601 |
-| Tool handler | Missing required param | JSON-RPC error -32602 |
+| Auth middleware | Missing/invalid token | HTTP 401, JSON error -32001 |
+| Tool dispatch | Unknown tool name | RMCP method/tool error |
+| Tool handler | Missing required param | RMCP invalid params error |
 | Database | Query error | MCP content with `isError: true` |
 | Syslog | Oversized message | Dropped with WARN log |
 | Syslog | Write channel full | Backpressure applied |

@@ -70,6 +70,8 @@ fn defaults_are_applied_without_env_vars() {
         "SYSLOG_PORT",
         "SYSLOG_MCP_HOST",
         "SYSLOG_MCP_PORT",
+        "SYSLOG_MCP_ALLOWED_HOSTS",
+        "SYSLOG_MCP_ALLOWED_ORIGINS",
         "SYSLOG_MCP_DB_PATH",
         "SYSLOG_MCP_POOL_SIZE",
         "SYSLOG_MCP_RETENTION_DAYS",
@@ -94,6 +96,8 @@ fn defaults_are_applied_without_env_vars() {
     assert_eq!(cfg.mcp.host, "0.0.0.0");
     assert_eq!(cfg.mcp.port, 3100);
     assert_eq!(cfg.mcp.bind_addr(), "0.0.0.0:3100");
+    assert!(cfg.mcp.allowed_hosts.is_empty());
+    assert!(cfg.mcp.allowed_origins.is_empty());
     assert_eq!(cfg.storage.pool_size, 4);
     assert_eq!(cfg.storage.retention_days, 90);
     assert!(cfg.storage.wal_mode);
@@ -106,6 +110,32 @@ fn defaults_are_applied_without_env_vars() {
     assert!(cfg.mcp.api_token.is_none());
     assert!(!cfg.api.enabled);
     assert!(cfg.api.api_token.is_none());
+}
+
+#[test]
+#[serial]
+fn env_var_overrides_mcp_allowed_hosts_and_origins() {
+    std::env::set_var(
+        "SYSLOG_MCP_ALLOWED_HOSTS",
+        "syslog.example.com, syslog.example.com:443",
+    );
+    std::env::set_var(
+        "SYSLOG_MCP_ALLOWED_ORIGINS",
+        "https://app.example.com, https://syslog.example.com",
+    );
+    let result = Config::load();
+    std::env::remove_var("SYSLOG_MCP_ALLOWED_HOSTS");
+    std::env::remove_var("SYSLOG_MCP_ALLOWED_ORIGINS");
+
+    let cfg = result.expect("Config::load() should parse comma-separated RMCP allow lists");
+    assert_eq!(
+        cfg.mcp.allowed_hosts,
+        vec!["syslog.example.com", "syslog.example.com:443"]
+    );
+    assert_eq!(
+        cfg.mcp.allowed_origins,
+        vec!["https://app.example.com", "https://syslog.example.com"]
+    );
 }
 
 #[test]

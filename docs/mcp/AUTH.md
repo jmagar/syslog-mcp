@@ -6,7 +6,7 @@ syslog-mcp has a single authentication boundary: MCP clients authenticating to t
 
 ## Bearer token
 
-When `SYSLOG_MCP_TOKEN` is set, all requests to `/mcp` and `/sse` require:
+When `SYSLOG_MCP_TOKEN` is set, all requests to `/mcp` require:
 
 ```
 Authorization: Bearer {SYSLOG_MCP_TOKEN}
@@ -37,9 +37,9 @@ Request -> require_auth middleware -> Route Handler
          Missing/invalid token
 ```
 
-- Returns HTTP 401 with JSON-RPC error `{"code": -32001, "message": "unauthorized"}` if the token is missing or incorrect
+- Returns HTTP 401 with JSON error `{"code": -32001, "message": "unauthorized"}` if the token is missing or incorrect
 - Uses `subtle::ConstantTimeEq` for token comparison to prevent timing side-channel attacks
-- Applies to `/mcp` (POST) and `/sse` (GET) routes only
+- Applies to `/mcp` RMCP requests. `/health` is outside MCP auth.
 
 ## Unauthenticated endpoints
 
@@ -51,7 +51,7 @@ The health endpoint is intentionally unauthenticated so Docker HEALTHCHECK, dock
 
 ## No-auth mode
 
-When `SYSLOG_MCP_TOKEN` is not set (the default), all endpoints pass through without authentication. This is acceptable for:
+When `SYSLOG_MCP_TOKEN` is not set (the default), the MCP endpoint passes through without authentication. This is acceptable for:
 - LAN-only deployments behind a firewall
 - Deployments behind a reverse proxy that handles its own auth (SWAG with Authelia, Cloudflare Access)
 

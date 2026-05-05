@@ -34,6 +34,8 @@ cleanup_interval_secs = 60
 host = "0.0.0.0"
 port = 3100
 server_name = "syslog-mcp"
+allowed_hosts = ["syslog.example.com", "syslog.example.com:443"]
+allowed_origins = ["https://syslog.example.com"]
 
 [api]
 enabled = false
@@ -57,7 +59,9 @@ enabled = false
 | --- | --- | --- | --- | --- |
 | `SYSLOG_MCP_HOST` | no | `0.0.0.0` | no | HTTP listen host for MCP endpoint |
 | `SYSLOG_MCP_PORT` | no | `3100` | no | HTTP listen port for MCP endpoint |
-| `SYSLOG_MCP_TOKEN` | no | (none) | **yes** | Bearer token for `/mcp` and `/sse` auth. Generate: `openssl rand -hex 32`. When unset, auth is disabled. |
+| `SYSLOG_MCP_TOKEN` | no | (none) | **yes** | Bearer token for `/mcp` auth. Generate: `openssl rand -hex 32`. When unset, auth is disabled. |
+| `SYSLOG_MCP_ALLOWED_HOSTS` | no | (none) | no | Extra comma-separated Host header values for RMCP Host validation |
+| `SYSLOG_MCP_ALLOWED_ORIGINS` | no | (none) | no | Extra comma-separated browser origins for RMCP Origin validation |
 
 ### Non-MCP API (`SYSLOG_API_*`)
 

@@ -20,6 +20,8 @@ fn test_state_with_token(token: Option<String>) -> (AppState, tempfile::TempDir)
                 port: 3100,
                 server_name: "syslog-mcp".into(),
                 api_token: token,
+                allowed_hosts: Vec::new(),
+                allowed_origins: Vec::new(),
             },
         },
         dir,

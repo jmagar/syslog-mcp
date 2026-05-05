@@ -1,12 +1,14 @@
 {
   "name": "syslog-mcp",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Homelab syslog receiver and MCP server for searching, tailing, and correlating logs across hosts.",
   "mcpServers": {
     "syslog-mcp": {
-      "command": "${extensionPath}/target/release/syslog-mcp",
-      "args": [],
-      "cwd": "${extensionPath}"
+      "type": "http",
+      "url": "http://localhost:3100/mcp",
+      "headers": {
+        "Authorization": "Bearer ${SYSLOG_MCP_TOKEN}"
+      }
     }
   },
   "settings": [
@@ -18,9 +20,15 @@
     },
     {
       "name": "Syslog Listen Port",
-      "description": "UDP/TCP port for receiving syslog messages (default: 514)",
+      "description": "UDP/TCP port for receiving syslog messages (default: 1514)",
       "envVar": "SYSLOG_PORT",
       "sensitive": false
+    },
+    {
+      "name": "MCP Bearer Token",
+      "description": "Optional bearer token for authenticating requests to the MCP HTTP endpoint",
+      "envVar": "SYSLOG_MCP_TOKEN",
+      "sensitive": true
     }
   ]
 }

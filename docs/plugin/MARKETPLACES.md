@@ -42,7 +42,7 @@ Registry entry in `server.json`:
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/jmagar/syslog-mcp:0.2.6"
+      "identifier": "ghcr.io/jmagar/syslog-mcp:0.6.0"
     }
   ]
 }
