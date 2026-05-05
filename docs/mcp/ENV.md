@@ -28,7 +28,9 @@ syslog-mcp always runs as an HTTP daemon (it needs persistent syslog UDP/TCP lis
 | --- | --- | --- | --- | --- |
 | `SYSLOG_MCP_HOST` | no | `0.0.0.0` | HTTP bind address | no |
 | `SYSLOG_MCP_PORT` | no | `3100` | HTTP listen port | no |
-| `SYSLOG_MCP_TOKEN` | no | (none) | Bearer token for `/mcp` and `/sse`. Generate: `openssl rand -hex 32` | **yes** |
+| `SYSLOG_MCP_TOKEN` | no | (none) | Bearer token for `/mcp`. Generate: `openssl rand -hex 32` | **yes** |
+| `SYSLOG_MCP_ALLOWED_HOSTS` | no | (none) | Extra comma-separated Host header values for RMCP Host validation | no |
+| `SYSLOG_MCP_ALLOWED_ORIGINS` | no | (none) | Extra comma-separated browser origins for RMCP Origin validation | no |
 
 ## Storage
 

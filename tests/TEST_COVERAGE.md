@@ -39,7 +39,7 @@ Builds the Docker image from the project root, starts a container with a tmpfs-b
 bash tests/test_live.sh
 
 # With bearer token
-SYSLOG_MCP_API_TOKEN=ci-integration-token bash tests/test_live.sh
+SYSLOG_MCP_TOKEN=ci-integration-token bash tests/test_live.sh
 
 # Explicit mode
 bash tests/test_live.sh --mode docker
@@ -50,7 +50,7 @@ bash tests/test_live.sh --mode all
 
 Required env vars: none (token is optional).
 Optional env vars:
-- `SYSLOG_MCP_API_TOKEN` — bearer token; if set, auth tests execute and the token is passed to the container.
+- `SYSLOG_MCP_TOKEN` — bearer token; if set, auth tests execute and the token is passed to the container.
 - `PORT` — overrides the default port `3100` used as fallback when port mapping detection fails.
 
 #### `http`
@@ -134,14 +134,16 @@ Timeout: 10 seconds
 
 **Purpose:** Verify that when a bearer token is configured, the `/mcp` endpoint enforces authentication — rejecting requests with no token and requests with an incorrect token, both with HTTP 401.
 
-**Conditional execution:** Both auth tests are **SKIPPED** (not failed) when `SYSLOG_MCP_API_TOKEN` is not set. The skip reason is `"SYSLOG_MCP_API_TOKEN not set — auth assumed disabled"`. This reflects that the server supports running in no-auth mode.
+**Conditional execution:** Both auth tests are **SKIPPED** (not failed) when `SYSLOG_MCP_TOKEN` is not set. The skip reason is `"SYSLOG_MCP_TOKEN not set — auth assumed disabled"`. This reflects that the server supports running in no-auth mode.
 
 #### Test: `auth: unauthenticated /mcp returns 401`
 
 **HTTP request (no auth header):**
-```
+
+```text
 POST <BASE_URL>/mcp
 Content-Type: application/json
+Accept: application/json, text/event-stream
 Body: {"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}
 Timeout: 10 seconds
 ```
@@ -154,10 +156,12 @@ Timeout: 10 seconds
 #### Test: `auth: bad token returns 401`
 
 **HTTP request (wrong token):**
-```
+
+```text
 POST <BASE_URL>/mcp
 Authorization: Bearer intentionally-wrong-token-for-testing
 Content-Type: application/json
+Accept: application/json, text/event-stream
 Body: {"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}
 Timeout: 10 seconds
 ```
@@ -428,8 +432,8 @@ All seven assertions are unconditional — `correlate_events` is expected to alw
 
 | Skip label | Condition | Reason |
 |---|---|---|
-| `auth: unauthenticated /mcp returns 401` | `SYSLOG_MCP_API_TOKEN` not set | Auth assumed disabled; enforcing 401 without a configured token is not the server's job |
-| `auth: bad token returns 401` | `SYSLOG_MCP_API_TOKEN` not set | Same as above |
+| `auth: unauthenticated /mcp returns 401` | `SYSLOG_MCP_TOKEN` not set | Auth assumed disabled; enforcing 401 without a configured token is not the server's job |
+| `auth: bad token returns 401` | `SYSLOG_MCP_TOKEN` not set | Same as above |
 | `list_hosts — entry field validation` | `hosts` array is empty | No syslog data has been ingested; empty array is valid |
 | `search_logs — log entry field validation` | No logs matching `"error"` | Empty DB is valid; field shape only verified when data exists |
 | `get_errors — entry field validation` | `summary` array is empty | No error-level logs; empty is valid |
@@ -500,7 +504,7 @@ docker run \
   --rm \
   -p 0:3100 \
   --tmpfs /data:rw,noexec,nosuid,size=64m \
-  [-e SYSLOG_MCP_API_TOKEN=<token>] \
+  [-e SYSLOG_MCP_TOKEN=<token>] \
   -e SYSLOG_MCP_MAX_DB_SIZE_MB=0 \
   -e SYSLOG_MCP_RECOVERY_DB_SIZE_MB=0 \
   -e SYSLOG_MCP_MIN_FREE_DISK_MB=0 \
@@ -516,7 +520,7 @@ Key design decisions:
 | `-p 0:3100` | Docker assigns a random host port — avoids conflicts with existing processes on port 3100 |
 | `--tmpfs /data:rw,noexec,nosuid,size=64m` | SQLite database lives entirely in memory — no disk I/O, no volume cleanup, always starts clean |
 | `SYSLOG_MCP_MAX_DB_SIZE_MB=0` etc. | Zeroes out storage budget limits that would conflict with the tmpfs size cap |
-| `SYSLOG_MCP_API_TOKEN` | Conditionally passed only when `TOKEN` is non-empty |
+| `SYSLOG_MCP_TOKEN` | Conditionally passed only when `TOKEN` is non-empty |
 
 ### Port Discovery
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # smoke-test.sh — Live end-to-end smoke test for syslog-mcp
-# Tests all 6 MCP tools via mcporter with strict PASS/FAIL validation.
+# Tests all 7 MCP tools via mcporter with strict PASS/FAIL validation.
 # Exit code 0 = all passed. Exit code 1 = one or more failures.
 #
 # Usage:
@@ -127,13 +127,13 @@ HEALTH=$(curl -sf "$HEALTH_URL" 2>&1) || { echo -e "${COLOR_RED}ABORT${COLOR_RES
 HEALTH_STATUS=$(json_get "$HEALTH" "['status']")
 assert_eq "Health endpoint responds" "$HEALTH_STATUS" "ok"
 
-# 1b: mcporter can reach server and lists all 6 tools
+# 1b: mcporter can reach server and lists all 7 tools
 TOOL_LIST=$(mcporter list syslog-mcp --config "$MCPORTER_CONFIG" 2>&1)
 TOOL_COUNT=$(echo "$TOOL_LIST" | grep -c "^  function " || true)
-if [[ "$TOOL_COUNT" -eq 6 ]]; then
-    pass "mcporter lists 6 tools ($TOOL_COUNT found)"
+if [[ "$TOOL_COUNT" -eq 7 ]]; then
+    pass "mcporter lists 7 tools ($TOOL_COUNT found)"
 else
-    fail "mcporter tool count (expected 6, got $TOOL_COUNT)"
+    fail "mcporter tool count (expected 7, got $TOOL_COUNT)"
 fi
 
 # ─── Phase 2: Seed test data ─────────────────────────────────────────────────

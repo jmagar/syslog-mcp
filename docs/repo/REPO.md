@@ -43,7 +43,10 @@ syslog-mcp/
 │   ├── config.rs                # Config: config.toml + env var overlay
 │   ├── db.rs                    # SQLite pool, FTS5, schema, retention, storage budget
 │   ├── syslog.rs                # UDP/TCP listeners, parsing, batch writer
-│   └── mcp.rs                   # Axum HTTP, JSON-RPC, 7 tool handlers
+│   ├── mcp.rs                   # Facade for MCP modules
+│   ├── db/                      # DB queries, models, schema, tests
+│   ├── mcp/                     # Axum routes, RMCP adapter, schemas, tools, tests
+│   └── syslog/                  # Parser, network listeners, batch writer, tests
 ├── tests/
 │   ├── test_live.sh             # Extended live integration tests
 │   ├── mcporter/
@@ -76,9 +79,9 @@ syslog-mcp/
 | --- | --- |
 | `src/main.rs` | Entry point: wires config, DB, syslog, MCP; starts background tasks; graceful shutdown |
 | `src/config.rs` | Three-layer config: defaults + config.toml + env vars; validation |
-| `src/db.rs` | SQLite connection pool, schema init, migrations, FTS5, all query functions, storage budget enforcement |
-| `src/syslog.rs` | UDP/TCP listeners, RFC 3164/5424 parsing, UniFi CEF extraction, mpsc batch writer |
-| `src/mcp.rs` | Axum router, bearer auth middleware, JSON-RPC dispatch, 7 tool handlers, health endpoint |
+| `src/db.rs` + `src/db/` | SQLite connection pool, schema init, migrations, FTS5, all query functions, storage budget enforcement |
+| `src/syslog.rs` + `src/syslog/` | UDP/TCP listeners, RFC 3164/5424 parsing, UniFi CEF extraction, mpsc batch writer |
+| `src/mcp.rs` + `src/mcp/` | MCP facade plus Axum routes, bearer auth middleware, RMCP Streamable HTTP adapter, schemas, tools, and tests |
 
 ## Plugin surfaces
 

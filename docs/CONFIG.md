@@ -34,10 +34,19 @@ cleanup_interval_secs = 60
 host = "0.0.0.0"
 port = 3100
 server_name = "syslog-mcp"
+allowed_hosts = ["syslog.example.com", "syslog.example.com:443"]
+allowed_origins = ["https://syslog.example.com"]
 
 [api]
 enabled = false
 ```
+
+Bind host fields (`SYSLOG_HOST` and `SYSLOG_MCP_HOST`) must be hostnames or IP
+addresses without `:` because their ports are configured separately.
+`allowed_hosts` / `SYSLOG_MCP_ALLOWED_HOSTS` are RMCP Host-header allow-list
+entries and may include `host:port` values such as `syslog.example.com:443`.
+`allowed_origins` / `SYSLOG_MCP_ALLOWED_ORIGINS` remain full browser origin URLs
+such as `https://syslog.example.com`.
 
 ## Environment variables
 
@@ -57,7 +66,9 @@ enabled = false
 | --- | --- | --- | --- | --- |
 | `SYSLOG_MCP_HOST` | no | `0.0.0.0` | no | HTTP listen host for MCP endpoint |
 | `SYSLOG_MCP_PORT` | no | `3100` | no | HTTP listen port for MCP endpoint |
-| `SYSLOG_MCP_TOKEN` | no | (none) | **yes** | Bearer token for `/mcp` and `/sse` auth. Generate: `openssl rand -hex 32`. When unset, auth is disabled. |
+| `SYSLOG_MCP_TOKEN` | no | (none) | **yes** | Bearer token for `/mcp` auth. Generate: `openssl rand -hex 32`. When unset, auth is disabled. |
+| `SYSLOG_MCP_ALLOWED_HOSTS` | no | (none) | no | Extra comma-separated Host header values for RMCP Host validation |
+| `SYSLOG_MCP_ALLOWED_ORIGINS` | no | (none) | no | Extra comma-separated browser origins for RMCP Origin validation |
 
 ### Non-MCP API (`SYSLOG_API_*`)
 
@@ -123,7 +134,8 @@ Set both `max_db_size_mb` and `min_free_disk_mb` to 0 to disable all storage enf
 - `cleanup_interval_secs` must be >= 5
 - `cleanup_chunk_size` must be between 1 and 1,000,000
 - `SYSLOG_API_TOKEN` is required when `SYSLOG_API_ENABLED=true`
-- Host fields must not contain a colon (port is a separate setting)
+- Bind host fields (`SYSLOG_HOST`, `SYSLOG_MCP_HOST`) must not contain a colon (port is a separate setting)
+- `SYSLOG_MCP_ALLOWED_HOSTS` values may include `host:port` to match reverse-proxy Host headers
 
 ## Plugin deployment
 

@@ -1,6 +1,6 @@
 {
   "name": "syslog-mcp",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Syslog management via MCP.",
   "homepage": "https://github.com/jmagar/syslog-mcp",
   "repository": "https://github.com/jmagar/syslog-mcp",
@@ -23,8 +23,7 @@
     "developerName": "Jacob Magar",
     "category": "Infrastructure",
     "capabilities": [
-      "Read",
-      "Write"
+      "Read"
     ],
     "websiteURL": "https://github.com/jmagar/syslog-mcp",
     "defaultPrompt": [

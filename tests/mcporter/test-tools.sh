@@ -10,8 +10,7 @@
 # Credentials are sourced from ~/.claude-homelab/.env:
 #   SYSLOG_MCP_HOST  (default: localhost)
 #   SYSLOG_MCP_PORT  (default: 3100)
-#   SYSLOG_MCP_NO_AUTH  (if "true", no Authorization header sent)
-#   SYSLOG_MCP_TOKEN    (optional; only used when SYSLOG_MCP_NO_AUTH != true)
+#   SYSLOG_MCP_TOKEN (optional; SYSLOG_MCP_API_TOKEN is accepted as a deprecated alias)
 #
 # Usage:
 #   ./tests/mcporter/test-tools.sh [--timeout-ms N] [--parallel] [--verbose]
@@ -148,23 +147,19 @@ load_env() {
   local port="${SYSLOG_MCP_PORT:-3100}"
   MCP_URL="http://${host}:${port}/mcp"
 
-  # Auth: SYSLOG_MCP_NO_AUTH=true means the server runs without token validation.
-  # Honour an explicit SYSLOG_MCP_TOKEN if set regardless.
-  local token="${SYSLOG_MCP_TOKEN:-}"
-  local no_auth="${SYSLOG_MCP_NO_AUTH:-true}"
+  # Auth is enabled by the server only when SYSLOG_MCP_TOKEN is configured.
+  local token="${SYSLOG_MCP_TOKEN:-${SYSLOG_MCP_API_TOKEN:-}}"
 
   MCPORTER_HEADER_ARGS=()
   if [[ -n "${token}" ]]; then
     MCPORTER_HEADER_ARGS+=(--header "Authorization: Bearer ${token}")
-  elif [[ "${no_auth}" != "true" ]]; then
-    log_warn "SYSLOG_MCP_NO_AUTH is not 'true' and SYSLOG_MCP_TOKEN is unset — calls may return 401"
   fi
 
   log_info "MCP URL: ${MCP_URL}"
   if [[ ${#MCPORTER_HEADER_ARGS[@]} -gt 0 ]]; then
     log_info "Auth: Bearer token configured"
   else
-    log_info "Auth: none (SYSLOG_MCP_NO_AUTH=true)"
+    log_info "Auth: none (SYSLOG_MCP_TOKEN unset)"
   fi
 }
 
@@ -223,6 +218,7 @@ smoke_test_server() {
     curl -sf --max-time 10 \
       -X POST "${MCP_URL}" \
       -H "Content-Type: application/json" \
+      -H "Accept: application/json, text/event-stream" \
       ${MCPORTER_HEADER_ARGS[@]+"${MCPORTER_HEADER_ARGS[@]}"} \
       -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' 2>/dev/null | \
     python3 -c "
@@ -593,14 +589,13 @@ suite_correlate() {
 }
 
 # ---------------------------------------------------------------------------
-# Auth enforcement tests (only run when SYSLOG_MCP_NO_AUTH != "true")
+# Auth enforcement tests (only run when SYSLOG_MCP_TOKEN is set)
 # ---------------------------------------------------------------------------
 suite_auth() {
-  local no_auth="${SYSLOG_MCP_NO_AUTH:-true}"
-  if [[ "${no_auth}" == "true" ]]; then
-    printf '\n%b== auth (skipped — SYSLOG_MCP_NO_AUTH=true) ==%b\n' "${C_BOLD}" "${C_RESET}" | tee -a "${LOG_FILE}"
-    skip_test "auth: unauthenticated request returns 401" "SYSLOG_MCP_NO_AUTH=true"
-    skip_test "auth: bad token returns 401"                "SYSLOG_MCP_NO_AUTH=true"
+  if [[ -z "${SYSLOG_MCP_TOKEN:-${SYSLOG_MCP_API_TOKEN:-}}" ]]; then
+    printf '\n%b== auth (skipped — token unset) ==%b\n' "${C_BOLD}" "${C_RESET}" | tee -a "${LOG_FILE}"
+    skip_test "auth: unauthenticated request returns 401" "SYSLOG_MCP_TOKEN unset"
+    skip_test "auth: bad token returns 401"                "SYSLOG_MCP_TOKEN unset"
     return
   fi
 
@@ -612,6 +607,7 @@ suite_auth() {
   label="auth: unauthenticated /mcp returns 401"
   status="$(curl -s --max-time 10 -o /dev/null -w "%{http_code}" \
     "${MCP_URL}" -X POST -H "Content-Type: application/json" \
+    -H "Accept: application/json, text/event-stream" \
     -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' 2>/dev/null)" || status=0
   if [[ "${status}" == "401" ]]; then
     printf "${C_GREEN}[PASS]${C_RESET} %-60s\n" "${label}" | tee -a "${LOG_FILE}"
@@ -627,6 +623,7 @@ suite_auth() {
     "${MCP_URL}" -X POST \
     -H "Authorization: Bearer bad-token-intentionally-invalid" \
     -H "Content-Type: application/json" \
+    -H "Accept: application/json, text/event-stream" \
     -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' 2>/dev/null)" || status=0
   if [[ "${status}" == "401" ]]; then
     printf "${C_GREEN}[PASS]${C_RESET} %-60s\n" "${label}" | tee -a "${LOG_FILE}"

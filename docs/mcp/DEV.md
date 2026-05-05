@@ -22,7 +22,7 @@ syslog-mcp/
     config.rs            # Config: config.toml + env var overlay
     db.rs                # SQLite pool, FTS5, schema, retention, storage budget
     syslog.rs            # UDP/TCP listeners, RFC 3164/5424 parsing, batch writer
-    mcp.rs               # Axum HTTP, JSON-RPC dispatch, all 7 tool handlers
+    mcp.rs               # Axum HTTP, RMCP adapter, auth, health
   tests/                 # Live integration tests
   scripts/               # Smoke tests, backups, plugin checks
   hooks/                 # Claude Code hooks (sync-env and related session checks)
@@ -39,7 +39,7 @@ syslog-mcp/
 
 ## Development cycle
 
-1. **Edit source code** -- modify tool handlers in `src/mcp.rs`, database queries in `src/db.rs`, syslog parsing in `src/syslog.rs`.
+1. **Edit source code** -- modify tool schemas in `src/mcp/schemas.rs`, handlers in `src/mcp/tools.rs`, database queries in `src/db.rs`, and syslog parsing in `src/syslog/`.
 2. **Run dev server** -- `just dev` compiles and runs the binary.
 3. **Test interactively** -- call tools via curl:
    ```bash
@@ -49,6 +49,7 @@ syslog-mcp/
    # Tool call
    curl -s -X POST http://localhost:3100/mcp \
      -H "Content-Type: application/json" \
+     -H "Accept: application/json, text/event-stream" \
      -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"tail_logs","arguments":{"n":10}}}'
    ```
 4. **Run checks**:
@@ -62,11 +63,11 @@ syslog-mcp/
 
 ## Adding a new MCP tool
 
-1. **Define the tool schema** -- add a JSON object to the `tool_definitions()` vec in `src/mcp.rs`.
-2. **Add dispatch entry** -- add a match arm in `execute_tool()`.
-3. **Implement handler** -- write an async function `tool_<name>()` that calls `run_db()` for database access.
+1. **Define the tool schema** -- add a JSON object to the `tool_definitions()` vec in `src/mcp/schemas.rs`.
+2. **Add adapter entry** -- add a match arm in `execute_tool()`.
+3. **Implement handler** -- write an async function `tool_<name>()` that calls `LogService`.
 4. **Add database query** -- implement the query function in `src/db.rs` with parameterized SQL.
-5. **Add unit test** -- write `#[test]` or `#[tokio::test]` in the relevant module.
+5. **Add sidecar unit tests** -- place tests in the relevant `src/<module>_tests.rs` file and keep the source module limited to the `#[cfg(test)] #[path = "..._tests.rs"] mod tests;` hook.
 6. **Update syslog_help** -- add the tool to the help text in `tool_syslog_help()`.
 7. **Update SKILL.md** -- add the tool to the skill documentation.
 8. **Update plugin manifests** -- add the tool name to `.claude-plugin/plugin.json` tools array.

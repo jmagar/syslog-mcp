@@ -1,42 +1,43 @@
 use std::time::Instant;
 
 use axum::{
-    extract::{DefaultBodyLimit, State},
-    http::StatusCode,
+    extract::State,
+    http::{HeaderValue, Method, StatusCode},
     middleware,
-    response::{
-        sse::{Event, Sse},
-        IntoResponse, Json,
-    },
-    routing::{get, post},
+    response::{IntoResponse, Json},
+    routing::get,
     Router,
 };
-use futures_core::Stream;
 use serde_json::json;
 use subtle::ConstantTimeEq;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::{
+    cors::{Any, CorsLayer},
+    limit::RequestBodyLimitLayer,
+};
 
-use super::protocol::{dispatch, DispatchResult, JsonRpcRequest};
+use super::rmcp_server::allowed_origins;
 use super::AppState;
+use super::{streamable_http_config, streamable_http_service};
+
+const MCP_BODY_LIMIT_BYTES: u64 = 65_536;
 
 /// Build the MCP router
 pub fn router(state: AppState) -> Router {
-    // Authenticated routes: /mcp and /sse require Bearer token when api_token is set
+    // Authenticated RMCP Streamable HTTP endpoint. /health is mounted separately
+    // so Docker HEALTHCHECK, docker-compose health probes, and SWAG can reach it.
+    let rmcp_config = streamable_http_config(&state.config);
     let authenticated = Router::new()
-        .route("/mcp", post(handle_mcp_post))
-        .route("/sse", get(handle_sse))
+        .nest_service("/mcp", streamable_http_service(state.clone(), rmcp_config))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
-    // Unauthenticated routes: /health must be accessible without credentials
-    // so Docker HEALTHCHECK, docker-compose health probes, and SWAG can reach it
     let unauthenticated = Router::new().route("/health", get(health));
 
     Router::new()
         .merge(authenticated)
         .merge(unauthenticated)
         .fallback(|| async { (StatusCode::NOT_FOUND, Json(json!({"error": "not_found"}))) })
-        .layer(DefaultBodyLimit::max(65_536))
-        .layer(cors_layer(state.config.port))
+        .layer(RequestBodyLimitLayer::new(MCP_BODY_LIMIT_BYTES as usize))
+        .layer(cors_layer(&state.config))
         .with_state(state)
 }
 
@@ -83,17 +84,21 @@ async fn require_auth(
     next.run(req).await
 }
 
-fn cors_layer(port: u16) -> CorsLayer {
+fn cors_layer(config: &crate::config::McpConfig) -> CorsLayer {
+    let origins: Vec<HeaderValue> = allowed_origins(config)
+        .into_iter()
+        .filter_map(|origin| match origin.parse::<HeaderValue>() {
+            Ok(value) => Some(value),
+            Err(error) => {
+                tracing::warn!(origin = %origin, error = %error, "Ignoring invalid CORS origin");
+                None
+            }
+        })
+        .collect();
+
     CorsLayer::new()
-        .allow_origin([
-            format!("http://localhost:{port}")
-                .parse::<axum::http::HeaderValue>()
-                .expect("valid localhost origin"),
-            format!("http://127.0.0.1:{port}")
-                .parse::<axum::http::HeaderValue>()
-                .expect("valid 127.0.0.1 origin"),
-        ])
-        .allow_methods([axum::http::Method::POST, axum::http::Method::GET])
+        .allow_origin(origins)
+        .allow_methods([Method::POST, Method::GET])
         .allow_headers(Any)
 }
 
@@ -146,31 +151,11 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
             );
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "status": "error", "error": e.to_string() })),
+                Json(json!({ "status": "error" })),
             )
                 .into_response()
         }
     }
-}
-
-/// Streamable HTTP transport (POST /mcp)
-pub(super) async fn handle_mcp_post(
-    State(state): State<AppState>,
-    Json(req): Json<JsonRpcRequest>,
-) -> impl IntoResponse {
-    match dispatch(&state, &req).await {
-        DispatchResult::Response(response) => Json(response).into_response(),
-        // JSON-RPC notifications must not produce a response body.
-        DispatchResult::Notification => StatusCode::ACCEPTED.into_response(),
-    }
-}
-
-/// SSE endpoint for MCP (legacy transport support)
-async fn handle_sse(
-    State(_state): State<AppState>,
-) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
-    let stream = tokio_stream::once(Ok(Event::default().event("endpoint").data("/mcp")));
-    Sse::new(stream)
 }
 
 #[cfg(test)]

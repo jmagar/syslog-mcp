@@ -23,3 +23,6 @@ cleanup_interval_secs = 60    # storage-budget enforcement interval
 host = "0.0.0.0"
 port = 3100
 server_name = "syslog-mcp"
+# Optional extra RMCP Host/Origin allow-lists for reverse proxies.
+# allowed_hosts = ["syslog.example.com", "syslog.example.com:443"]
+# allowed_origins = ["https://syslog.example.com"]

@@ -7,11 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.5.1] - 2026-05-05
+## [0.6.0] - 2026-05-05
+
+### Added
+
+- **RMCP transport**: Production `/mcp` now uses RMCP Streamable HTTP in stateless JSON-response mode.
+- **RMCP validation**: Added compatibility and route tests for JSON responses, Host validation, auth, header behavior, unsupported protocol versions, method handling, and all seven tools.
+- **Reverse proxy config**: Added `SYSLOG_MCP_ALLOWED_HOSTS` and `SYSLOG_MCP_ALLOWED_ORIGINS` for RMCP Host/Origin validation behind public DNS names or browser clients.
 
 ### Changed
 
 - **App module layout**: Split the shared syslog service from `src/app.rs` into focused `src/app/` modules and renamed `LogService` to `SyslogService` across runtime, MCP, API, tests, and docs.
+- **Protocol path**: Removed the hand-rolled MCP protocol dispatch module; RMCP now owns MCP lifecycle, tool listing, and tool calls.
+- **Transport contract**: Removed the legacy `/sse` discovery endpoint. Stateless RMCP supports `POST /mcp`; `GET /mcp` and `DELETE /mcp` return `405 Method Not Allowed`.
+- **Manifests/docs**: Updated plugin and registry metadata to describe HTTP/RMCP behavior instead of direct stdio execution.
 
 ## [0.5.0] - 2026-05-04
 
@@ -353,7 +362,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/jmagar/syslog-mcp/compare/v0.1.7...HEAD
+[Unreleased]: https://github.com/jmagar/syslog-mcp/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/jmagar/syslog-mcp/compare/v0.5.0...v0.6.0
 [0.1.7]: https://github.com/jmagar/syslog-mcp/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/jmagar/syslog-mcp/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/jmagar/syslog-mcp/compare/v0.1.4...v0.1.5

@@ -1,6 +1,6 @@
 {
   "name": "syslog-mcp",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Syslog management via MCP",
   "author": "jmagar",
   "repository": "https://github.com/jmagar/syslog-mcp",
@@ -17,7 +17,8 @@
     "get_errors",
     "list_hosts",
     "correlate_events",
-    "get_stats"
+    "get_stats",
+    "syslog_help"
   ],
   "mcpServers": "./.mcp.json",
   "userConfig": {

@@ -42,7 +42,7 @@ Registry entry in `server.json`:
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/jmagar/syslog-mcp:0.2.6"
+      "identifier": "ghcr.io/jmagar/syslog-mcp:0.6.0"
     }
   ]
 }
@@ -55,7 +55,7 @@ syslog-mcp uses OCI (Docker) images as the primary distribution package, not PyP
 | Registry | Image |
 | --- | --- |
 | GHCR | `ghcr.io/jmagar/syslog-mcp:latest` |
-| GHCR (versioned) | `ghcr.io/jmagar/syslog-mcp:v0.3.1` |
+| GHCR (versioned) | `ghcr.io/jmagar/syslog-mcp:v0.6.0` |
 
 Additionally published to crates.io for `cargo install` usage.
 
