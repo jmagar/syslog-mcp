@@ -177,7 +177,7 @@ Timeout: 10 seconds
 
 ### Phase 3 — Protocol (`phase_protocol`)
 
-**Purpose:** Verify that the MCP protocol handshake works — `initialize` returns valid server metadata and `tools/list` returns the expected set of seven tools.
+**Purpose:** Verify that the MCP protocol handshake works — `initialize` returns valid server metadata and `tools/list` returns the single `syslog` tool.
 
 #### 3a. `initialize`
 
@@ -212,19 +212,13 @@ All three use the no-expected-value form of `assert_jq` — they check presence 
 
 | Test label | Check | PASS condition |
 |---|---|---|
-| `tools/list — returns N tools (expected 7)` | `.result.tools \| length` | Count is `>= 7` |
+| `tools/list — returns N tools (expected 1)` | `.result.tools \| length` | Count is `1` |
 
-Then for each of the 7 expected tool names, one test per tool:
+Then the public tool name is checked:
 
 | Test label | jq expression | Expected value |
 |---|---|---|
-| `tools/list — tool 'search_logs' present` | `.result.tools[] \| select(.name == "search_logs") \| .name` | `"search_logs"` |
-| `tools/list — tool 'tail_logs' present` | `.result.tools[] \| select(.name == "tail_logs") \| .name` | `"tail_logs"` |
-| `tools/list — tool 'get_errors' present` | `.result.tools[] \| select(.name == "get_errors") \| .name` | `"get_errors"` |
-| `tools/list — tool 'list_hosts' present` | `.result.tools[] \| select(.name == "list_hosts") \| .name` | `"list_hosts"` |
-| `tools/list — tool 'correlate_events' present` | `.result.tools[] \| select(.name == "correlate_events") \| .name` | `"correlate_events"` |
-| `tools/list — tool 'get_stats' present` | `.result.tools[] \| select(.name == "get_stats") \| .name` | `"get_stats"` |
-| `tools/list — tool 'syslog_help' present` | `.result.tools[] \| select(.name == "syslog_help") \| .name` | `"syslog_help"` |
+| `tools/list — tool 'syslog' present` | `.result.tools[] \| select(.name == "syslog") \| .name` | `"syslog"` |
 
 A tool is considered present only if its `.name` field exactly matches the expected string.
 
@@ -242,7 +236,7 @@ All subsequent assertions operate on this inner JSON payload, not the raw JSON-R
 
 ---
 
-#### Tool: `syslog_help`
+#### Tool: `syslog help`
 
 **Arguments:** `{}` (no arguments)
 
@@ -250,15 +244,15 @@ All subsequent assertions operate on this inner JSON payload, not the raw JSON-R
 
 | Test label | jq expression | PASS condition |
 |---|---|---|
-| `syslog_help — help field present` | `.help` | Non-null, non-empty, non-false |
-| `syslog_help — help text is non-empty` | `.help \| length > 0` | Evaluates to `true` |
-| `syslog_help — help text contains 'syslog'` | `.help \| ascii_downcase \| contains("syslog")` | Evaluates to `true` |
+| `syslog help — help field present` | `.help` | Non-null, non-empty, non-false |
+| `syslog help — help text is non-empty` | `.help \| length > 0` | Evaluates to `true` |
+| `syslog help — help text contains 'syslog'` | `.help \| ascii_downcase \| contains("syslog")` | Evaluates to `true` |
 
 The third assertion is case-insensitive via `ascii_downcase` — the word "syslog" or "Syslog" or "SYSLOG" all pass.
 
 ---
 
-#### Tool: `get_stats`
+#### Tool: `syslog stats`
 
 **Arguments:** `{}` (no arguments)
 
@@ -266,19 +260,19 @@ The third assertion is case-insensitive via `ascii_downcase` — the word "syslo
 
 | Test label | jq expression | PASS condition |
 |---|---|---|
-| `get_stats — total_logs field present` | `.total_logs != null` | Evaluates to `true` |
-| `get_stats — total_hosts field present` | `.total_hosts != null` | Evaluates to `true` |
-| `get_stats — logical_db_size_mb present` | `.logical_db_size_mb` | Non-null, non-empty |
-| `get_stats — physical_db_size_mb present` | `.physical_db_size_mb` | Non-null, non-empty |
-| `get_stats — write_blocked field present` | `.write_blocked != null` | Evaluates to `true` |
-| `get_stats — total_logs is a number >= 0` | `.total_logs >= 0` | Evaluates to `true` |
-| `get_stats — total_hosts is a number >= 0` | `.total_hosts >= 0` | Evaluates to `true` |
+| `syslog stats — total_logs field present` | `.total_logs != null` | Evaluates to `true` |
+| `syslog stats — total_hosts field present` | `.total_hosts != null` | Evaluates to `true` |
+| `syslog stats — logical_db_size_mb present` | `.logical_db_size_mb` | Non-null, non-empty |
+| `syslog stats — physical_db_size_mb present` | `.physical_db_size_mb` | Non-null, non-empty |
+| `syslog stats — write_blocked field present` | `.write_blocked != null` | Evaluates to `true` |
+| `syslog stats — total_logs is a number >= 0` | `.total_logs >= 0` | Evaluates to `true` |
+| `syslog stats — total_hosts is a number >= 0` | `.total_hosts >= 0` | Evaluates to `true` |
 
 The `!= null` form is used for `total_logs`, `total_hosts`, and `write_blocked` so that a value of `0` or `false` still passes — these are valid production values. The `>= 0` checks additionally assert numeric type.
 
 ---
 
-#### Tool: `list_hosts`
+#### Tool: `syslog hosts`
 
 **Arguments:** `{}` (no arguments)
 
@@ -288,22 +282,22 @@ The `!= null` form is used for `total_logs`, `total_hosts`, and `write_blocked` 
 
 | Test label | jq expression | Expected value |
 |---|---|---|
-| `list_hosts — hosts field is an array` | `.hosts \| type` | `"array"` |
+| `syslog hosts — hosts field is an array` | `.hosts \| type` | `"array"` |
 
 **Conditional tests (only run when `.hosts \| length > 0`):**
 
 | Test label | jq expression | PASS condition |
 |---|---|---|
-| `list_hosts — entry has hostname field` | `.hosts[0].hostname` | Non-null, non-empty |
-| `list_hosts — entry has log_count field` | `.hosts[0].log_count != null` | Evaluates to `true` |
-| `list_hosts — entry has first_seen field` | `.hosts[0].first_seen` | Non-null, non-empty |
-| `list_hosts — entry has last_seen field` | `.hosts[0].last_seen` | Non-null, non-empty |
+| `syslog hosts — entry has hostname field` | `.hosts[0].hostname` | Non-null, non-empty |
+| `syslog hosts — entry has log_count field` | `.hosts[0].log_count != null` | Evaluates to `true` |
+| `syslog hosts — entry has first_seen field` | `.hosts[0].first_seen` | Non-null, non-empty |
+| `syslog hosts — entry has last_seen field` | `.hosts[0].last_seen` | Non-null, non-empty |
 
 **Skipped when:** `hosts` array is empty. Skip reason: `"no hosts in DB (no syslog data ingested)"`. This is expected in a fresh CI container with no ingested syslog traffic.
 
 ---
 
-#### Tool: `search_logs` (with query)
+#### Tool: `syslog search` (with query)
 
 **Arguments:** `{"query": "error", "limit": 10}`
 
@@ -313,22 +307,22 @@ The `!= null` form is used for `total_logs`, `total_hosts`, and `write_blocked` 
 
 | Test label | jq expression | PASS condition |
 |---|---|---|
-| `search_logs — count field present` | `.count != null` | Evaluates to `true` |
-| `search_logs — logs field is array` | `.logs \| type` | `"array"` |
-| `search_logs — count is number >= 0` | `.count >= 0` | Evaluates to `true` |
+| `syslog search — count field present` | `.count != null` | Evaluates to `true` |
+| `syslog search — logs field is array` | `.logs \| type` | `"array"` |
+| `syslog search — count is number >= 0` | `.count >= 0` | Evaluates to `true` |
 
 **Conditional tests (only run when `.logs \| length > 0`):**
 
 | Test label | jq expression | PASS condition |
 |---|---|---|
-| `search_logs — log entry has message field` | `.logs[0].message` | Non-null, non-empty |
-| `search_logs — log entry has hostname field` | `.logs[0].hostname` | Non-null, non-empty |
-| `search_logs — log entry has severity field` | `.logs[0].severity` | Non-null, non-empty |
-| `search_logs — log entry has timestamp field` | `.logs[0].timestamp` | Non-null, non-empty |
+| `syslog search — log entry has message field` | `.logs[0].message` | Non-null, non-empty |
+| `syslog search — log entry has hostname field` | `.logs[0].hostname` | Non-null, non-empty |
+| `syslog search — log entry has severity field` | `.logs[0].severity` | Non-null, non-empty |
+| `syslog search — log entry has timestamp field` | `.logs[0].timestamp` | Non-null, non-empty |
 
 **Skipped when:** No logs match the query `"error"`. Skip reason: `"no matching logs (empty DB)"`.
 
-#### Tool: `search_logs` (no query — list recent)
+#### Tool: `syslog search` (no query — list recent)
 
 A second invocation with different arguments, run immediately after the first:
 
@@ -338,14 +332,14 @@ A second invocation with different arguments, run immediately after the first:
 
 | Test label | jq expression | PASS condition |
 |---|---|---|
-| `search_logs (no query) — count field present` | `.count != null` | Evaluates to `true` |
-| `search_logs (no query) — logs field is array` | `.logs \| type` | `"array"` |
+| `syslog search (no query) — count field present` | `.count != null` | Evaluates to `true` |
+| `syslog search (no query) — logs field is array` | `.logs \| type` | `"array"` |
 
 No per-entry field validation on this second call — it only checks the envelope shape.
 
 ---
 
-#### Tool: `get_errors`
+#### Tool: `syslog errors`
 
 **Arguments:** `{"limit": 10}`
 
@@ -355,21 +349,21 @@ No per-entry field validation on this second call — it only checks the envelop
 
 | Test label | jq expression | Expected value |
 |---|---|---|
-| `get_errors — summary field is array` | `.summary \| type` | `"array"` |
+| `syslog errors — summary field is array` | `.summary \| type` | `"array"` |
 
 **Conditional tests (only run when `.summary \| length > 0`):**
 
 | Test label | jq expression | PASS condition |
 |---|---|---|
-| `get_errors — entry has hostname field` | `.summary[0].hostname` | Non-null, non-empty |
-| `get_errors — entry has severity field` | `.summary[0].severity` | Non-null, non-empty |
-| `get_errors — entry has count field` | `.summary[0].count != null` | Evaluates to `true` |
+| `syslog errors — entry has hostname field` | `.summary[0].hostname` | Non-null, non-empty |
+| `syslog errors — entry has severity field` | `.summary[0].severity` | Non-null, non-empty |
+| `syslog errors — entry has count field` | `.summary[0].count != null` | Evaluates to `true` |
 
 **Skipped when:** No error-level logs in the database. Skip reason: `"no error-level logs in DB"`.
 
 ---
 
-#### Tool: `tail_logs`
+#### Tool: `syslog tail`
 
 **Arguments:** `{"n": 10}`
 
@@ -379,24 +373,24 @@ No per-entry field validation on this second call — it only checks the envelop
 
 | Test label | jq expression | PASS condition |
 |---|---|---|
-| `tail_logs — count field present` | `.count != null` | Evaluates to `true` |
-| `tail_logs — logs field is array` | `.logs \| type` | `"array"` |
-| `tail_logs — count is number >= 0` | `.count >= 0` | Evaluates to `true` |
+| `syslog tail — count field present` | `.count != null` | Evaluates to `true` |
+| `syslog tail — logs field is array` | `.logs \| type` | `"array"` |
+| `syslog tail — count is number >= 0` | `.count >= 0` | Evaluates to `true` |
 
 **Conditional tests (only run when `.logs \| length > 0`):**
 
 | Test label | jq expression | PASS condition |
 |---|---|---|
-| `tail_logs — entry has message field` | `.logs[0].message` | Non-null, non-empty |
-| `tail_logs — entry has hostname field` | `.logs[0].hostname` | Non-null, non-empty |
-| `tail_logs — entry has severity field` | `.logs[0].severity` | Non-null, non-empty |
-| `tail_logs — entry has timestamp field` | `.logs[0].timestamp` | Non-null, non-empty |
+| `syslog tail — entry has message field` | `.logs[0].message` | Non-null, non-empty |
+| `syslog tail — entry has hostname field` | `.logs[0].hostname` | Non-null, non-empty |
+| `syslog tail — entry has severity field` | `.logs[0].severity` | Non-null, non-empty |
+| `syslog tail — entry has timestamp field` | `.logs[0].timestamp` | Non-null, non-empty |
 
 **Skipped when:** No logs in database. Skip reason: `"no logs in DB"`.
 
 ---
 
-#### Tool: `correlate_events`
+#### Tool: `syslog correlate`
 
 **Arguments (dynamically built):**
 ```json
@@ -414,15 +408,15 @@ The `reference_time` is generated at test runtime via `date -u +%Y-%m-%dT%H:%M:%
 
 | Test label | jq expression | PASS condition |
 |---|---|---|
-| `correlate_events — reference_time present` | `.reference_time` | Non-null, non-empty |
-| `correlate_events — window_minutes present` | `.window_minutes != null` | Evaluates to `true` |
-| `correlate_events — window_from present` | `.window_from` | Non-null, non-empty |
-| `correlate_events — window_to present` | `.window_to` | Non-null, non-empty |
-| `correlate_events — hosts field is array` | `.hosts \| type` | `"array"` |
-| `correlate_events — total_events >= 0` | `.total_events >= 0` | Evaluates to `true` |
-| `correlate_events — truncated field present` | `.truncated != null` | Evaluates to `true` |
+| `syslog correlate — reference_time present` | `.reference_time` | Non-null, non-empty |
+| `syslog correlate — window_minutes present` | `.window_minutes != null` | Evaluates to `true` |
+| `syslog correlate — window_from present` | `.window_from` | Non-null, non-empty |
+| `syslog correlate — window_to present` | `.window_to` | Non-null, non-empty |
+| `syslog correlate — hosts field is array` | `.hosts \| type` | `"array"` |
+| `syslog correlate — total_events >= 0` | `.total_events >= 0` | Evaluates to `true` |
+| `syslog correlate — truncated field present` | `.truncated != null` | Evaluates to `true` |
 
-All seven assertions are unconditional — `correlate_events` is expected to always return all metadata fields even when the time window contains zero events. The `window_from` and `window_to` fields prove the server computed temporal bounds correctly. The `truncated` field (boolean) proves the pagination logic field is always present regardless of data volume.
+All seven assertions are unconditional — `syslog correlate` is expected to always return all metadata fields even when the time window contains zero events. The `window_from` and `window_to` fields prove the server computed temporal bounds correctly. The `truncated` field (boolean) proves the pagination logic field is always present regardless of data volume.
 
 ---
 
@@ -434,38 +428,38 @@ All seven assertions are unconditional — `correlate_events` is expected to alw
 |---|---|---|
 | `auth: unauthenticated /mcp returns 401` | `SYSLOG_MCP_TOKEN` not set | Auth assumed disabled; enforcing 401 without a configured token is not the server's job |
 | `auth: bad token returns 401` | `SYSLOG_MCP_TOKEN` not set | Same as above |
-| `list_hosts — entry field validation` | `hosts` array is empty | No syslog data has been ingested; empty array is valid |
-| `search_logs — log entry field validation` | No logs matching `"error"` | Empty DB is valid; field shape only verified when data exists |
-| `get_errors — entry field validation` | `summary` array is empty | No error-level logs; empty is valid |
-| `tail_logs — entry field validation` | No logs in DB | Empty DB; field shape only verified when data exists |
+| `syslog hosts — entry field validation` | `hosts` array is empty | No syslog data has been ingested; empty array is valid |
+| `syslog search — log entry field validation` | No logs matching `"error"` | Empty DB is valid; field shape only verified when data exists |
+| `syslog errors — entry field validation` | `summary` array is empty | No error-level logs; empty is valid |
+| `syslog tail — entry field validation` | No logs in DB | Empty DB; field shape only verified when data exists |
 
 ### Operations that are entirely absent from the script
 
-No write operations exist in the syslog-mcp tool surface (it is a read-only server), so there is nothing to exclude on data-safety grounds. The script tests every tool in the `tools/list` surface:
+No write operations exist in the syslog-mcp tool surface (it is a read-only server), so there is nothing to exclude on data-safety grounds. The script tests every action on the `syslog` tool:
 
-| Tool | Tested? |
+| Action | Tested? |
 |---|---|
-| `search_logs` | Yes — two invocations |
-| `tail_logs` | Yes |
-| `get_errors` | Yes |
-| `list_hosts` | Yes |
-| `correlate_events` | Yes |
-| `get_stats` | Yes |
-| `syslog_help` | Yes |
+| `syslog search` | Yes — two invocations |
+| `syslog tail` | Yes |
+| `syslog errors` | Yes |
+| `syslog hosts` | Yes |
+| `syslog correlate` | Yes |
+| `syslog stats` | Yes |
+| `syslog help` | Yes |
 
 ---
 
 ## 6. What "Proving Correct Operation" Means Per Tool
 
-| Tool | What correctness means beyond "responded" |
+| Action | What correctness means beyond "responded" |
 |---|---|
-| `syslog_help` | `.help` is a non-empty string that mentions "syslog" — proves the help content is not empty or boilerplate |
-| `get_stats` | All numeric fields are present AND `>= 0` — proves the DB query ran and returned sensible (not negative) values; `write_blocked` is proven non-null (may be `false`) |
-| `list_hosts` | `.hosts` is a JSON array (not an object or string); if populated, each entry has `hostname`, `log_count`, `first_seen`, `last_seen` — proves the host aggregation query produced correctly shaped rows |
-| `search_logs` | `.count` is numeric `>= 0` and `.logs` is an array; if populated, entries have all four log fields — proves the full-text search plumbing returns correctly shaped log rows |
-| `get_errors` | `.summary` is an array; if populated, entries have `hostname`, `severity`, and `count` — proves the severity-filtered aggregation returns the correct schema |
-| `tail_logs` | `.count >= 0` and `.logs` is an array; if populated, entries have all four log fields — proves the recency ordering query returns correct log rows |
-| `correlate_events` | All seven fields (`reference_time`, `window_minutes`, `window_from`, `window_to`, `hosts`, `total_events`, `truncated`) are present — proves the temporal windowing logic computed bounds and populated all metadata even on an empty window |
+| `syslog help` | `.help` is a non-empty string that mentions "syslog" — proves the help content is not empty or boilerplate |
+| `syslog stats` | All numeric fields are present AND `>= 0` — proves the DB query ran and returned sensible (not negative) values; `write_blocked` is proven non-null (may be `false`) |
+| `syslog hosts` | `.hosts` is a JSON array (not an object or string); if populated, each entry has `hostname`, `log_count`, `first_seen`, `last_seen` — proves the host aggregation query produced correctly shaped rows |
+| `syslog search` | `.count` is numeric `>= 0` and `.logs` is an array; if populated, entries have all four log fields — proves the full-text search plumbing returns correctly shaped log rows |
+| `syslog errors` | `.summary` is an array; if populated, entries have `hostname`, `severity`, and `count` — proves the severity-filtered aggregation returns the correct schema |
+| `syslog tail` | `.count >= 0` and `.logs` is an array; if populated, entries have all four log fields — proves the recency ordering query returns correct log rows |
+| `syslog correlate` | All seven fields (`reference_time`, `window_minutes`, `window_from`, `window_to`, `hosts`, `total_events`, `truncated`) are present — proves the temporal windowing logic computed bounds and populated all metadata even on an empty window |
 
 ---
 

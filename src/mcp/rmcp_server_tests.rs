@@ -125,7 +125,7 @@ fn busy_errors_are_not_validation_errors() {
 }
 
 #[tokio::test]
-async fn rmcp_tools_list_exposes_all_seven_tools() {
+async fn rmcp_tools_list_exposes_one_action_tool() {
     let (state, _pool, _dir) = test_state();
     let (status, response) = post_rmcp(
         rmcp_router(state),
@@ -138,17 +138,8 @@ async fn rmcp_tools_list_exposes_all_seven_tools() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
-    for expected in [
-        "search_logs",
-        "tail_logs",
-        "get_errors",
-        "list_hosts",
-        "correlate_events",
-        "get_stats",
-        "syslog_help",
-    ] {
-        assert!(names.contains(&expected), "missing tool: {expected}");
-    }
+    assert_eq!(names, vec!["syslog"]);
+    assert_eq!(tools[0]["inputSchema"]["required"], json!(["action"]));
 }
 
 #[tokio::test]
@@ -159,7 +150,7 @@ async fn rmcp_get_stats_works_against_temp_db() {
         jsonrpc_request(
             2,
             "tools/call",
-            Some(json!({"name": "get_stats", "arguments": {}})),
+            Some(json!({"name": "syslog", "arguments": {"action": "stats"}})),
         ),
     )
     .await;
@@ -189,7 +180,7 @@ async fn rmcp_search_logs_works_against_seeded_data() {
         jsonrpc_request(
             3,
             "tools/call",
-            Some(json!({"name": "search_logs", "arguments": {"query": "disk", "limit": 5}})),
+            Some(json!({"name": "syslog", "arguments": {"action": "search", "query": "disk", "limit": 5}})),
         ),
     )
     .await;
@@ -207,7 +198,7 @@ async fn rmcp_correlate_events_rejects_bad_reference_time_as_invalid_params() {
         jsonrpc_request(
             4,
             "tools/call",
-            Some(json!({"name": "correlate_events", "arguments": {"reference_time": "bad"}})),
+            Some(json!({"name": "syslog", "arguments": {"action": "correlate", "reference_time": "bad"}})),
         ),
     )
     .await;
@@ -224,8 +215,9 @@ async fn rmcp_correlate_events_rejects_bad_severity_as_invalid_params() {
             5,
             "tools/call",
             Some(json!({
-                "name": "correlate_events",
+                "name": "syslog",
                 "arguments": {
+                    "action": "correlate",
                     "reference_time": "2026-01-01T00:00:00Z",
                     "severity_min": "loud"
                 }
@@ -267,8 +259,9 @@ async fn rmcp_correlate_events_preserves_truncation_and_host_grouping() {
             6,
             "tools/call",
             Some(json!({
-                "name": "correlate_events",
+                "name": "syslog",
                 "arguments": {
+                    "action": "correlate",
                     "reference_time": "2026-01-01T00:00:00Z",
                     "window_minutes": 5,
                     "severity_min": "warning",

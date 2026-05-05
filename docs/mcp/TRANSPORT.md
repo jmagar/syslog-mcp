@@ -138,7 +138,7 @@ Ingestion still requires the daemon to be running somewhere. Stdio mode only que
 }
 ```
 
-SQLite WAL mode supports the normal deployment shape: one daemon writing log batches while one or more query-only stdio child processes read concurrently. `get_stats` reports current storage metrics from the database and configured thresholds; query-only stdio processes do not mutate the shared storage guard state.
+SQLite WAL mode supports the normal deployment shape: one daemon writing log batches while one or more query-only stdio child processes read concurrently. `syslog stats` reports current storage metrics from the database and configured thresholds; query-only stdio processes do not mutate the shared storage guard state.
 
 ## HTTP-to-stdio bridge mode
 

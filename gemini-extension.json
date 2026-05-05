@@ -1,6 +1,6 @@
 {
   "name": "syslog-mcp",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Homelab syslog receiver and MCP server for searching, tailing, and correlating logs across hosts.",
   "mcpServers": {
     "syslog-mcp": {

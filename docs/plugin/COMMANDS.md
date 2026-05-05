@@ -4,7 +4,7 @@ syslog-mcp does not define any slash commands. Tool access is through the MCP pr
 
 ## Why no commands
 
-The 7 MCP tools (search_logs, tail_logs, get_errors, list_hosts, correlate_events, get_stats, syslog_help) are invoked directly by MCP clients. Slash commands would add an unnecessary abstraction layer for a service that is purely a query interface.
+The `syslog` MCP tool and its actions (`search`, `tail`, `errors`, `hosts`, `correlate`, `stats`, `help`) are invoked directly by MCP clients. Slash commands would add an unnecessary abstraction layer for a service that is purely a query interface.
 
 ## See also
 

@@ -8,12 +8,12 @@ MCP resources expose read-only data via URI-based access. Unlike tools, resource
 
 syslog-mcp does not expose any MCP resources. All data access is through the 7 MCP tools:
 
-| Tool | Equivalent resource use case |
+| Action | Equivalent resource use case |
 | --- | --- |
-| `get_stats` | Database status and health metrics |
-| `list_hosts` | Host registry |
-| `tail_logs` | Recent log stream |
-| `search_logs` | Log search and filtering |
+| `syslog stats` | Database status and health metrics |
+| `syslog hosts` | Host registry |
+| `syslog tail` | Recent log stream |
+| `syslog search` | Log search and filtering |
 
 Tools are preferred over resources for syslog-mcp because all queries benefit from parameterized filtering (hostname, severity, time range, FTS5 query) that URI templating cannot express efficiently.
 

@@ -7,15 +7,26 @@ fn tool_definitions_include_expected_public_tools() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
-    for expected in [
-        "search_logs",
-        "tail_logs",
-        "get_errors",
-        "list_hosts",
-        "correlate_events",
-        "get_stats",
-        "syslog_help",
-    ] {
-        assert!(names.contains(&expected), "missing tool: {expected}");
-    }
+    assert_eq!(names, vec!["syslog"]);
+
+    let action = &tools[0]["inputSchema"]["properties"]["action"];
+    assert_eq!(action["type"], "string");
+    let actions: Vec<&str> = action["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap())
+        .collect();
+    assert_eq!(
+        actions,
+        vec![
+            "search",
+            "tail",
+            "errors",
+            "hosts",
+            "correlate",
+            "stats",
+            "help"
+        ]
+    );
 }

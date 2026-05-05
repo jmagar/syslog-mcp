@@ -2,52 +2,47 @@
 
 ## Overview
 
-Tool schemas define the input validation contract for MCP tools. In syslog-mcp, schemas are defined as `serde_json::json!()` objects in `src/mcp/schemas.rs` within the `tool_definitions()` function. These follow JSON Schema conventions.
+syslog-mcp exposes one MCP tool named `syslog`. The required `action` argument selects the operation:
 
-## Schema definition pattern
+- `search`
+- `tail`
+- `errors`
+- `hosts`
+- `correlate`
+- `stats`
+- `help`
 
-Each tool definition is a JSON object with `name`, `description`, and `inputSchema`:
+The schema is defined in `src/mcp/schemas.rs` as a `serde_json::json!()` object returned by `tool_definitions()`.
+
+## Schema Pattern
 
 ```rust
 json!({
-    "name": "search_logs",
-    "description": "Full-text search across all syslog messages...",
+    "name": "syslog",
+    "description": "Query syslog-mcp logs with action-based subcommands...",
     "inputSchema": {
         "type": "object",
         "properties": {
-            "query": {
+            "action": {
                 "type": "string",
-                "description": "FTS5 search query..."
+                "enum": ["search", "tail", "errors", "hosts", "correlate", "stats", "help"]
             },
-            "hostname": {
-                "type": "string",
-                "description": "Filter by hostname..."
-            },
+            "query": { "type": "string" },
+            "hostname": { "type": "string" },
             "severity": {
                 "type": "string",
-                "enum": ["emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"],
-                "description": "Filter by syslog severity level"
+                "enum": ["emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"]
             },
-            "limit": {
-                "type": "integer",
-                "description": "Max results (default 100, max 1000)"
-            }
-        }
+            "limit": { "type": "integer" }
+        },
+        "required": ["action"]
     }
 })
 ```
 
-## Parameter types
+## Response Format
 
-| JSON Schema type | Rust type | Extraction |
-| --- | --- | --- |
-| `"string"` | `Option<String>` | `args.get("key").and_then(\|v\| v.as_str()).map(String::from)` |
-| `"integer"` | `u32` or `u64` | `args.get("key").and_then(\|v\| v.as_u64()).unwrap_or(default)` |
-| `"string"` with `"enum"` | validated string | Checked against known values in handler |
-
-## Response format
-
-All tool responses use MCP text content blocks:
+All tool responses use MCP text content blocks. The `text` field contains pretty-printed JSON:
 
 ```json
 {
@@ -60,44 +55,19 @@ All tool responses use MCP text content blocks:
 }
 ```
 
-The `text` field contains pretty-printed JSON. Error responses add `"isError": true`.
-
-## Database types
-
-Request parameters are deserialized into `db::SearchParams`:
-
-```rust
-pub struct SearchParams {
-    pub query: Option<String>,        // FTS5 query
-    pub hostname: Option<String>,     // Exact match filter
-    pub severity: Option<String>,     // Single severity
-    pub severity_in: Option<Vec<String>>, // Multi-severity (correlate_events)
-    pub app_name: Option<String>,     // App name filter
-    pub from: Option<String>,         // ISO 8601 start
-    pub to: Option<String>,           // ISO 8601 end
-    pub limit: Option<u32>,           // Max results
-}
-```
-
-Response types are serde-serializable structs:
-
-| Struct | Used by |
-| --- | --- |
-| `LogEntry` | search_logs, tail_logs, correlate_events |
-| `ErrorSummaryEntry` | get_errors |
-| `HostEntry` | list_hosts |
-| `DbStats` | get_stats |
+Error responses add `"isError": true` or return an MCP invalid-params error for validation failures.
 
 ## Validation
 
-Input validation happens in the tool handler functions, not at the schema level:
-- `limit` values are capped at their maximum (1000 for search, 500 for tail, 999 for correlate)
-- `severity` is validated against the known severity level list
-- `reference_time` is parsed as RFC 3339 and normalized to UTC
-- `from` and `to` timestamps are parsed and validated for correctness
-- Unknown parameters are silently ignored (JSON object properties are open by default)
+Input validation happens in the action handlers, not only at the schema level:
 
-## See also
+- `action` is required and must be one of the supported actions
+- `limit` values are capped at their action-specific maximum
+- `severity` and `severity_min` are validated against known syslog levels
+- `reference_time`, `from`, and `to` timestamps are parsed as RFC 3339 and normalized to UTC
+- Unknown parameters are ignored
+
+## See Also
 
 - [TOOLS.md](TOOLS.md) -- tool reference with parameters and response shapes
 - [PATTERNS.md](PATTERNS.md) -- code patterns for tool dispatch

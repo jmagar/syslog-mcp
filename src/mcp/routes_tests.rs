@@ -121,17 +121,7 @@ async fn integration_tools_list() {
     assert_eq!(status, StatusCode::OK);
     let tools = value["result"]["tools"].as_array().unwrap();
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-    for expected in [
-        "search_logs",
-        "tail_logs",
-        "get_errors",
-        "list_hosts",
-        "correlate_events",
-        "get_stats",
-        "syslog_help",
-    ] {
-        assert!(names.contains(&expected), "missing tool: {expected}");
-    }
+    assert_eq!(names, vec!["syslog"]);
 }
 
 #[tokio::test]
@@ -140,7 +130,7 @@ async fn integration_get_stats() {
     let body = jsonrpc_request(
         3,
         "tools/call",
-        Some(serde_json::json!({"name": "get_stats", "arguments": {}})),
+        Some(serde_json::json!({"name": "syslog", "arguments": {"action": "stats"}})),
     );
     let (status, value) = mcp_post(router(h.state), body, None).await;
     assert_eq!(status, StatusCode::OK);
@@ -157,7 +147,7 @@ async fn integration_tail_logs_empty_db() {
     let body = jsonrpc_request(
         4,
         "tools/call",
-        Some(serde_json::json!({"name": "tail_logs", "arguments": {"n": 10}})),
+        Some(serde_json::json!({"name": "syslog", "arguments": {"action": "tail", "n": 10}})),
     );
     let (status, value) = mcp_post(router(h.state), body, None).await;
     assert_eq!(status, StatusCode::OK);
@@ -171,7 +161,7 @@ async fn integration_search_logs_empty_db() {
         5,
         "tools/call",
         Some(
-            serde_json::json!({"name": "search_logs", "arguments": {"query": "error", "limit": 5}}),
+            serde_json::json!({"name": "syslog", "arguments": {"action": "search", "query": "error", "limit": 5}}),
         ),
     );
     let (status, value) = mcp_post(router(h.state), body, None).await;

@@ -166,6 +166,7 @@ fn is_validation_error(error: &anyhow::Error) -> bool {
         Some(ServiceError::InvalidInput(_))
     ) || error.to_string().contains(" is required")
         || error.to_string().contains(" must be <=")
+        || error.to_string().contains("unknown syslog action")
 }
 
 fn safe_result_count(value: &Value) -> Option<usize> {

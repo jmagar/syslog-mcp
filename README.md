@@ -24,9 +24,9 @@ The daemon listens on a single port for both UDP and TCP syslog (default `1514`)
 
 ## Tools
 
-Seven MCP tools are exposed.
+One MCP tool, `syslog`, is exposed. Use the required `action` argument to run `search`, `tail`, `errors`, `hosts`, `correlate`, `stats`, or `help`.
 
-### `search_logs`
+### `syslog search`
 
 Full-text search across all syslog messages with optional filters. Uses SQLite FTS5 with porter stemming.
 
@@ -35,7 +35,7 @@ Full-text search across all syslog messages with optional filters. Uses SQLite F
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `query` | string | no | — | FTS5 search query (see [FTS5 query syntax](#fts5-query-syntax)) |
-| `hostname` | string | no | — | Exact hostname match. Use `list_hosts` to enumerate. |
+| `hostname` | string | no | — | Exact hostname match. Use `syslog` with `action: "hosts"` to enumerate. |
 | `source_ip` | string | no | — | Exact source identifier. Syslog entries use the verified network sender address (`IP:port`); Docker ingest entries use `docker://host/container/stream` from configured ingest metadata. |
 | `severity` | string | no | — | One of: `emerg alert crit err warning notice info debug` |
 | `app_name` | string | no | — | Application name, e.g. `sshd`, `dockerd`, `kernel` |
@@ -79,7 +79,7 @@ query: "restart*"              # matches restart, restarted, restarting
 
 ---
 
-### `tail_logs`
+### `syslog tail`
 
 Return the N most recent log entries. Equivalent to `tail -f` across all hosts.
 
@@ -94,11 +94,11 @@ Return the N most recent log entries. Equivalent to `tail -f` across all hosts.
 
 **Response**
 
-Same structure as `search_logs`: `{ "count": N, "logs": [...] }`.
+Same structure as `syslog search`: `{ "count": N, "logs": [...] }`.
 
 ---
 
-### `get_errors`
+### `syslog errors`
 
 Summarize warnings and errors across all hosts in a time window. Groups by hostname and severity, showing counts. Use this for quick health assessments.
 
@@ -125,7 +125,7 @@ Severities included: `emerg`, `alert`, `crit`, `err`, `warning`.
 
 ---
 
-### `list_hosts`
+### `syslog hosts`
 
 List all hosts that have sent syslog messages, with first/last seen timestamps and total log counts.
 
@@ -148,7 +148,7 @@ List all hosts that have sent syslog messages, with first/last seen timestamps a
 
 ---
 
-### `correlate_events`
+### `syslog correlate`
 
 Search for related events across multiple hosts within a ±N minute window around a reference timestamp. Useful for debugging cascading failures. Results are grouped by host and ordered by time.
 
@@ -186,11 +186,11 @@ Search for related events across multiple hosts within a ±N minute window aroun
 }
 ```
 
-**Note on clock skew:** `correlate_events` uses the `timestamp` field from the syslog message, which reflects the sending device's clock. If a device clock is skewed, events may fall outside the correlation window. See [Time synchronization](#time-synchronization).
+**Note on clock skew:** `syslog correlate` uses the `timestamp` field from the syslog message, which reflects the sending device's clock. If a device clock is skewed, events may fall outside the correlation window. See [Time synchronization](#time-synchronization).
 
 ---
 
-### `get_stats`
+### `syslog stats`
 
 Return database statistics including total logs, total hosts, time range covered, logical and physical DB size, free disk, configured thresholds, and current write-block status.
 
@@ -217,7 +217,7 @@ Return database statistics including total logs, total hosts, time range covered
 
 ---
 
-### `syslog_help`
+### `syslog help`
 
 Return markdown documentation for all tools in this toolset.
 
@@ -227,7 +227,7 @@ Return markdown documentation for all tools in this toolset.
 
 ## FTS5 Query Syntax
 
-The `search_logs` and `correlate_events` tools use SQLite FTS5 with porter stemming (`tokenize='porter unicode61'`). Valid query forms:
+The `syslog search` and `syslog correlate` actions use SQLite FTS5 with porter stemming (`tokenize='porter unicode61'`). Valid query forms:
 
 | Syntax | Example | Matches |
 |--------|---------|---------|
@@ -605,7 +605,7 @@ When available disk drops below `min_free_disk_mb`, the oldest logs are deleted 
 
 **Write-blocking behavior**
 
-If enforcement cannot free enough space (e.g. the DB is empty but storage is still over limit), the batch writer enters write-blocked state. New log messages accumulate in an in-memory buffer (channel capacity 10,000 messages). Writes resume automatically when space recovers. The `write_blocked` field in `get_stats` reflects the current state.
+If enforcement cannot free enough space (e.g. the DB is empty but storage is still over limit), the batch writer enters write-blocked state. New log messages accumulate in an in-memory buffer (channel capacity 10,000 messages). Writes resume automatically when space recovers. The `write_blocked` field in `syslog stats` reflects the current state.
 
 Disable either guard by setting its trigger to `0` (also set the recovery target to `0`).
 
@@ -628,7 +628,7 @@ The internal write channel holds up to 10,000 parsed messages. When the channel 
 
 ## Multi-Host Deployment
 
-Point multiple hosts at the same syslog-mcp instance. Each sender's `hostname` field (from the syslog message) is recorded and indexed. Use `list_hosts` to see all senders. Filter by `hostname` in `search_logs` and `tail_logs`. Use `correlate_events` to find related events across hosts within a time window.
+Point multiple hosts at the same syslog-mcp instance. Each sender's `hostname` field (from the syslog message) is recorded and indexed. Use `syslog hosts` to see all senders. Filter by `hostname` in `syslog search` and `syslog tail`. Use `syslog correlate` to find related events across hosts within a time window.
 
 For large fleets, consider:
 - Increasing `SYSLOG_MCP_POOL_SIZE` (default 4) for higher read concurrency
@@ -639,7 +639,7 @@ For large fleets, consider:
 
 ## Time Synchronization
 
-All timestamps are stored in UTC. `correlate_events` uses the `timestamp` field from the syslog message, which reflects the sending device's clock. Devices with drifted clocks will have their events shifted relative to the correlation window. Run NTP on all senders to minimize skew. `received_at` (the server-side ingestion time) is unaffected by sender clock drift and is used for retention.
+All timestamps are stored in UTC. `syslog correlate` uses the `timestamp` field from the syslog message, which reflects the sending device's clock. Devices with drifted clocks will have their events shifted relative to the correlation window. Run NTP on all senders to minimize skew. `received_at` (the server-side ingestion time) is unaffected by sender clock drift and is used for retention.
 
 ---
 
@@ -722,10 +722,10 @@ curl -s -X POST http://localhost:3100/mcp \
   -d '{
     "jsonrpc": "2.0",
     "id": 1,
-    "method": "tools/call",
-    "params": {
-      "name": "tail_logs",
-      "arguments": {"n": 10}
+      "method": "tools/call",
+      "params": {
+      "name": "syslog",
+      "arguments": {"action": "tail", "n": 10}
     }
   }' | jq .
 
@@ -738,7 +738,7 @@ curl -s -X POST http://localhost:3100/mcp \
     "jsonrpc": "2.0",
     "id": 2,
     "method": "tools/call",
-    "params": {"name": "get_stats", "arguments": {}}
+    "params": {"name": "syslog", "arguments": {"action": "stats"}}
   }' | jq .result.content[0].text | jq -r . | jq .
 ```
 

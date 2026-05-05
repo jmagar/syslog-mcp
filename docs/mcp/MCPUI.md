@@ -48,12 +48,12 @@ Tool responses return JSON as text content. Clients render this according to the
 
 If MCP UI annotations are adopted:
 
-| Tool | Possible UI hint |
+| Action | Possible UI hint |
 | --- | --- |
-| `search_logs` | Multi-line text input for query, datetime pickers for from/to |
-| `tail_logs` | Slider for n parameter |
-| `correlate_events` | Datetime picker for reference_time, slider for window_minutes |
-| `get_errors` | Datetime range picker |
+| `syslog search` | Multi-line text input for query, datetime pickers for from/to |
+| `syslog tail` | Slider for n parameter |
+| `syslog correlate` | Datetime picker for reference_time, slider for window_minutes |
+| `syslog errors` | Datetime range picker |
 
 ## See also
 

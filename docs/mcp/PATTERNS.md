@@ -2,26 +2,35 @@
 
 Reusable patterns in the syslog-mcp implementation.
 
-## Flat tool dispatch
+## Action-Based Tool Dispatch
 
-syslog-mcp uses a flat match on tool name rather than an action/subaction router:
+syslog-mcp exposes one public MCP tool, `syslog`, and dispatches on the required
+`action` argument:
 
 ```rust
 async fn execute_tool(state: &AppState, name: &str, args: Value) -> anyhow::Result<Value> {
     match name {
-        "search_logs" => tool_search_logs(state, args).await,
-        "tail_logs" => tool_tail_logs(state, args).await,
-        "get_errors" => tool_get_errors(state, args).await,
-        "list_hosts" => tool_list_hosts(state, args).await,
-        "correlate_events" => tool_correlate_events(state, args).await,
-        "get_stats" => tool_get_stats(state, args).await,
-        "syslog_help" => tool_syslog_help().await,
+        "syslog" => tool_syslog(state, args).await,
         _ => Err(anyhow::anyhow!("Unknown tool: {name}")),
+    }
+}
+
+async fn tool_syslog(state: &AppState, args: Value) -> anyhow::Result<Value> {
+    match string_arg(&args, "action").as_deref() {
+        Some("search") => tool_search_logs(state, args).await,
+        Some("tail") => tool_tail_logs(state, args).await,
+        Some("errors") => tool_get_errors(state, args).await,
+        Some("hosts") => tool_list_hosts(state, args).await,
+        Some("correlate") => tool_correlate_events(state, args).await,
+        Some("stats") => tool_get_stats(state, args).await,
+        Some("help") => tool_syslog_help().await,
+        _ => Err(anyhow::anyhow!("action is required")),
     }
 }
 ```
 
-This pattern is appropriate when each tool has distinct parameters and behavior. The action/subaction router is better when tools share CRUD patterns on multiple resource types.
+This keeps the client-facing tool list compact while preserving separate private
+handlers for each action.
 
 ## Shared SyslogService boundary
 

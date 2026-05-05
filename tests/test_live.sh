@@ -358,15 +358,7 @@ phase_auth() {
 phase_protocol() {
   section "Phase 3 — Protocol"
 
-  local expected_tools=(
-    "search_logs"
-    "tail_logs"
-    "get_errors"
-    "list_hosts"
-    "correlate_events"
-    "get_stats"
-    "syslog_help"
-  )
+  local expected_tools=("syslog")
 
   # initialize
   local init_resp
@@ -383,10 +375,10 @@ phase_protocol() {
   local tool_count
   tool_count="$(printf '%s' "${list_resp}" | jq '.result.tools | length' 2>/dev/null)" || tool_count=0
 
-  if [[ "${tool_count}" -ge 7 ]]; then
-    _pass "tools/list — returns ${tool_count} tools (expected 7)"
+  if [[ "${tool_count}" -eq 1 ]]; then
+    _pass "tools/list — returns ${tool_count} tool (expected 1)"
   else
-    _fail "tools/list — returns ${tool_count} tools (expected 7)"
+    _fail "tools/list — returns ${tool_count} tools (expected 1)"
   fi
 
   # Verify each expected tool is present by name
@@ -408,128 +400,128 @@ phase_protocol() {
 phase_tools() {
   section "Phase 4 — Tool calls"
 
-  # --- syslog_help ---
-  section "  syslog_help"
+  # --- syslog help ---
+  section "  syslog help"
   local help_result
-  help_result="$(call_tool syslog_help '{}')" || help_result=""
+  help_result="$(call_tool syslog '{"action":"help"}')" || help_result=""
 
-  assert_jq "syslog_help — help field present"          "${help_result}" '.help'
-  assert_jq "syslog_help — help text is non-empty"      "${help_result}" '.help | length > 0'
-  assert_jq "syslog_help — help text contains 'syslog'" "${help_result}" '.help | ascii_downcase | contains("syslog")'
+  assert_jq "syslog help — help field present"          "${help_result}" '.help'
+  assert_jq "syslog help — help text is non-empty"      "${help_result}" '.help | length > 0'
+  assert_jq "syslog help — help text contains 'syslog'" "${help_result}" '.help | ascii_downcase | contains("syslog")'
 
-  # --- get_stats ---
-  section "  get_stats"
+  # --- syslog stats ---
+  section "  syslog stats"
   local stats_result
-  stats_result="$(call_tool get_stats '{}')" || stats_result=""
+  stats_result="$(call_tool syslog '{"action":"stats"}')" || stats_result=""
 
-  assert_jq "get_stats — total_logs field present"         "${stats_result}" '.total_logs != null'
-  assert_jq "get_stats — total_hosts field present"        "${stats_result}" '.total_hosts != null'
-  assert_jq "get_stats — logical_db_size_mb present"       "${stats_result}" '.logical_db_size_mb'
-  assert_jq "get_stats — physical_db_size_mb present"      "${stats_result}" '.physical_db_size_mb'
-  assert_jq "get_stats — write_blocked field present"      "${stats_result}" '.write_blocked != null'
-  assert_jq "get_stats — total_logs is a number >= 0"      "${stats_result}" '.total_logs >= 0'
-  assert_jq "get_stats — total_hosts is a number >= 0"     "${stats_result}" '.total_hosts >= 0'
+  assert_jq "syslog stats — total_logs field present"         "${stats_result}" '.total_logs != null'
+  assert_jq "syslog stats — total_hosts field present"        "${stats_result}" '.total_hosts != null'
+  assert_jq "syslog stats — logical_db_size_mb present"       "${stats_result}" '.logical_db_size_mb'
+  assert_jq "syslog stats — physical_db_size_mb present"      "${stats_result}" '.physical_db_size_mb'
+  assert_jq "syslog stats — write_blocked field present"      "${stats_result}" '.write_blocked != null'
+  assert_jq "syslog stats — total_logs is a number >= 0"      "${stats_result}" '.total_logs >= 0'
+  assert_jq "syslog stats — total_hosts is a number >= 0"     "${stats_result}" '.total_hosts >= 0'
 
-  # --- list_hosts ---
-  section "  list_hosts"
+  # --- syslog hosts ---
+  section "  syslog hosts"
   local hosts_result
-  hosts_result="$(call_tool list_hosts '{}')" || hosts_result=""
+  hosts_result="$(call_tool syslog '{"action":"hosts"}')" || hosts_result=""
 
-  assert_jq "list_hosts — hosts field is an array"       "${hosts_result}" '.hosts | type' "array"
+  assert_jq "syslog hosts — hosts field is an array"       "${hosts_result}" '.hosts | type' "array"
 
   # Structure check (only if hosts are present — may be empty in CI with no syslog data)
   local host_count
   host_count="$(printf '%s' "${hosts_result}" | jq '.hosts | length' 2>/dev/null)" || host_count=0
 
   if [[ "${host_count}" -gt 0 ]]; then
-    assert_jq "list_hosts — entry has hostname field"  "${hosts_result}" '.hosts[0].hostname'
-    assert_jq "list_hosts — entry has log_count field" "${hosts_result}" '.hosts[0].log_count != null'
-    assert_jq "list_hosts — entry has first_seen field" "${hosts_result}" '.hosts[0].first_seen'
-    assert_jq "list_hosts — entry has last_seen field"  "${hosts_result}" '.hosts[0].last_seen'
+    assert_jq "syslog hosts — entry has hostname field"  "${hosts_result}" '.hosts[0].hostname'
+    assert_jq "syslog hosts — entry has log_count field" "${hosts_result}" '.hosts[0].log_count != null'
+    assert_jq "syslog hosts — entry has first_seen field" "${hosts_result}" '.hosts[0].first_seen'
+    assert_jq "syslog hosts — entry has last_seen field"  "${hosts_result}" '.hosts[0].last_seen'
   else
-    _skip "list_hosts — entry field validation" "no hosts in DB (no syslog data ingested)"
+    _skip "syslog hosts — entry field validation" "no hosts in DB (no syslog data ingested)"
   fi
 
-  # --- search_logs ---
-  section "  search_logs"
+  # --- syslog search ---
+  section "  syslog search"
   local search_result
-  search_result="$(call_tool search_logs '{"query":"error","limit":10}')" || search_result=""
+  search_result="$(call_tool syslog '{"action":"search","query":"error","limit":10}')" || search_result=""
 
-  assert_jq "search_logs — count field present"   "${search_result}" '.count != null'
-  assert_jq "search_logs — logs field is array"   "${search_result}" '.logs | type' "array"
-  assert_jq "search_logs — count is number >= 0"  "${search_result}" '.count >= 0'
+  assert_jq "syslog search — count field present"   "${search_result}" '.count != null'
+  assert_jq "syslog search — logs field is array"   "${search_result}" '.logs | type' "array"
+  assert_jq "syslog search — count is number >= 0"  "${search_result}" '.count >= 0'
 
   local log_count
   log_count="$(printf '%s' "${search_result}" | jq '.logs | length' 2>/dev/null)" || log_count=0
   if [[ "${log_count}" -gt 0 ]]; then
-    assert_jq "search_logs — log entry has message field"   "${search_result}" '.logs[0].message'
-    assert_jq "search_logs — log entry has hostname field"  "${search_result}" '.logs[0].hostname'
-    assert_jq "search_logs — log entry has severity field"  "${search_result}" '.logs[0].severity'
-    assert_jq "search_logs — log entry has timestamp field" "${search_result}" '.logs[0].timestamp'
+    assert_jq "syslog search — log entry has message field"   "${search_result}" '.logs[0].message'
+    assert_jq "syslog search — log entry has hostname field"  "${search_result}" '.logs[0].hostname'
+    assert_jq "syslog search — log entry has severity field"  "${search_result}" '.logs[0].severity'
+    assert_jq "syslog search — log entry has timestamp field" "${search_result}" '.logs[0].timestamp'
   else
-    _skip "search_logs — log entry field validation" "no matching logs (empty DB)"
+    _skip "syslog search — log entry field validation" "no matching logs (empty DB)"
   fi
 
-  # search_logs with no query (list recent)
+  # syslog search with no query (list recent)
   local search_noq
-  search_noq="$(call_tool search_logs '{"limit":5}')" || search_noq=""
-  assert_jq "search_logs (no query) — count field present" "${search_noq}" '.count != null'
-  assert_jq "search_logs (no query) — logs field is array" "${search_noq}" '.logs | type' "array"
+  search_noq="$(call_tool syslog '{"action":"search","limit":5}')" || search_noq=""
+  assert_jq "syslog search (no query) — count field present" "${search_noq}" '.count != null'
+  assert_jq "syslog search (no query) — logs field is array" "${search_noq}" '.logs | type' "array"
 
-  # --- get_errors ---
-  section "  get_errors"
+  # --- syslog errors ---
+  section "  syslog errors"
   local errors_result
-  errors_result="$(call_tool get_errors '{"limit":10}')" || errors_result=""
+  errors_result="$(call_tool syslog '{"action":"errors"}')" || errors_result=""
 
-  assert_jq "get_errors — summary field is array" "${errors_result}" '.summary | type' "array"
+  assert_jq "syslog errors — summary field is array" "${errors_result}" '.summary | type' "array"
 
   local err_count
   err_count="$(printf '%s' "${errors_result}" | jq '.summary | length' 2>/dev/null)" || err_count=0
   if [[ "${err_count}" -gt 0 ]]; then
-    assert_jq "get_errors — entry has hostname field" "${errors_result}" '.summary[0].hostname'
-    assert_jq "get_errors — entry has severity field" "${errors_result}" '.summary[0].severity'
-    assert_jq "get_errors — entry has count field"    "${errors_result}" '.summary[0].count != null'
+    assert_jq "syslog errors — entry has hostname field" "${errors_result}" '.summary[0].hostname'
+    assert_jq "syslog errors — entry has severity field" "${errors_result}" '.summary[0].severity'
+    assert_jq "syslog errors — entry has count field"    "${errors_result}" '.summary[0].count != null'
   else
-    _skip "get_errors — entry field validation" "no error-level logs in DB"
+    _skip "syslog errors — entry field validation" "no error-level logs in DB"
   fi
 
-  # --- tail_logs ---
-  section "  tail_logs"
+  # --- syslog tail ---
+  section "  syslog tail"
   local tail_result
-  tail_result="$(call_tool tail_logs '{"n":10}')" || tail_result=""
+  tail_result="$(call_tool syslog '{"action":"tail","n":10}')" || tail_result=""
 
-  assert_jq "tail_logs — count field present"   "${tail_result}" '.count != null'
-  assert_jq "tail_logs — logs field is array"   "${tail_result}" '.logs | type' "array"
-  assert_jq "tail_logs — count is number >= 0"  "${tail_result}" '.count >= 0'
+  assert_jq "syslog tail — count field present"   "${tail_result}" '.count != null'
+  assert_jq "syslog tail — logs field is array"   "${tail_result}" '.logs | type' "array"
+  assert_jq "syslog tail — count is number >= 0"  "${tail_result}" '.count >= 0'
 
   local tail_count
   tail_count="$(printf '%s' "${tail_result}" | jq '.logs | length' 2>/dev/null)" || tail_count=0
   if [[ "${tail_count}" -gt 0 ]]; then
-    assert_jq "tail_logs — entry has message field"   "${tail_result}" '.logs[0].message'
-    assert_jq "tail_logs — entry has hostname field"  "${tail_result}" '.logs[0].hostname'
-    assert_jq "tail_logs — entry has severity field"  "${tail_result}" '.logs[0].severity'
-    assert_jq "tail_logs — entry has timestamp field" "${tail_result}" '.logs[0].timestamp'
+    assert_jq "syslog tail — entry has message field"   "${tail_result}" '.logs[0].message'
+    assert_jq "syslog tail — entry has hostname field"  "${tail_result}" '.logs[0].hostname'
+    assert_jq "syslog tail — entry has severity field"  "${tail_result}" '.logs[0].severity'
+    assert_jq "syslog tail — entry has timestamp field" "${tail_result}" '.logs[0].timestamp'
   else
-    _skip "tail_logs — entry field validation" "no logs in DB"
+    _skip "syslog tail — entry field validation" "no logs in DB"
   fi
 
-  # --- correlate_events ---
-  section "  correlate_events"
+  # --- syslog correlate ---
+  section "  syslog correlate"
   local ref_time
   ref_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
   local correlate_result
-  correlate_result="$(call_tool correlate_events \
-    "$(jq -nc --arg t "${ref_time}" '{"reference_time":$t,"window_minutes":5,"severity_min":"debug","limit":50}')")" \
+  correlate_result="$(call_tool syslog \
+    "$(jq -nc --arg t "${ref_time}" '{"action":"correlate","reference_time":$t,"window_minutes":5,"severity_min":"debug","limit":50}')")" \
     || correlate_result=""
 
-  assert_jq "correlate_events — reference_time present"  "${correlate_result}" '.reference_time'
-  assert_jq "correlate_events — window_minutes present"  "${correlate_result}" '.window_minutes != null'
-  assert_jq "correlate_events — window_from present"     "${correlate_result}" '.window_from'
-  assert_jq "correlate_events — window_to present"       "${correlate_result}" '.window_to'
-  assert_jq "correlate_events — hosts field is array"    "${correlate_result}" '.hosts | type' "array"
-  assert_jq "correlate_events — total_events >= 0"       "${correlate_result}" '.total_events >= 0'
-  assert_jq "correlate_events — truncated field present" "${correlate_result}" '.truncated != null'
+  assert_jq "syslog correlate — reference_time present"  "${correlate_result}" '.reference_time'
+  assert_jq "syslog correlate — window_minutes present"  "${correlate_result}" '.window_minutes != null'
+  assert_jq "syslog correlate — window_from present"     "${correlate_result}" '.window_from'
+  assert_jq "syslog correlate — window_to present"       "${correlate_result}" '.window_to'
+  assert_jq "syslog correlate — hosts field is array"    "${correlate_result}" '.hosts | type' "array"
+  assert_jq "syslog correlate — total_events >= 0"       "${correlate_result}" '.total_events >= 0'
+  assert_jq "syslog correlate — truncated field present" "${correlate_result}" '.truncated != null'
 }
 
 # ---------------------------------------------------------------------------

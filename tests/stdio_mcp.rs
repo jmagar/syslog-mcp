@@ -50,20 +50,13 @@ async fn stdio_child_process_lists_tools_and_calls_queries() {
 
     let tools = service.list_tools(Default::default()).await.unwrap();
     let names: Vec<&str> = tools.tools.iter().map(|tool| tool.name.as_ref()).collect();
-    for expected in [
-        "search_logs",
-        "tail_logs",
-        "get_errors",
-        "list_hosts",
-        "correlate_events",
-        "get_stats",
-        "syslog_help",
-    ] {
-        assert!(names.contains(&expected), "missing stdio tool: {expected}");
-    }
+    assert_eq!(names, vec!["syslog"]);
 
     let stats = service
-        .call_tool(CallToolRequestParams::new("get_stats"))
+        .call_tool(
+            CallToolRequestParams::new("syslog")
+                .with_arguments(json!({"action": "stats"}).as_object().unwrap().clone()),
+        )
         .await
         .unwrap();
     let stats = text_content_json(&stats);
@@ -71,8 +64,8 @@ async fn stdio_child_process_lists_tools_and_calls_queries() {
 
     let search = service
         .call_tool(
-            CallToolRequestParams::new("search_logs").with_arguments(
-                json!({"query": "disk", "limit": 5})
+            CallToolRequestParams::new("syslog").with_arguments(
+                json!({"action": "search", "query": "disk", "limit": 5})
                     .as_object()
                     .unwrap()
                     .clone(),

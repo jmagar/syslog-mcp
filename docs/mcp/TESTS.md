@@ -39,7 +39,7 @@ just test-live
 # or: bash tests/test_live.sh
 ```
 
-The smoke test (`bin/smoke-test.sh`) exercises all 7 MCP tools via mcporter with 25 assertions.
+The smoke test (`bin/smoke-test.sh`) exercises all `syslog` actions via mcporter.
 
 ### mcporter-based testing
 
@@ -47,11 +47,11 @@ The smoke test (`bin/smoke-test.sh`) exercises all 7 MCP tools via mcporter with
 # List available tools
 mcporter list syslog-mcp --config config/mcporter.json
 
-# Call individual tools
-mcporter call --config config/mcporter.json syslog-mcp.get_stats
-mcporter call --config config/mcporter.json syslog-mcp.tail_logs n=10
-mcporter call --config config/mcporter.json syslog-mcp.search_logs query=error limit=5
-mcporter call --config config/mcporter.json syslog-mcp.list_hosts
+# Call actions through the single syslog tool
+mcporter call --config config/mcporter.json syslog-mcp.syslog action=stats
+mcporter call --config config/mcporter.json syslog-mcp.syslog action=tail n=10
+mcporter call --config config/mcporter.json syslog-mcp.syslog action=search query=error limit=5
+mcporter call --config config/mcporter.json syslog-mcp.syslog action=hosts
 ```
 
 ### curl-based testing
@@ -64,24 +64,24 @@ curl http://localhost:3100/health
 curl -s -X POST http://localhost:3100/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"tail_logs","arguments":{"n":10}}}'
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"syslog","arguments":{"action":"tail","n":10}}}'
 
 # Search
 curl -s -X POST http://localhost:3100/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_logs","arguments":{"query":"error","limit":5}}}'
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"syslog","arguments":{"action":"search","query":"error","limit":5}}}'
 
 # Stats
 curl -s -X POST http://localhost:3100/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_stats","arguments":{}}}'
+  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"syslog","arguments":{"action":"stats"}}}'
 ```
 
 ## Testing checklist
 
-- [ ] **All tools return expected shape** -- search_logs, tail_logs, get_errors, list_hosts, correlate_events, get_stats, syslog_help
+- [ ] **All actions return expected shape** -- syslog search, syslog tail, syslog errors, syslog hosts, syslog correlate, syslog stats, syslog help
 - [ ] **Auth: valid token** -- 200 with correct Bearer token
 - [ ] **Auth: invalid token** -- 401 Unauthorized
 - [ ] **Auth: no token when required** -- 401 Unauthorized

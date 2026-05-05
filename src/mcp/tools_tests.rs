@@ -52,19 +52,41 @@ async fn tool_get_stats_returns_storage_guard_fields() {
 #[tokio::test]
 async fn numeric_args_reject_out_of_range_values() {
     let h = TestHarness::new();
-    let err = execute_tool(&h.state, "tail_logs", json!({"n": u64::from(u32::MAX) + 1}))
-        .await
-        .unwrap_err();
+    let err = execute_tool(
+        &h.state,
+        "syslog",
+        json!({"action": "tail", "n": u64::from(u32::MAX) + 1}),
+    )
+    .await
+    .unwrap_err();
     assert!(err.to_string().contains("n must be <="));
 }
 
 #[tokio::test]
 async fn numeric_args_preserve_lenient_wrong_type_behavior() {
     let h = TestHarness::new();
-    let value = execute_tool(&h.state, "tail_logs", json!({"n": "not-a-number"}))
-        .await
-        .unwrap();
+    let value = execute_tool(
+        &h.state,
+        "syslog",
+        json!({"action": "tail", "n": "not-a-number"}),
+    )
+    .await
+    .unwrap();
     assert_eq!(value["count"], 0);
+}
+
+#[tokio::test]
+async fn syslog_tool_requires_known_action() {
+    let h = TestHarness::new();
+    let missing = execute_tool(&h.state, "syslog", json!({}))
+        .await
+        .unwrap_err();
+    assert!(missing.to_string().contains("action is required"));
+
+    let unknown = execute_tool(&h.state, "syslog", json!({"action": "reboot"}))
+        .await
+        .unwrap_err();
+    assert!(unknown.to_string().contains("unknown syslog action"));
 }
 
 #[test]

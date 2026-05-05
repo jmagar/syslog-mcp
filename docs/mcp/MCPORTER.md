@@ -46,34 +46,34 @@ mcporter config is at `config/mcporter.json`:
 # List available tools
 mcporter list syslog-mcp --config config/mcporter.json
 
-# Call tools
-mcporter call --config config/mcporter.json syslog-mcp.get_stats
-mcporter call --config config/mcporter.json syslog-mcp.tail_logs n=10
-mcporter call --config config/mcporter.json syslog-mcp.search_logs query=error limit=5
-mcporter call --config config/mcporter.json syslog-mcp.list_hosts
-mcporter call --config config/mcporter.json syslog-mcp.get_errors
-mcporter call --config config/mcporter.json syslog-mcp.syslog_help
+# Call actions through the single syslog tool
+mcporter call --config config/mcporter.json syslog-mcp.syslog action=stats
+mcporter call --config config/mcporter.json syslog-mcp.syslog action=tail n=10
+mcporter call --config config/mcporter.json syslog-mcp.syslog action=search query=error limit=5
+mcporter call --config config/mcporter.json syslog-mcp.syslog action=hosts
+mcporter call --config config/mcporter.json syslog-mcp.syslog action=errors
+mcporter call --config config/mcporter.json syslog-mcp.syslog action=help
 ```
 
 ## Test assertions
 
 The smoke test validates:
 - Health endpoint returns `{"status": "ok"}`
-- All 7 tools return valid JSON responses
-- `search_logs` returns expected `count` and `logs` fields
-- `tail_logs` respects the `n` parameter
-- `get_errors` returns `summary` array
-- `list_hosts` returns `hosts` array
-- `correlate_events` returns `hosts` grouped by hostname
-- `get_stats` returns numeric fields (total_logs, total_hosts, etc.)
-- `syslog_help` returns non-empty markdown text
+- The single `syslog` tool is listed
+- `syslog search` returns expected `count` and `logs` fields
+- `syslog tail` respects the `n` parameter
+- `syslog errors` returns `summary` array
+- `syslog hosts` returns `hosts` array
+- `syslog correlate` returns `hosts` grouped by hostname
+- `syslog stats` returns numeric fields (total_logs, total_hosts, etc.)
+- `syslog help` returns non-empty markdown text
 
 ## Failure output
 
 ```
   PASS: health endpoint returns ok
-  PASS: search_logs returns count field
-  FAIL: tail_logs count should be <= 10, got 50
+  PASS: syslog search returns count field
+  FAIL: syslog tail count should be <= 10, got 50
   ---
   25 assertions: 24 PASS, 1 FAIL
 ```

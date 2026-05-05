@@ -2,9 +2,9 @@
 # =============================================================================
 # test-tools.sh — Integration smoke-test for syslog-mcp MCP server tools
 #
-# Exercises broad non-destructive coverage of all syslog-mcp tools via HTTP:
-#   search_logs, tail_logs, get_errors, list_hosts, correlate_events,
-#   get_stats, syslog_help
+# Exercises broad non-destructive coverage of the action-based syslog MCP tool:
+#   syslog search, syslog tail, syslog errors, syslog hosts, syslog correlate,
+#   syslog stats, syslog help
 #
 # The server runs as a Docker container over HTTP. No stdio launch needed.
 # Credentials are sourced from ~/.claude-homelab/.env:
@@ -230,7 +230,7 @@ print(len(tools))
   )" || tool_count=0
 
   if [[ "${tool_count}" -lt 1 ]] 2>/dev/null; then
-    log_error "tools/list returned ${tool_count} tools — expected at least 7"
+    log_error "tools/list returned ${tool_count} tools — expected at least 1"
     return 2
   fi
 
@@ -244,7 +244,29 @@ print(len(tools))
 # ---------------------------------------------------------------------------
 mcporter_call() {
   local tool="${1:?tool required}"
-  local args_json="${2:?args_json required}"
+  shift
+  local args_json="${1:?args_json required}"
+  local action=''
+
+  if [[ "${tool}" == "syslog" && "${args_json}" != \{* ]]; then
+    action="${args_json}"
+    args_json="${2:?args_json required}"
+  else
+    case "${tool}" in
+      search_logs) action='search' ;;
+      tail_logs) action='tail' ;;
+      get_errors) action='errors' ;;
+      list_hosts) action='hosts' ;;
+      correlate_events) action='correlate' ;;
+      get_stats) action='stats' ;;
+      syslog_help) action='help' ;;
+    esac
+  fi
+
+  if [[ -n "${action}" ]]; then
+    args_json="$(printf '%s' "${args_json}" | jq -c --arg action "${action}" '. + {action: $action}')"
+    tool="syslog"
+  fi
 
   mcporter call \
     --http-url "${MCP_URL}" \
@@ -266,12 +288,23 @@ run_test() {
   local tool="${2:?tool required}"
   local args="${3:?args required}"
   local expected_key="${4:-}"
+  local action=''
+
+  if [[ "${tool}" == "syslog" && "${args}" != \{* ]]; then
+    action="${args}"
+    args="${4:?args required}"
+    expected_key="${5:-}"
+  fi
 
   local t0
   t0="$(date +%s%N)"
 
   local output
-  output="$(mcporter_call "${tool}" "${args}")" || true
+  if [[ -n "${action}" ]]; then
+    output="$(mcporter_call "${tool}" "${action}" "${args}")" || true
+  else
+    output="$(mcporter_call "${tool}" "${args}")" || true
+  fi
 
   local elapsed_ms
   elapsed_ms="$(( ( $(date +%s%N) - t0 ) / 1000000 ))"
@@ -375,7 +408,7 @@ _json_payload() {
 # Returns the hostname with the highest log_count (most data = best for testing)
 get_primary_host() {
   local raw
-  raw="$(mcporter_call list_hosts '{}'  2>/dev/null)" || return 0
+  raw="$(mcporter_call syslog hosts '{}'  2>/dev/null)" || return 0
   printf '%s' "${raw}" | python3 -c "
 import sys, json
 try:
@@ -392,13 +425,13 @@ except Exception:
 " 2>/dev/null || true
 }
 
-# Returns a recent error timestamp from get_errors, used for correlate_events
+# Returns a recent error timestamp from syslog errors, used for syslog correlate
 get_recent_error_time() {
   local raw
-  raw="$(mcporter_call get_errors '{}'  2>/dev/null)" || return 0
-  # get_stats has newest_log which is more reliable
+  raw="$(mcporter_call syslog errors '{}'  2>/dev/null)" || return 0
+  # syslog stats has newest_log which is more reliable
   local stats
-  stats="$(mcporter_call get_stats '{}' 2>/dev/null)" || return 0
+  stats="$(mcporter_call syslog stats '{}' 2>/dev/null)" || return 0
   printf '%s' "${stats}" | python3 -c "
 import sys, json
 try:
@@ -417,58 +450,58 @@ except Exception:
 
 suite_meta() {
   printf '\n%b== meta (help + health) ==%b\n' "${C_BOLD}" "${C_RESET}" | tee -a "${LOG_FILE}"
-  run_test "syslog_help: returns documentation"    syslog_help '{}'
-  run_test "get_stats: returns database statistics" get_stats   '{}' "total_logs"
-  run_test "get_stats: write_blocked field present" get_stats   '{}' "write_blocked"
-  run_test "get_stats: free_disk_mb field present"  get_stats   '{}' "free_disk_mb"
+  run_test "syslog help: returns documentation"    syslog help '{}'
+  run_test "syslog stats: returns database statistics" syslog stats   '{}' "total_logs"
+  run_test "syslog stats: write_blocked field present" syslog stats   '{}' "write_blocked"
+  run_test "syslog stats: free_disk_mb field present"  syslog stats   '{}' "free_disk_mb"
 }
 
 suite_hosts() {
-  printf '\n%b== list_hosts ==%b\n' "${C_BOLD}" "${C_RESET}" | tee -a "${LOG_FILE}"
-  run_test "list_hosts: returns hosts array"     list_hosts '{}' "hosts"
-  run_test "list_hosts: hosts have hostname key" list_hosts '{}' "hosts.0.hostname"
-  run_test "list_hosts: hosts have log_count"    list_hosts '{}' "hosts.0.log_count"
-  run_test "list_hosts: hosts have first_seen"   list_hosts '{}' "hosts.0.first_seen"
-  run_test "list_hosts: hosts have last_seen"    list_hosts '{}' "hosts.0.last_seen"
+  printf '\n%b== syslog hosts ==%b\n' "${C_BOLD}" "${C_RESET}" | tee -a "${LOG_FILE}"
+  run_test "syslog hosts: returns hosts array"     syslog hosts '{}' "hosts"
+  run_test "syslog hosts: hosts have hostname key" syslog hosts '{}' "hosts.0.hostname"
+  run_test "syslog hosts: hosts have log_count"    syslog hosts '{}' "hosts.0.log_count"
+  run_test "syslog hosts: hosts have first_seen"   syslog hosts '{}' "hosts.0.first_seen"
+  run_test "syslog hosts: hosts have last_seen"    syslog hosts '{}' "hosts.0.last_seen"
 }
 
 suite_tail() {
-  printf '\n%b== tail_logs ==%b\n' "${C_BOLD}" "${C_RESET}" | tee -a "${LOG_FILE}"
-  run_test "tail_logs: default (50 entries)"  tail_logs '{}' "logs"
-  run_test "tail_logs: count field present"   tail_logs '{}' "count"
-  run_test "tail_logs: n=10 returns entries"  tail_logs '{"n":10}' "logs"
-  run_test "tail_logs: log entry has message" tail_logs '{"n":5}' "logs.0.message"
-  run_test "tail_logs: log entry has hostname" tail_logs '{"n":5}' "logs.0.hostname"
-  run_test "tail_logs: log entry has severity" tail_logs '{"n":5}' "logs.0.severity"
-  run_test "tail_logs: log entry has timestamp" tail_logs '{"n":5}' "logs.0.timestamp"
+  printf '\n%b== syslog tail ==%b\n' "${C_BOLD}" "${C_RESET}" | tee -a "${LOG_FILE}"
+  run_test "syslog tail: default (50 entries)"  syslog tail '{}' "logs"
+  run_test "syslog tail: count field present"   syslog tail '{}' "count"
+  run_test "syslog tail: n=10 returns entries"  syslog tail '{"n":10}' "logs"
+  run_test "syslog tail: log entry has message" syslog tail '{"n":5}' "logs.0.message"
+  run_test "syslog tail: log entry has hostname" syslog tail '{"n":5}' "logs.0.hostname"
+  run_test "syslog tail: log entry has severity" syslog tail '{"n":5}' "logs.0.severity"
+  run_test "syslog tail: log entry has timestamp" syslog tail '{"n":5}' "logs.0.timestamp"
 
   # Host-scoped tail
   local primary_host
   primary_host="$(get_primary_host)" || primary_host=''
   if [[ -n "${primary_host}" ]]; then
-    run_test "tail_logs: host=${primary_host} filter" \
-      tail_logs \
+    run_test "syslog tail: host=${primary_host} filter" \
+      syslog tail \
       "$(_json_payload '{"hostname":$h,"n":10}' h="${primary_host}")" \
       "logs"
   else
-    skip_test "tail_logs: host-scoped" "no usable hostname found"
+    skip_test "syslog tail: host-scoped" "no usable hostname found"
   fi
 }
 
 suite_search() {
-  printf '\n%b== search_logs ==%b\n' "${C_BOLD}" "${C_RESET}" | tee -a "${LOG_FILE}"
+  printf '\n%b== syslog search ==%b\n' "${C_BOLD}" "${C_RESET}" | tee -a "${LOG_FILE}"
 
-  run_test "search_logs: basic query (error)"         search_logs '{"query":"error","limit":10}' "logs"
-  run_test "search_logs: count field present"         search_logs '{"query":"error","limit":5}' "count"
-  run_test "search_logs: severity filter (err)"       search_logs '{"severity":"err","limit":10}' "logs"
-  run_test "search_logs: severity filter (warning)"   search_logs '{"severity":"warning","limit":10}' "logs"
-  run_test "search_logs: limit respected"             search_logs '{"query":"info","limit":3}' "logs"
-  run_test "search_logs: no query (list recent)"      search_logs '{"limit":20}' "logs"
+  run_test "syslog search: basic query (error)"         syslog search '{"query":"error","limit":10}' "logs"
+  run_test "syslog search: count field present"         syslog search '{"query":"error","limit":5}' "count"
+  run_test "syslog search: severity filter (err)"       syslog search '{"severity":"err","limit":10}' "logs"
+  run_test "syslog search: severity filter (warning)"   syslog search '{"severity":"warning","limit":10}' "logs"
+  run_test "syslog search: limit respected"             syslog search '{"query":"info","limit":3}' "logs"
+  run_test "syslog search: no query (list recent)"      syslog search '{"limit":20}' "logs"
 
   # App-name filter — discover real app name from tail first
   local app_name
   app_name="$(
-    mcporter_call tail_logs '{"n":20}' 2>/dev/null | python3 -c "
+    mcporter_call syslog tail '{"n":20}' 2>/dev/null | python3 -c "
 import sys, json
 try:
     d = json.load(sys.stdin)
@@ -484,70 +517,70 @@ except Exception:
   )" || app_name=''
 
   if [[ -n "${app_name}" ]]; then
-    run_test "search_logs: app_name=${app_name} filter" \
-      search_logs \
+    run_test "syslog search: app_name=${app_name} filter" \
+      syslog search \
       "$(_json_payload '{"app_name":$a,"limit":10}' a="${app_name}")" \
       "logs"
   else
-    skip_test "search_logs: app_name filter" "no usable app_name found in recent logs"
+    skip_test "syslog search: app_name filter" "no usable app_name found in recent logs"
   fi
 
   # Host-scoped search
   local primary_host
   primary_host="$(get_primary_host)" || primary_host=''
   if [[ -n "${primary_host}" ]]; then
-    run_test "search_logs: hostname=${primary_host} filter" \
-      search_logs \
+    run_test "syslog search: hostname=${primary_host} filter" \
+      syslog search \
       "$(_json_payload '{"hostname":$h,"limit":10}' h="${primary_host}")" \
       "logs"
   else
-    skip_test "search_logs: hostname filter" "no usable hostname found"
+    skip_test "syslog search: hostname filter" "no usable hostname found"
   fi
 
   # FTS5 phrase matching
-  run_test "search_logs: FTS5 phrase query"    search_logs '{"query":"\"connection refused\"","limit":10}' "logs"
+  run_test "syslog search: FTS5 phrase query"    syslog search '{"query":"\"connection refused\"","limit":10}' "logs"
   # Prefix matching
-  run_test "search_logs: FTS5 prefix query"    search_logs '{"query":"kernel*","limit":10}' "logs"
+  run_test "syslog search: FTS5 prefix query"    syslog search '{"query":"kernel*","limit":10}' "logs"
   # Time-bounded search — last 24 hours
   local since
   since="$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
   if [[ -n "${since}" ]]; then
-    run_test "search_logs: time range (last 24h)" \
-      search_logs \
+    run_test "syslog search: time range (last 24h)" \
+      syslog search \
       "$(_json_payload '{"from":$f,"limit":20}' f="${since}")" \
       "logs"
   else
-    skip_test "search_logs: time range filter" "could not compute timestamp"
+    skip_test "syslog search: time range filter" "could not compute timestamp"
   fi
 }
 
 suite_errors() {
-  printf '\n%b== get_errors ==%b\n' "${C_BOLD}" "${C_RESET}" | tee -a "${LOG_FILE}"
+  printf '\n%b== syslog errors ==%b\n' "${C_BOLD}" "${C_RESET}" | tee -a "${LOG_FILE}"
 
-  run_test "get_errors: all time"       get_errors '{}' "summary"
-  run_test "get_errors: summary has hostname" get_errors '{}' "summary.0.hostname"
-  run_test "get_errors: summary has severity" get_errors '{}' "summary.0.severity"
-  run_test "get_errors: summary has count"    get_errors '{}' "summary.0.count"
+  run_test "syslog errors: all time"       syslog errors '{}' "summary"
+  run_test "syslog errors: summary has hostname" syslog errors '{}' "summary.0.hostname"
+  run_test "syslog errors: summary has severity" syslog errors '{}' "summary.0.severity"
+  run_test "syslog errors: summary has count"    syslog errors '{}' "summary.0.count"
 
-  # Time-bounded get_errors (last 1 hour)
+  # Time-bounded syslog errors (last 1 hour)
   local since
   since="$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
   local until_now
   until_now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   if [[ -n "${since}" ]]; then
-    run_test "get_errors: time range (last 1h)" \
-      get_errors \
+    run_test "syslog errors: time range (last 1h)" \
+      syslog errors \
       "$(_json_payload '{"from":$f,"to":$t}' f="${since}" t="${until_now}")" \
       "summary"
   else
-    skip_test "get_errors: time range filter" "could not compute timestamp"
+    skip_test "syslog errors: time range filter" "could not compute timestamp"
   fi
 }
 
 suite_correlate() {
-  printf '\n%b== correlate_events ==%b\n' "${C_BOLD}" "${C_RESET}" | tee -a "${LOG_FILE}"
+  printf '\n%b== syslog correlate ==%b\n' "${C_BOLD}" "${C_RESET}" | tee -a "${LOG_FILE}"
 
-  # correlate_events requires reference_time (the only required field)
+  # syslog correlate requires reference_time (the only required field)
   local ref_time
   ref_time="$(get_recent_error_time)" || ref_time=''
 
@@ -556,35 +589,35 @@ suite_correlate() {
     ref_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   fi
 
-  run_test "correlate_events: default window (5m)" \
-    correlate_events \
+  run_test "syslog correlate: default window (5m)" \
+    syslog correlate \
     "$(_json_payload '{"reference_time":$t}' t="${ref_time}")"
 
-  run_test "correlate_events: wider window (15m)" \
-    correlate_events \
+  run_test "syslog correlate: wider window (15m)" \
+    syslog correlate \
     "$(_json_payload '{"reference_time":$t,"window_minutes":15}' t="${ref_time}")"
 
-  run_test "correlate_events: severity_min=err" \
-    correlate_events \
+  run_test "syslog correlate: severity_min=err" \
+    syslog correlate \
     "$(_json_payload '{"reference_time":$t,"severity_min":"err"}' t="${ref_time}")"
 
-  run_test "correlate_events: severity_min=debug (all)" \
-    correlate_events \
+  run_test "syslog correlate: severity_min=debug (all)" \
+    syslog correlate \
     "$(_json_payload '{"reference_time":$t,"window_minutes":2,"severity_min":"debug","limit":50}' t="${ref_time}")"
 
-  run_test "correlate_events: with FTS query" \
-    correlate_events \
+  run_test "syslog correlate: with FTS query" \
+    syslog correlate \
     "$(_json_payload '{"reference_time":$t,"query":"error*","window_minutes":10}' t="${ref_time}")"
 
   # Host-scoped correlation
   local primary_host
   primary_host="$(get_primary_host)" || primary_host=''
   if [[ -n "${primary_host}" ]]; then
-    run_test "correlate_events: host=${primary_host} scoped" \
-      correlate_events \
+    run_test "syslog correlate: host=${primary_host} scoped" \
+      syslog correlate \
       "$(_json_payload '{"reference_time":$t,"hostname":$h,"window_minutes":5}' t="${ref_time}" h="${primary_host}")"
   else
-    skip_test "correlate_events: host-scoped" "no usable hostname found"
+    skip_test "syslog correlate: host-scoped" "no usable hostname found"
   fi
 }
 

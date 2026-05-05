@@ -11,14 +11,25 @@ pub(super) async fn execute_tool(
     args: Value,
 ) -> anyhow::Result<Value> {
     match name {
-        "search_logs" => tool_search_logs(state, args).await,
-        "tail_logs" => tool_tail_logs(state, args).await,
-        "get_errors" => tool_get_errors(state, args).await,
-        "list_hosts" => tool_list_hosts(state, args).await,
-        "correlate_events" => tool_correlate_events(state, args).await,
-        "get_stats" => tool_get_stats(state, args).await,
-        "syslog_help" => tool_syslog_help().await,
+        "syslog" => tool_syslog(state, args).await,
         _ => Err(anyhow::anyhow!("Unknown tool: {name}")),
+    }
+}
+
+async fn tool_syslog(state: &AppState, args: Value) -> anyhow::Result<Value> {
+    let action =
+        string_arg(&args, "action").ok_or_else(|| anyhow::anyhow!("action is required"))?;
+    match action.as_str() {
+        "search" => tool_search_logs(state, args).await,
+        "tail" => tool_tail_logs(state, args).await,
+        "errors" => tool_get_errors(state, args).await,
+        "hosts" => tool_list_hosts(state, args).await,
+        "correlate" => tool_correlate_events(state, args).await,
+        "stats" => tool_get_stats(state, args).await,
+        "help" => tool_syslog_help().await,
+        _ => Err(anyhow::anyhow!(
+            "unknown syslog action: {action}; expected one of search, tail, errors, hosts, correlate, stats, help"
+        )),
     }
 }
 
@@ -126,14 +137,17 @@ fn u32_arg(args: &Value, name: &str) -> anyhow::Result<Option<u32>> {
 async fn tool_syslog_help() -> anyhow::Result<Value> {
     let help = r#"# syslog-mcp Tool Reference
 
-## search_logs
+The MCP server exposes one tool, `syslog`. Set the required `action` argument
+to select the operation.
+
+## syslog search
 Full-text search across all syslog messages with optional filters.
 Uses SQLite FTS5 with porter stemming. Supports FTS5 query syntax: AND, OR, NOT,
 phrase matching with quotes, prefix matching with *.
 
 **Parameters:**
 - `query` (string) — FTS5 search query, e.g. `'kernel panic'`, `'OOM AND killer'`, `'"connection refused"'`, `'error*'`
-- `hostname` (string, optional) — filter by hostname (exact match); use `list_hosts` to enumerate
+- `hostname` (string, optional) — filter by hostname (exact match); use `syslog hosts` to enumerate
 - `source_ip` (string, optional) — filter by exact source identifier. Syslog uses verified `IP:port`; Docker ingest uses `docker://host/container/stream`.
 - `severity` (string, optional) — one of: `emerg`, `alert`, `crit`, `err`, `warning`, `notice`, `info`, `debug`
 - `app_name` (string, optional) — filter by application name, e.g. `sshd`, `dockerd`, `kernel`
@@ -143,7 +157,7 @@ phrase matching with quotes, prefix matching with *.
 
 ---
 
-## tail_logs
+## syslog tail
 Get the N most recent log entries, optionally filtered by host and/or application.
 Equivalent to `tail -f` across all hosts.
 
@@ -155,7 +169,7 @@ Equivalent to `tail -f` across all hosts.
 
 ---
 
-## get_errors
+## syslog errors
 Get a summary of errors and warnings across all hosts in a time window.
 Groups by hostname and severity level, showing counts. Useful for quick health assessments.
 
@@ -165,14 +179,14 @@ Groups by hostname and severity level, showing counts. Useful for quick health a
 
 ---
 
-## list_hosts
+## syslog hosts
 List all hosts that have sent syslog messages, with first/last seen timestamps and total log counts.
 
 **Parameters:** none
 
 ---
 
-## correlate_events
+## syslog correlate
 Search for related events across multiple hosts within a time window.
 Useful for debugging cascading failures — finds events on all hosts within ±N minutes
 of a reference timestamp. Results are grouped by host and ordered by time.
@@ -188,7 +202,7 @@ of a reference timestamp. Results are grouped by host and ordered by time.
 
 ---
 
-## get_stats
+## syslog stats
 Get database statistics: total logs, total hosts, time range covered, logical and physical
 DB size, free disk, configured thresholds, and current write-block status.
 
@@ -196,8 +210,8 @@ DB size, free disk, configured thresholds, and current write-block status.
 
 ---
 
-## syslog_help
-Returns this markdown documentation for all available syslog-mcp tools.
+## syslog help
+Returns this markdown documentation.
 
 **Parameters:** none
 "#;
