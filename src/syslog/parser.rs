@@ -239,6 +239,7 @@ pub(super) fn parse_syslog(raw: &str, source_ip: String) -> db::LogBatchEntry {
         message,
         raw: raw.to_string(),
         source_ip,
+        docker_checkpoint: None,
     }
 }
 

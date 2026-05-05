@@ -38,6 +38,7 @@ fn entry(ts: &str, host: &str, severity: &str, msg: &str, source_ip: &str) -> Lo
         message: msg.to_string(),
         raw: msg.to_string(),
         source_ip: source_ip.to_string(),
+        docker_checkpoint: None,
     }
 }
 

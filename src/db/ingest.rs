@@ -70,9 +70,29 @@ fn insert_logs_batch_once(pool: &DbPool, entries: &[LogBatchEntry]) -> Result<us
         for (hostname, count) in &host_counts {
             host_stmt.execute(params![hostname, count])?;
         }
+        let mut checkpoint_stmt = tx.prepare_cached(
+            "INSERT INTO docker_ingest_checkpoints (host_name, container_id, last_timestamp)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(host_name, container_id) DO UPDATE SET
+                 last_timestamp = excluded.last_timestamp,
+                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
+        )?;
+        let mut checkpoint_count = 0usize;
+        for entry in entries {
+            if let Some(checkpoint) = &entry.docker_checkpoint {
+                checkpoint_stmt.execute(params![
+                    checkpoint.host_name,
+                    checkpoint.container_id,
+                    checkpoint.timestamp
+                ])?;
+                checkpoint_count += 1;
+            }
+        }
+
         tracing::debug!(
             entry_count = entries.len(),
             unique_hosts = host_counts.len(),
+            checkpoint_count,
             "Prepared batch insert transaction"
         );
     }

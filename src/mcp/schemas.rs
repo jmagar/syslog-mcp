@@ -19,7 +19,7 @@ pub(super) fn tool_definitions() -> Vec<Value> {
                     },
                     "source_ip": {
                         "type": "string",
-                        "description": "Filter by exact verified network sender address (IP:port), independent of the claimed hostname."
+                        "description": "Filter by exact source identifier. Syslog uses the verified network sender address (IP:port); Docker ingest uses docker://host/container/stream from configured ingest metadata."
                     },
                     "severity": {
                         "type": "string",
@@ -57,7 +57,7 @@ pub(super) fn tool_definitions() -> Vec<Value> {
                     },
                     "source_ip": {
                         "type": "string",
-                        "description": "Filter by exact verified network sender address (IP:port)"
+                        "description": "Filter by exact source identifier. Syslog uses IP:port; Docker ingest uses docker://host/container/stream."
                     },
                     "app_name": {
                         "type": "string",
@@ -123,7 +123,7 @@ pub(super) fn tool_definitions() -> Vec<Value> {
                     },
                     "source_ip": {
                         "type": "string",
-                        "description": "Optional: limit correlation to an exact verified network sender address (IP:port)"
+                        "description": "Optional: limit correlation to an exact source identifier. Syslog uses IP:port; Docker ingest uses docker://host/container/stream."
                     },
                     "query": {
                         "type": "string",

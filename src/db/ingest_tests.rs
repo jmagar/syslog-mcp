@@ -26,6 +26,7 @@ fn make_entry(ts: &str, host: &str, severity: &str, msg: &str) -> LogBatchEntry 
         message: msg.to_string(),
         raw: msg.to_string(),
         source_ip: "127.0.0.1:514".to_string(),
+        docker_checkpoint: None,
     }
 }
 

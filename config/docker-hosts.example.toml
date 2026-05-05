@@ -1,0 +1,9 @@
+[[hosts]]
+name = "edge-host-a"
+base_url = "http://edge-host-a:2375"
+allow_insecure_http = true
+
+[[hosts]]
+name = "app-host-b"
+base_url = "http://app-host-b:2375"
+allow_insecure_http = true

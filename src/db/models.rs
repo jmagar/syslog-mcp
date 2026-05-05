@@ -5,10 +5,9 @@ use serde::{Deserialize, Serialize};
 /// Replaces the former 8-tuple type alias; named fields prevent silent data corruption
 /// from positional swaps between structurally identical `String`/`Option<String>` fields.
 ///
-/// `source_ip` records the actual network sender address (IP:port) independent of the
-/// hostname claimed in the syslog message body. Any LAN host can UDP-spoof an arbitrary
-/// hostname, so `source_ip` is the only trustworthy network identity for a log entry.
-/// Log content (hostname, message, app_name) is untrusted user-controlled data.
+/// For syslog input, `source_ip` records the actual network sender address (IP:port)
+/// independent of the hostname claimed in the syslog message body. Docker ingest uses
+/// a configured `docker://host/container/stream` source identifier instead.
 #[derive(Debug, Clone)]
 pub struct LogBatchEntry {
     pub timestamp: String,
@@ -19,9 +18,17 @@ pub struct LogBatchEntry {
     pub process_id: Option<String>,
     pub message: String,
     pub raw: String,
-    /// Actual network sender address (IP:port). Separate from the claimed hostname
-    /// in the syslog message, which can be spoofed by any LAN device.
+    /// Source identifier. Syslog input uses the actual network sender address
+    /// (IP:port); Docker ingest uses docker://host/container/stream.
     pub source_ip: String,
+    pub docker_checkpoint: Option<DockerCheckpoint>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DockerCheckpoint {
+    pub host_name: String,
+    pub container_id: String,
+    pub timestamp: String,
 }
 
 /// Error/warning summary entry (one row per hostname+severity)
@@ -102,9 +109,9 @@ pub struct LogEntry {
     pub process_id: Option<String>,
     pub message: String,
     pub received_at: String,
-    /// Actual network sender address (IP:port). Separate from the claimed hostname,
-    /// which can be spoofed by any LAN device via UDP. Empty string for legacy rows
-    /// inserted before this column was added.
+    /// Source identifier. Syslog entries use verified network sender address
+    /// (IP:port); Docker ingest entries use docker://host/container/stream.
+    /// Empty string for legacy rows inserted before this column was added.
     pub source_ip: String,
 }
 
@@ -115,7 +122,8 @@ pub struct SearchParams {
     pub query: Option<String>,
     /// Filter by hostname
     pub hostname: Option<String>,
-    /// Filter by verified network sender address (IP:port)
+    /// Filter by source identifier. Syslog uses verified network sender address
+    /// (IP:port); Docker ingest uses docker://host/container/stream.
     pub source_ip: Option<String>,
     /// Filter by severity (exact match: emerg, alert, crit, err, warning, notice, info, debug)
     pub severity: Option<String>,

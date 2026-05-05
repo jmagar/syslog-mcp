@@ -134,7 +134,7 @@ phrase matching with quotes, prefix matching with *.
 **Parameters:**
 - `query` (string) — FTS5 search query, e.g. `'kernel panic'`, `'OOM AND killer'`, `'"connection refused"'`, `'error*'`
 - `hostname` (string, optional) — filter by hostname (exact match); use `list_hosts` to enumerate
-- `source_ip` (string, optional) — filter by exact verified network sender address (`IP:port`)
+- `source_ip` (string, optional) — filter by exact source identifier. Syslog uses verified `IP:port`; Docker ingest uses `docker://host/container/stream`.
 - `severity` (string, optional) — one of: `emerg`, `alert`, `crit`, `err`, `warning`, `notice`, `info`, `debug`
 - `app_name` (string, optional) — filter by application name, e.g. `sshd`, `dockerd`, `kernel`
 - `from` (string, optional) — start of time range (ISO 8601 / RFC3339, e.g. `2025-01-15T00:00:00Z`)
@@ -149,7 +149,7 @@ Equivalent to `tail -f` across all hosts.
 
 **Parameters:**
 - `hostname` (string, optional) — filter to a specific host
-- `source_ip` (string, optional) — filter by exact verified network sender address (`IP:port`)
+- `source_ip` (string, optional) — filter by exact source identifier. Syslog uses verified `IP:port`; Docker ingest uses `docker://host/container/stream`.
 - `app_name` (string, optional) — filter to a specific application
 - `n` (integer, optional) — number of recent entries (default 50, max 500)
 
@@ -182,7 +182,7 @@ of a reference timestamp. Results are grouped by host and ordered by time.
 - `window_minutes` (integer, optional) — minutes before and after reference_time to search (default 5, max 60)
 - `severity_min` (string, optional) — minimum severity to include (default `warning`); `debug` returns everything
 - `hostname` (string, optional) — limit correlation to a specific host
-- `source_ip` (string, optional) — limit correlation to an exact verified network sender address (`IP:port`)
+- `source_ip` (string, optional) — limit correlation to an exact source identifier. Syslog uses verified `IP:port`; Docker ingest uses `docker://host/container/stream`.
 - `query` (string, optional) — optional FTS query to narrow results
 - `limit` (integer, optional) — max total events to return (default 500, max 999)
 

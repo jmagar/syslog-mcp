@@ -30,6 +30,8 @@ async fn main() -> Result<()> {
         wal_mode = runtime.config.storage.wal_mode,
         mcp_auth_enabled = runtime.config.mcp.api_token.is_some(),
         api_enabled = runtime.config.api.enabled,
+        docker_ingest_enabled = runtime.config.docker_ingest.enabled,
+        docker_ingest_hosts = runtime.config.docker_ingest.hosts.len(),
         "Configuration loaded"
     );
 
