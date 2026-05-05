@@ -26,23 +26,6 @@ fn entry(ts: &str, host: &str, severity: &str, msg: &str, source_ip: &str) -> Lo
     }
 }
 
-#[test]
-fn parse_optional_timestamp_normalizes_to_utc() {
-    let parsed = parse_optional_timestamp(Some("2026-01-01T01:00:00+01:00"), "from")
-        .unwrap()
-        .unwrap();
-    assert_eq!(parsed, "2026-01-01T00:00:00+00:00");
-}
-
-#[test]
-fn severity_threshold_expands_to_more_severe_levels() {
-    assert_eq!(
-        severity_at_or_above("warning").unwrap(),
-        vec!["emerg", "alert", "crit", "err", "warning"]
-    );
-    assert_eq!(severity_at_or_above("debug").unwrap().len(), 8);
-}
-
 #[tokio::test]
 async fn correlate_events_normalizes_window_groups_and_truncates() {
     let (service, pool, _dir) = test_service();
@@ -127,4 +110,11 @@ async fn source_ip_filter_uses_network_sender_identity() {
         .unwrap();
     assert_eq!(response.count, 1);
     assert_eq!(response.logs[0].message, "from two");
+}
+
+#[tokio::test]
+async fn health_check_runs_simple_database_query() {
+    let (service, _pool, _dir) = test_service();
+
+    service.health_check().await.unwrap();
 }

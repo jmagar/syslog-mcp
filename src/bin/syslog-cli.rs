@@ -93,16 +93,8 @@ async fn main() -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::Options;
-
-    #[test]
-    fn parser_rejects_missing_value_before_next_option() {
-        let err = Options::parse(vec!["--query".into(), "--limit".into(), "5".into()])
-            .expect_err("parser should reject missing option values");
-        assert!(err.to_string().contains("missing value for --query"));
-    }
-}
+#[path = "syslog-cli/tests.rs"]
+mod tests;
 
 #[derive(Debug)]
 struct Options {

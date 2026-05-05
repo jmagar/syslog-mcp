@@ -174,3 +174,7 @@ impl From<db::DbStats> for DbStats {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "models_tests.rs"]
+mod tests;

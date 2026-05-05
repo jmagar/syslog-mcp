@@ -32,3 +32,7 @@ impl From<anyhow::Error> for ServiceError {
 }
 
 pub type ServiceResult<T> = Result<T, ServiceError>;
+
+#[cfg(test)]
+#[path = "error_tests.rs"]
+mod tests;

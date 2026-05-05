@@ -23,3 +23,7 @@ pub(super) fn parse_required_timestamp(
         })
         .map(|dt| dt.with_timezone(&Utc))
 }
+
+#[cfg(test)]
+#[path = "time_tests.rs"]
+mod tests;
