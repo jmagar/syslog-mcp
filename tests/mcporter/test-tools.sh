@@ -223,6 +223,7 @@ smoke_test_server() {
     curl -sf --max-time 10 \
       -X POST "${MCP_URL}" \
       -H "Content-Type: application/json" \
+      -H "Accept: application/json, text/event-stream" \
       ${MCPORTER_HEADER_ARGS[@]+"${MCPORTER_HEADER_ARGS[@]}"} \
       -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' 2>/dev/null | \
     python3 -c "
@@ -612,6 +613,7 @@ suite_auth() {
   label="auth: unauthenticated /mcp returns 401"
   status="$(curl -s --max-time 10 -o /dev/null -w "%{http_code}" \
     "${MCP_URL}" -X POST -H "Content-Type: application/json" \
+    -H "Accept: application/json, text/event-stream" \
     -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' 2>/dev/null)" || status=0
   if [[ "${status}" == "401" ]]; then
     printf "${C_GREEN}[PASS]${C_RESET} %-60s\n" "${label}" | tee -a "${LOG_FILE}"
@@ -627,6 +629,7 @@ suite_auth() {
     "${MCP_URL}" -X POST \
     -H "Authorization: Bearer bad-token-intentionally-invalid" \
     -H "Content-Type: application/json" \
+    -H "Accept: application/json, text/event-stream" \
     -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' 2>/dev/null)" || status=0
   if [[ "${status}" == "401" ]]; then
     printf "${C_GREEN}[PASS]${C_RESET} %-60s\n" "${label}" | tee -a "${LOG_FILE}"

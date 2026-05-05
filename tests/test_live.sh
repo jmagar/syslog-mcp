@@ -328,6 +328,7 @@ phase_auth() {
   status="$(curl -s --max-time 10 -o /dev/null -w "%{http_code}" \
     -X POST "${BASE_URL}/mcp" \
     -H "Content-Type: application/json" \
+    -H "Accept: application/json, text/event-stream" \
     -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' 2>/dev/null)" || status=0
 
   if [[ "${status}" == "401" ]]; then
@@ -341,6 +342,7 @@ phase_auth() {
     -X POST "${BASE_URL}/mcp" \
     -H "Authorization: Bearer intentionally-wrong-token-for-testing" \
     -H "Content-Type: application/json" \
+    -H "Accept: application/json, text/event-stream" \
     -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' 2>/dev/null)" || status=0
 
   if [[ "${status}" == "401" ]]; then

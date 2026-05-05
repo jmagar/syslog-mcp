@@ -1,43 +1,56 @@
 use std::time::Instant;
 
 use axum::{
-    extract::{DefaultBodyLimit, State},
-    http::StatusCode,
+    extract::State,
+    http::{header, StatusCode},
     middleware,
-    response::{
-        sse::{Event, Sse},
-        IntoResponse, Json,
-    },
-    routing::{get, post},
+    response::{IntoResponse, Json},
+    routing::get,
     Router,
 };
-use futures_core::Stream;
 use serde_json::json;
 use subtle::ConstantTimeEq;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::{cors::{Any, CorsLayer}, limit::RequestBodyLimitLayer};
 
-use super::protocol::{dispatch, DispatchResult, JsonRpcRequest};
+use super::{streamable_http_config, streamable_http_service};
 use super::AppState;
+
+const MCP_BODY_LIMIT_BYTES: u64 = 65_536;
 
 /// Build the MCP router
 pub fn router(state: AppState) -> Router {
-    // Authenticated routes: /mcp and /sse require Bearer token when api_token is set
+    // Authenticated RMCP Streamable HTTP endpoint. /health is mounted separately
+    // so Docker HEALTHCHECK, docker-compose health probes, and SWAG can reach it.
+    let rmcp_config = streamable_http_config(&state.config);
     let authenticated = Router::new()
-        .route("/mcp", post(handle_mcp_post))
-        .route("/sse", get(handle_sse))
+        .nest_service("/mcp", streamable_http_service(state.clone(), rmcp_config))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
-    // Unauthenticated routes: /health must be accessible without credentials
-    // so Docker HEALTHCHECK, docker-compose health probes, and SWAG can reach it
     let unauthenticated = Router::new().route("/health", get(health));
 
     Router::new()
         .merge(authenticated)
         .merge(unauthenticated)
         .fallback(|| async { (StatusCode::NOT_FOUND, Json(json!({"error": "not_found"}))) })
-        .layer(DefaultBodyLimit::max(65_536))
+        .layer(middleware::from_fn(enforce_body_limit))
+        .layer(RequestBodyLimitLayer::new(MCP_BODY_LIMIT_BYTES as usize))
         .layer(cors_layer(state.config.port))
         .with_state(state)
+}
+
+async fn enforce_body_limit(
+    req: axum::extract::Request,
+    next: middleware::Next,
+) -> axum::response::Response {
+    let content_length = req
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
+    if content_length.is_some_and(|length| length > MCP_BODY_LIMIT_BYTES) {
+        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+    }
+    next.run(req).await
 }
 
 /// Bearer-token authentication middleware.
@@ -146,31 +159,11 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
             );
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "status": "error", "error": e.to_string() })),
+                Json(json!({ "status": "error" })),
             )
                 .into_response()
         }
     }
-}
-
-/// Streamable HTTP transport (POST /mcp)
-pub(super) async fn handle_mcp_post(
-    State(state): State<AppState>,
-    Json(req): Json<JsonRpcRequest>,
-) -> impl IntoResponse {
-    match dispatch(&state, &req).await {
-        DispatchResult::Response(response) => Json(response).into_response(),
-        // JSON-RPC notifications must not produce a response body.
-        DispatchResult::Notification => StatusCode::ACCEPTED.into_response(),
-    }
-}
-
-/// SSE endpoint for MCP (legacy transport support)
-async fn handle_sse(
-    State(_state): State<AppState>,
-) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
-    let stream = tokio_stream::once(Ok(Event::default().event("endpoint").data("/mcp")));
-    Sse::new(stream)
 }
 
 #[cfg(test)]

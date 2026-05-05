@@ -4,7 +4,7 @@ use crate::config::{McpConfig, StorageConfig};
 use crate::db;
 use crate::mcp::AppState;
 use axum::body::to_bytes;
-use axum::http::Request;
+use axum::http::{header, Method, Request, StatusCode};
 use std::sync::Arc;
 use tower::util::ServiceExt;
 
@@ -63,7 +63,9 @@ async fn mcp_post(
     let mut builder = Request::builder()
         .method("POST")
         .uri("/mcp")
-        .header("Content-Type", "application/json");
+        .header(header::HOST, "localhost:3100")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ACCEPT, "application/json, text/event-stream");
     if let Some(token) = auth {
         builder = builder.header("Authorization", format!("Bearer {token}"));
     }
@@ -88,15 +90,23 @@ async fn integration_health_returns_200() {
         .body(axum::body::Body::empty())
         .unwrap();
     let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    assert_eq!(response.status(), StatusCode::OK);
 }
 
 #[tokio::test]
 async fn integration_initialize() {
     let h = TestHarness::new();
-    let body = jsonrpc_request(1, "initialize", None);
+    let body = jsonrpc_request(
+        1,
+        "initialize",
+        Some(serde_json::json!({
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "clientInfo": {"name": "route-test", "version": "1.0"}
+        })),
+    );
     let (status, value) = mcp_post(router(h.state), body, None).await;
-    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(status, StatusCode::OK);
     assert!(value["result"]["protocolVersion"].is_string());
     assert!(value["result"]["serverInfo"]["name"].is_string());
 }
@@ -106,7 +116,7 @@ async fn integration_tools_list() {
     let h = TestHarness::new();
     let body = jsonrpc_request(2, "tools/list", None);
     let (status, value) = mcp_post(router(h.state), body, None).await;
-    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(status, StatusCode::OK);
     let tools = value["result"]["tools"].as_array().unwrap();
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     for expected in [
@@ -116,6 +126,7 @@ async fn integration_tools_list() {
         "list_hosts",
         "correlate_events",
         "get_stats",
+        "syslog_help",
     ] {
         assert!(names.contains(&expected), "missing tool: {expected}");
     }
@@ -130,7 +141,7 @@ async fn integration_get_stats() {
         Some(serde_json::json!({"name": "get_stats", "arguments": {}})),
     );
     let (status, value) = mcp_post(router(h.state), body, None).await;
-    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(status, StatusCode::OK);
     let content = value["result"]["content"][0]["text"].as_str().unwrap();
     assert!(
         content.contains("total_logs"),
@@ -147,7 +158,7 @@ async fn integration_tail_logs_empty_db() {
         Some(serde_json::json!({"name": "tail_logs", "arguments": {"n": 10}})),
     );
     let (status, value) = mcp_post(router(h.state), body, None).await;
-    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(status, StatusCode::OK);
     assert!(value["error"].is_null(), "unexpected error: {value}");
 }
 
@@ -162,7 +173,7 @@ async fn integration_search_logs_empty_db() {
         ),
     );
     let (status, value) = mcp_post(router(h.state), body, None).await;
-    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(status, StatusCode::OK);
     assert!(value["error"].is_null(), "unexpected error: {value}");
 }
 
@@ -171,7 +182,7 @@ async fn integration_auth_missing_token_returns_401() {
     let h = TestHarness::with_token("secret-token".into());
     let body = jsonrpc_request(7, "tools/list", None);
     let (status, _) = mcp_post(router(h.state), body, None).await;
-    assert_eq!(status, axum::http::StatusCode::UNAUTHORIZED);
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
@@ -179,7 +190,7 @@ async fn integration_auth_correct_token_succeeds() {
     let h = TestHarness::with_token("secret-token".into());
     let body = jsonrpc_request(8, "tools/list", None);
     let (status, _) = mcp_post(router(h.state), body, Some("secret-token")).await;
-    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(status, StatusCode::OK);
 }
 
 #[tokio::test]
@@ -189,7 +200,9 @@ async fn mcp_accepts_case_insensitive_bearer_scheme() {
     let request = Request::builder()
         .method("POST")
         .uri("/mcp")
-        .header("Content-Type", "application/json")
+        .header(header::HOST, "localhost:3100")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ACCEPT, "application/json, text/event-stream")
         .header("Authorization", "bearer secret-token")
         .body(axum::body::Body::from(
             serde_json::to_vec(&jsonrpc_request(10, "tools/list", None)).unwrap(),
@@ -197,7 +210,7 @@ async fn mcp_accepts_case_insensitive_bearer_scheme() {
         .unwrap();
 
     let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    assert_eq!(response.status(), StatusCode::OK);
 }
 
 #[tokio::test]
@@ -227,11 +240,11 @@ async fn mcp_rejects_wrong_token() {
     let h = TestHarness::with_token("secret-token".into());
     let body = jsonrpc_request(9, "tools/list", None);
     let (status, _) = mcp_post(router(h.state), body, Some("wrong-token")).await;
-    assert_eq!(status, axum::http::StatusCode::UNAUTHORIZED);
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
-async fn sse_requires_token_when_auth_enabled() {
+async fn legacy_sse_endpoint_is_removed() {
     let h = TestHarness::with_token("secret-token".into());
     let app = router(h.state);
     let request = Request::builder()
@@ -240,7 +253,7 @@ async fn sse_requires_token_when_auth_enabled() {
         .body(axum::body::Body::empty())
         .unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
-    assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
     let request = Request::builder()
         .method("GET")
@@ -249,7 +262,7 @@ async fn sse_requires_token_when_auth_enabled() {
         .body(axum::body::Body::empty())
         .unwrap();
     let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -262,7 +275,7 @@ async fn health_stays_unauthenticated_when_auth_enabled() {
         .body(axum::body::Body::empty())
         .unwrap();
     let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    assert_eq!(response.status(), StatusCode::OK);
 }
 
 #[tokio::test]
@@ -272,9 +285,86 @@ async fn oversized_mcp_request_is_rejected_by_body_limit() {
     let request = Request::builder()
         .method("POST")
         .uri("/mcp")
-        .header("Content-Type", "application/json")
+        .header(header::HOST, "localhost:3100")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ACCEPT, "application/json, text/event-stream")
+        .header(header::CONTENT_LENGTH, "70000")
         .body(axum::body::Body::from("x".repeat(70_000)))
         .unwrap();
     let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), axum::http::StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+#[tokio::test]
+async fn mcp_rejects_missing_accept_header() {
+    let h = TestHarness::new();
+    let app = router(h.state);
+    let request = Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header(header::HOST, "localhost:3100")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(
+            serde_json::to_vec(&jsonrpc_request(11, "tools/list", None)).unwrap(),
+        ))
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert!(response.status().is_client_error());
+}
+
+#[tokio::test]
+async fn mcp_rejects_missing_content_type_header() {
+    let h = TestHarness::new();
+    let app = router(h.state);
+    let request = Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header(header::HOST, "localhost:3100")
+        .header(header::ACCEPT, "application/json, text/event-stream")
+        .body(axum::body::Body::from(
+            serde_json::to_vec(&jsonrpc_request(12, "tools/list", None)).unwrap(),
+        ))
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert!(response.status().is_client_error());
+}
+
+#[tokio::test]
+async fn mcp_rejects_unsupported_protocol_version() {
+    let h = TestHarness::new();
+    let app = router(h.state);
+    let request = Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header(header::HOST, "localhost:3100")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ACCEPT, "application/json, text/event-stream")
+        .header("MCP-Protocol-Version", "1900-01-01")
+        .body(axum::body::Body::from(
+            serde_json::to_vec(&jsonrpc_request(13, "tools/list", None)).unwrap(),
+        ))
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn stateless_mcp_rejects_get_and_delete() {
+    let h = TestHarness::new();
+    let app = router(h.state);
+    for method in [Method::GET, Method::DELETE] {
+        let request = Request::builder()
+            .method(method.clone())
+            .uri("/mcp")
+            .header(header::HOST, "localhost:3100")
+            .header(header::ACCEPT, "text/event-stream")
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
 }

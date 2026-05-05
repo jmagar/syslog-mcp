@@ -25,13 +25,7 @@ fn compat_router(config: StreamableHttpServerConfig) -> Router {
     Router::new().nest_service("/mcp", service)
 }
 
-async fn post_initialize(
-    router: Router,
-) -> (
-    StatusCode,
-    axum::http::HeaderMap,
-    String,
-) {
+async fn post_initialize(router: Router) -> (StatusCode, axum::http::HeaderMap, String) {
     let request = Request::builder()
         .method("POST")
         .uri("/mcp")
@@ -59,8 +53,13 @@ async fn post_initialize(
     let response = router.oneshot(request).await.unwrap();
     let status = response.status();
     let headers = response.headers().clone();
-    let body = String::from_utf8(to_bytes(response.into_body(), usize::MAX).await.unwrap().to_vec())
-        .unwrap();
+    let body = String::from_utf8(
+        to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
     (status, headers, body)
 }
 
