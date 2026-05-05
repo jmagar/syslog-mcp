@@ -6,7 +6,9 @@ mod routes;
 mod schemas;
 mod tools;
 
-pub use rmcp_server::{streamable_http_config, streamable_http_service, SyslogRmcpServer};
+pub use rmcp_server::{
+    rmcp_server, streamable_http_config, streamable_http_service, SyslogRmcpServer,
+};
 pub use routes::router;
 
 /// Shared app state

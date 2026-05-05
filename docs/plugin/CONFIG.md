@@ -4,7 +4,12 @@ Plugin configuration and user-facing settings for Claude Code plugin deployment.
 
 ## How it works
 
-syslog-mcp is a Rust binary that runs as a long-lived daemon (syslog listener + MCP HTTP server). The plugin connects via HTTP transport, not stdio.
+syslog-mcp ships two binaries:
+
+- `syslog-mcp` -- long-lived daemon with syslog listener + MCP HTTP server.
+- `syslog-mcp-stdio` -- local query-only stdio MCP server.
+
+The published Claude Code plugin remains HTTP-first because plugin installs commonly target a running Docker, systemd, or reverse-proxy deployment.
 
 Credentials flow through two files:
 
@@ -28,9 +33,9 @@ The syslog-mcp server must be running separately (Docker Compose or systemd). Th
 
 Sensitive fields are stored encrypted by Claude Code and masked in the UI.
 
-## Why HTTP (not stdio)
+## Why the plugin defaults to HTTP
 
-syslog-mcp is fundamentally a daemon: it listens on UDP/TCP for syslog messages and stores them in SQLite. It cannot run as a short-lived stdio process. The plugin connects to a running instance over HTTP.
+Syslog ingestion is daemon-oriented: something must listen on UDP/TCP and keep writing SQLite. Direct stdio is useful only when the MCP host can read the database path locally. For remote/Docker/plugin deployments, HTTP keeps the ingestion and query surfaces attached to the same running service.
 
 ## See also
 

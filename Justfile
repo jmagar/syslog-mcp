@@ -78,9 +78,16 @@ clean:
     cargo clean
     rm -rf .cache/
 
-# Linux only — Windows would need syslog-mcp.exe; requires git lfs install
+# Linux only — Windows would need .exe binaries; requires git lfs install
 build-plugin: release
-    install -m 755 target/release/syslog-mcp bin/syslog-mcp
+    #!/usr/bin/env bash
+    set -euo pipefail
+    target_dir="${CARGO_TARGET_DIR:-target}"
+    if [[ ! -x "$target_dir/release/syslog-mcp" && -x ".cache/cargo/release/syslog-mcp" ]]; then
+      target_dir=".cache/cargo"
+    fi
+    install -m 755 "$target_dir/release/syslog-mcp" bin/syslog-mcp
+    install -m 755 "$target_dir/release/syslog-mcp-stdio" bin/syslog-mcp-stdio
 
 # Publish: bump version, tag, push (triggers crates.io + Docker publish)
 publish bump="patch":
@@ -106,4 +113,3 @@ publish bump="patch":
     done
     git add -A && git commit -m "release: v${NEW}" && git tag "v${NEW}" && git push origin main --tags
     echo "Tagged v${NEW} — publish workflow will run automatically"
-

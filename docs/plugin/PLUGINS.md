@@ -1,7 +1,7 @@
 <!--
 plugin: syslog-mcp
 surface: plugin-manifests
-version: 0.7.0
+version: 0.8.0
 author: Jacob Magar
 license: MIT
 description: Reference for syslog-mcp plugin manifests and version metadata.
@@ -27,7 +27,7 @@ All manifests must have the same `version` value.
 ```json
 {
   "name": "syslog-mcp",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Syslog management via MCP",
   "author": "jmagar",
   "repository": "https://github.com/jmagar/syslog-mcp",
@@ -78,11 +78,11 @@ MCP Registry entry with OCI package reference:
 {
   "name": "tv.tootie/syslog-mcp",
   "title": "Syslog MCP",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/jmagar/syslog-mcp:0.7.0"
+      "identifier": "ghcr.io/jmagar/syslog-mcp:0.8.0"
     }
   ]
 }

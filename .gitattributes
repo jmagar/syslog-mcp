@@ -1,3 +1,4 @@
 # Binary plugin distributions — tracked via Git LFS
 bin/syslog-mcp filter=lfs diff=lfs merge=lfs -text
+bin/syslog-mcp-stdio filter=lfs diff=lfs merge=lfs -text
 bin/syslog-mcp.exe filter=lfs diff=lfs merge=lfs -text

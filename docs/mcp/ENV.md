@@ -4,13 +4,15 @@ Concise reference. See [CONFIG.md](../CONFIG.md) for full documentation includin
 
 ## Deployment paths
 
-syslog-mcp always runs as an HTTP daemon (it needs persistent syslog UDP/TCP listeners):
+The `syslog-mcp` daemon runs as an HTTP MCP server because it needs persistent syslog UDP/TCP listeners:
 
 | Path | How | Credentials |
 |------|-----|-------------|
 | **Plugin** | Claude Code connects via HTTP to a running instance | `${userConfig.*}` in `.mcp.json` for URL and token |
 | **Docker** | `docker compose up -d` | `.env` file |
 | **Bare metal** | `cargo run --release` or compiled binary | `config.toml` or env vars |
+
+`syslog-mcp-stdio` is a query-only local child process for stdio MCP clients. It uses `SYSLOG_MCP_DB_PATH` and logging variables, but does not require `SYSLOG_MCP_TOKEN` and does not bind network ports.
 
 ## Syslog listener
 
