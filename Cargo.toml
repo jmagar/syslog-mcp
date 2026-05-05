@@ -11,6 +11,7 @@ tokio = { version = "1", features = ["full"] }
 
 # HTTP / MCP transport
 axum = "0.8"
+rmcp = { version = "1.6.0", default-features = false, features = ["server", "macros", "transport-streamable-http-server"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 
 # SQLite
