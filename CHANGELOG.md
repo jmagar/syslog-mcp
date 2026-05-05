@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-05-05
+
+### Changed
+
+- **App module layout**: Split the shared syslog service from `src/app.rs` into focused `src/app/` modules and renamed `LogService` to `SyslogService` across runtime, MCP, API, tests, and docs.
+
 ## [0.5.0] - 2026-05-04
 
 ### Added
