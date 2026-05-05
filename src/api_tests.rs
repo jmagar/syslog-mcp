@@ -15,7 +15,7 @@ fn test_state(token: Option<String>) -> (ApiState, Arc<DbPool>, tempfile::TempDi
     let pool = Arc::new(db::init_pool(&storage).unwrap());
     (
         ApiState {
-            service: crate::app::LogService::new(Arc::clone(&pool), storage),
+            service: crate::app::SyslogService::new(Arc::clone(&pool), storage),
             config: ApiConfig {
                 enabled: true,
                 api_token: token,

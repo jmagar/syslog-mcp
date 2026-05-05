@@ -23,9 +23,9 @@ async fn execute_tool(state: &AppState, name: &str, args: Value) -> anyhow::Resu
 
 This pattern is appropriate when each tool has distinct parameters and behavior. The action/subaction router is better when tools share CRUD patterns on multiple resource types.
 
-## Shared LogService boundary
+## Shared SyslogService boundary
 
-MCP tools are adapters over the shared application layer. Transport code extracts JSON arguments, calls `LogService`, and serializes typed responses back into MCP content envelopes:
+MCP tools are adapters over the shared application layer in `src/app/`. Transport code extracts JSON arguments, calls `SyslogService`, and serializes typed responses back into MCP content envelopes:
 
 ```rust
 async fn tool_search_logs(state: &AppState, args: Value) -> anyhow::Result<Value> {
@@ -42,7 +42,7 @@ async fn tool_search_logs(state: &AppState, args: Value) -> anyhow::Result<Value
 }
 ```
 
-`LogService` owns timestamp normalization, defaults, severity threshold expansion, correlation grouping, and bounded blocking DB execution. MCP should not call `DbPool` directly for log use cases.
+`SyslogService` owns timestamp normalization, defaults, severity threshold expansion, correlation grouping, and bounded blocking DB execution. MCP should not call `DbPool` directly for log use cases.
 
 ## Batch writer
 

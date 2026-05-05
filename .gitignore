@@ -22,6 +22,7 @@
 .beads-credential-key
 .serena/
 .worktrees/
+.worktree/
 .full-review/
 .full-review-archive-*
 .bivvy

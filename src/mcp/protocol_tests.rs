@@ -1,5 +1,5 @@
 use super::*;
-use crate::app::LogService;
+use crate::app::SyslogService;
 use crate::config::{McpConfig, StorageConfig};
 use crate::db;
 use crate::mcp::AppState;
@@ -12,7 +12,7 @@ fn test_state() -> (AppState, tempfile::TempDir) {
     let pool = Arc::new(db::init_pool(&storage).unwrap());
     (
         AppState {
-            service: LogService::new(pool, storage.clone()),
+            service: SyslogService::new(pool, storage.clone()),
             config: McpConfig {
                 host: "127.0.0.1".into(),
                 port: 3100,

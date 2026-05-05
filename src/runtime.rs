@@ -5,7 +5,7 @@ use anyhow::Result;
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 
-use crate::app::LogService;
+use crate::app::SyslogService;
 use crate::config::Config;
 use crate::db::{self, DbPool, StorageBudgetState};
 use crate::{mcp, syslog};
@@ -14,7 +14,7 @@ pub struct RuntimeCore {
     pub config: Config,
     pool: Arc<DbPool>,
     storage_state: Arc<Mutex<Option<StorageBudgetState>>>,
-    service: LogService,
+    service: SyslogService,
     maintenance_permit: Arc<Semaphore>,
 }
 
@@ -76,7 +76,7 @@ impl RuntimeCore {
                 "Initial storage budget check completed"
             );
         }
-        let service = LogService::new(Arc::clone(&pool), config.storage.clone());
+        let service = SyslogService::new(Arc::clone(&pool), config.storage.clone());
         Ok(Self {
             config,
             pool,
@@ -86,7 +86,7 @@ impl RuntimeCore {
         })
     }
 
-    pub fn service(&self) -> LogService {
+    pub fn service(&self) -> SyslogService {
         self.service.clone()
     }
 
