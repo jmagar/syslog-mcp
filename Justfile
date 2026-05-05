@@ -80,10 +80,10 @@ clean:
 
 # Linux only — Windows would need .exe binaries; requires git lfs install
 build-plugin: release
-    #!/usr/bin/env bash
-    set -euo pipefail
+    #!/bin/sh
+    set -eu
     target_dir="${CARGO_TARGET_DIR:-target}"
-    if [[ ! -x "$target_dir/release/syslog-mcp" && -x ".cache/cargo/release/syslog-mcp" ]]; then
+    if [ ! -x "$target_dir/release/syslog-mcp" ] && [ -x ".cache/cargo/release/syslog-mcp" ]; then
       target_dir=".cache/cargo"
     fi
     install -m 755 "$target_dir/release/syslog-mcp" bin/syslog-mcp

@@ -55,7 +55,7 @@ syslog-mcp uses OCI (Docker) images as the primary distribution package, not PyP
 | Registry | Image |
 | --- | --- |
 | GHCR | `ghcr.io/jmagar/syslog-mcp:latest` |
-| GHCR (versioned) | `ghcr.io/jmagar/syslog-mcp:v0.8.0` |
+| GHCR (versioned) | `ghcr.io/jmagar/syslog-mcp:0.8.0` |
 
 Additionally published to crates.io for `cargo install` usage.
 

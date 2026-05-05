@@ -86,11 +86,16 @@ async fn stdio_child_process_lists_tools_and_calls_queries() {
 
     if let Some(mut stderr) = stderr {
         let mut logs = String::new();
-        let _ = tokio::time::timeout(
+        match tokio::time::timeout(
             std::time::Duration::from_secs(1),
             stderr.read_to_string(&mut logs),
         )
-        .await;
+        .await
+        {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => panic!("failed to read stdio child stderr: {error}"),
+            Err(_) => panic!("stdio child stderr did not close after cancellation"),
+        }
         assert!(
             !logs.contains("syslog listener") && !logs.contains("MCP server listening"),
             "stdio mode must not start network services; stderr was: {logs}"
