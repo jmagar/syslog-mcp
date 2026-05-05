@@ -2,7 +2,7 @@
 
 ## Design philosophy
 
-syslog-mcp exposes 6 independent MCP tools using a flat dispatch pattern. Each tool has its own name, input schema, and handler -- there is no action/subaction router. All tools are read-only.
+syslog-mcp exposes 7 independent MCP tools using a flat dispatch pattern. Each tool has its own name, input schema, and handler -- there is no action/subaction router. All tools are read-only.
 
 | Tool | Purpose |
 | --- | --- |

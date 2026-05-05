@@ -29,6 +29,10 @@ impl SyslogRmcpServer {
     }
 }
 
+pub fn rmcp_server(state: AppState) -> SyslogRmcpServer {
+    SyslogRmcpServer::new(state)
+}
+
 impl ServerHandler for SyslogRmcpServer {
     async fn list_tools(
         &self,

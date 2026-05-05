@@ -2,13 +2,18 @@
 
 ## Overview
 
-syslog-mcp supports RMCP Streamable HTTP for MCP communication. It does not support direct stdio transport -- the binary is a long-running syslog receiver that must bind UDP/TCP ports, which is incompatible with stdio's parent-process model.
+syslog-mcp supports two first-party MCP transports:
+
+- `syslog-mcp` daemon: receives syslog over UDP/TCP and exposes RMCP Streamable HTTP.
+- `syslog-mcp-stdio`: query-only child process for local stdio MCP clients.
+
+The daemon binary itself is not a stdio MCP server. Direct stdio support lives in the dedicated `syslog-mcp-stdio` binary so child-process clients do not accidentally start network listeners or maintenance tasks.
 
 | Transport | Auth | Use Case | Default |
 | --- | --- | --- | --- |
 | RMCP Streamable HTTP, stateless JSON response | Bearer token (optional) | Docker, remote servers, reverse proxy | yes |
+| Direct stdio via `syslog-mcp-stdio` | Local process access | Local MCP clients with direct DB access | no |
 | Stateful Streamable HTTP sessions/SSE | n/a | Deferred; not enabled in this release | no |
-| Direct stdio | n/a | Use an HTTP-to-stdio bridge such as `mcp-remote` | no |
 
 ## HTTP transport
 
@@ -104,13 +109,39 @@ SYSLOG_MCP_ALLOWED_HOSTS=syslog.example.com,syslog.example.com:443
 SYSLOG_MCP_ALLOWED_ORIGINS=https://syslog.example.com
 ```
 
-## Why no stdio transport
+## Direct stdio transport
 
-syslog-mcp is a dual-port server:
-- Port 1514: UDP + TCP syslog receiver (must bind to receive logs)
-- Port 3100: HTTP MCP server
+`syslog-mcp-stdio` is a local query-only MCP server over stdin/stdout:
 
-stdio transport requires the MCP server to communicate exclusively over stdin/stdout with a parent process. A syslog receiver must bind network ports independently, making stdio unsuitable. Use HTTP transport directly, or bridge stdio-only clients with `mcp-remote`:
+- It exposes the same seven read-only tools as HTTP.
+- It loads `RuntimeCore::load_query_only()`.
+- It does not start UDP/TCP syslog listeners.
+- It does not start the HTTP server.
+- It does not run retention purge or storage-budget cleanup tasks.
+- It logs to stderr only; stdout is reserved for MCP protocol messages.
+- It does not require `SYSLOG_MCP_TOKEN`.
+
+Ingestion still requires the daemon to be running somewhere. Stdio mode only queries the configured SQLite database.
+
+```json
+{
+  "mcpServers": {
+    "syslog-mcp": {
+      "command": "/path/to/syslog-mcp-stdio",
+      "env": {
+        "SYSLOG_MCP_DB_PATH": "/data/syslog.db",
+        "RUST_LOG": "warn"
+      }
+    }
+  }
+}
+```
+
+SQLite WAL mode supports the normal deployment shape: one daemon writing log batches while one or more query-only stdio child processes read concurrently. `get_stats` reports current storage metrics from the database and configured thresholds; query-only stdio processes do not mutate the shared storage guard state.
+
+## HTTP-to-stdio bridge mode
+
+Use `mcp-remote` instead of direct stdio when the database path is not local to the MCP host, when syslog-mcp is only available through Docker/reverse proxy, or when you want to preserve HTTP bearer auth:
 
 ```json
 {
@@ -129,6 +160,7 @@ stdio transport requires the MCP server to communicate exclusively over stdin/st
 | --- | --- | --- |
 | Syslog receiver (UDP + TCP) | 1514 | `SYSLOG_PORT` |
 | MCP HTTP server | 3100 | `SYSLOG_MCP_PORT` |
+| MCP stdio process | n/a | `SYSLOG_MCP_DB_PATH` |
 
 ## See also
 

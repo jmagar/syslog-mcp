@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-05-05
+
+### Added
+
+- **RMCP stdio transport**: Added `syslog-mcp-stdio`, a query-only MCP child-process binary that exposes the same seven read-only tools as HTTP without starting syslog listeners, HTTP routes, or cleanup tasks.
+- **Stdio integration tests**: Added child-process RMCP coverage for tool listing, `get_stats`, and parameterized `search_logs` over stdio.
+- **Packaging/docs**: Release/plugin builds now install both `syslog-mcp` and `syslog-mcp-stdio`; docs distinguish HTTP daemon mode, direct stdio query mode, and `mcp-remote` bridge mode.
+
 ## [0.7.0] - 2026-05-05
 
 ### Added
@@ -377,7 +385,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/jmagar/syslog-mcp/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/jmagar/syslog-mcp/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/jmagar/syslog-mcp/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/jmagar/syslog-mcp/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/jmagar/syslog-mcp/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/jmagar/syslog-mcp/compare/v0.5.0...v0.6.0

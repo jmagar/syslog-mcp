@@ -82,7 +82,7 @@ Runs on pull requests to validate the Codex plugin manifest.
 - `main`: Production-ready code
 - Feature branches: new features, bug fixes
 - PRs required before merge to main
-- Version tags (`v0.6.0`) trigger publish workflows
+- Version tags (`v0.8.0`) trigger publish workflows
 
 ## Secrets
 

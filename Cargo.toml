@@ -1,6 +1,6 @@
 [package]
 name = "syslog-mcp"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 rust-version = "1.86"
 description = "Syslog receiver + MCP server for homelab log intelligence"
@@ -11,7 +11,7 @@ tokio = { version = "1", features = ["full"] }
 
 # HTTP / MCP transport
 axum = "0.8"
-rmcp = { version = "1.6.0", default-features = false, features = ["server", "macros", "transport-streamable-http-server"] }
+rmcp = { version = "1.6.0", default-features = false, features = ["server", "macros", "transport-streamable-http-server", "transport-io"] }
 tower-http = { version = "0.6", features = ["cors", "limit", "trace"] }
 
 # SQLite
@@ -51,3 +51,4 @@ futures-util = "0.3"
 tempfile = "3"
 serial_test = "3"
 tower = { version = "0.5", features = ["util"] }
+rmcp = { version = "1.6.0", default-features = false, features = ["client", "transport-child-process"] }

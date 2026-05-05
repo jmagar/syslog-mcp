@@ -25,7 +25,11 @@ syslog-mcp
 
 The binary reads `config.toml` from the current directory and accepts env var overrides.
 
+Cargo installs `syslog-mcp-stdio` as a second binary for local MCP clients that require stdio. This binary is query-only: it reads `SYSLOG_MCP_DB_PATH`, exposes the MCP tools over stdin/stdout, and does not start syslog listeners, HTTP routes, retention purge, or storage-budget cleanup. Keep the daemon running for ingestion.
+
 ## Docker
+
+The Docker image is daemon-focused: it runs `syslog-mcp` for syslog ingest and HTTP MCP. Direct stdio is intended for host-installed binaries where the MCP client can launch `syslog-mcp-stdio` and read the SQLite DB path directly.
 
 ### Build
 
