@@ -4,17 +4,8 @@ Browser-accessible MCP endpoints and CORS configuration.
 
 ## CORS policy
 
-syslog-mcp restricts CORS to localhost origins only:
-
-```rust
-CorsLayer::new()
-    .allow_origin([
-        "http://localhost:3100",
-        "http://127.0.0.1:3100",
-    ])
-    .allow_methods([Method::POST, Method::GET])
-    .allow_headers(Any)
-```
+syslog-mcp allows localhost origins for the configured MCP port, plus any
+origins listed in `SYSLOG_MCP_ALLOWED_ORIGINS`.
 
 ## Why restricted CORS
 
@@ -25,6 +16,7 @@ MCP CLI clients (mcporter, curl, Claude Code) are not browser-based and ignore C
 ### Allowed
 
 - Local web dashboards served from `localhost:3100` or `127.0.0.1:3100`
+- Browser clients served from origins listed in `SYSLOG_MCP_ALLOWED_ORIGINS`
 - Direct navigation to `http://localhost:3100/health`
 
 ### Blocked
@@ -39,12 +31,14 @@ MCP CLI clients (mcporter, curl, Claude Code) are not browser-based and ignore C
 
 ## Customizing CORS
 
-CORS origins are currently hardcoded in `src/mcp.rs`. To allow additional origins:
+Set a comma-separated origin allow-list:
 
-1. Edit the `allow_origin` list in `src/mcp.rs`
-2. Rebuild: `just build`
+```bash
+SYSLOG_MCP_ALLOWED_ORIGINS=https://syslog.example.com,https://logs.example.com
+```
 
-A future enhancement could make CORS origins configurable via environment variables.
+Each value must be a full browser origin URL. Add matching reverse-proxy Host
+headers to `SYSLOG_MCP_ALLOWED_HOSTS` when serving through public DNS.
 
 ## See also
 

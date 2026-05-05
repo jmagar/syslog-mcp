@@ -238,6 +238,28 @@ async fn mcp_cors_uses_configured_port() {
 }
 
 #[tokio::test]
+async fn mcp_cors_allows_configured_origins() {
+    let (mut state, _dir) = test_state_with_token(None);
+    state.config.allowed_origins = vec!["https://syslog.example.com".into()];
+    let app = router(state);
+    let request = Request::builder()
+        .method("GET")
+        .uri("/health")
+        .header("Origin", "https://syslog.example.com")
+        .body(axum::body::Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .unwrap(),
+        "https://syslog.example.com"
+    );
+}
+
+#[tokio::test]
 async fn mcp_rejects_wrong_token() {
     let h = TestHarness::with_token("secret-token".into());
     let body = jsonrpc_request(9, "tools/list", None);

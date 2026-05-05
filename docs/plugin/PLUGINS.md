@@ -1,3 +1,9 @@
+<!--
+plugin: syslog-mcp
+surface: plugin-manifests
+version: 0.6.0
+-->
+
 # Plugin Manifest Reference -- syslog-mcp
 
 Structure and conventions for plugin manifest files.
@@ -30,7 +36,8 @@ All manifests must have the same `version` value.
     "get_errors",
     "list_hosts",
     "correlate_events",
-    "get_stats"
+    "get_stats",
+    "syslog_help"
   ],
   "transport": "http",
   "port": 3100,

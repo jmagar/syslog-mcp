@@ -359,9 +359,7 @@ fn env_override_list(key: &str, target: &mut Vec<String>) {
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .collect();
-    if !values.is_empty() {
-        *target = values;
-    }
+    *target = values;
 }
 
 fn env_override_bool(key: &str, target: &mut bool) -> anyhow::Result<()> {

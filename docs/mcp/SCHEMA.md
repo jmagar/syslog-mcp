@@ -2,7 +2,7 @@
 
 ## Overview
 
-Tool schemas define the input validation contract for MCP tools. In syslog-mcp, schemas are defined as `serde_json::json!()` objects in `src/mcp.rs` within the `tool_definitions()` function. These follow JSON Schema conventions.
+Tool schemas define the input validation contract for MCP tools. In syslog-mcp, schemas are defined as `serde_json::json!()` objects in `src/mcp/schemas.rs` within the `tool_definitions()` function. These follow JSON Schema conventions.
 
 ## Schema definition pattern
 

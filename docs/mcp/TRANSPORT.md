@@ -25,7 +25,7 @@ SYSLOG_MCP_TOKEN=your-token-here   # optional
 | Endpoint | Method | Auth | Description |
 | --- | --- | --- | --- |
 | `/mcp` | POST | yes (when token set) | RMCP Streamable HTTP JSON-response endpoint |
-| `/mcp` | GET, DELETE | yes (when token set) | `405 Method Not Allowed` in stateless mode |
+| `/mcp` | GET, DELETE | yes (when token set) | `405 Method Not Allowed` after auth succeeds, or when auth is disabled; missing/invalid bearer token returns `401` first |
 | `/health` | GET | no | Health check (unauthenticated) |
 
 ### Claude Code configuration

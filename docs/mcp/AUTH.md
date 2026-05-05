@@ -28,7 +28,7 @@ SYSLOG_MCP_TOKEN=<generated-token>
 
 ## Authentication middleware
 
-The `require_auth` middleware in `src/mcp.rs` validates inbound tokens:
+The `require_auth` middleware in `src/mcp/routes.rs` validates inbound tokens:
 
 ```
 Request -> require_auth middleware -> Route Handler
@@ -37,7 +37,12 @@ Request -> require_auth middleware -> Route Handler
          Missing/invalid token
 ```
 
-- Returns HTTP 401 with JSON error `{"code": -32001, "message": "unauthorized"}` if the token is missing or incorrect
+- Returns HTTP 401 with a JSON-RPC error envelope if the token is missing or incorrect:
+
+```json
+{"jsonrpc":"2.0","id":null,"error":{"code":-32001,"message":"unauthorized"}}
+```
+
 - Uses `subtle::ConstantTimeEq` for token comparison to prevent timing side-channel attacks
 - Applies to `/mcp` RMCP requests. `/health` is outside MCP auth.
 

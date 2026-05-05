@@ -15,7 +15,7 @@ Tests are colocated with source code in `#[cfg(test)]` modules:
 | `src/config.rs` | Env var overrides, defaults, validation (host format, storage budget relationships, pool size) |
 | `src/db.rs` | Schema init, insert/search/tail/errors/hosts/stats, FTS5 queries, retention purge, storage budget enforcement, batch retry |
 | `src/syslog.rs` | RFC 3164/5424 parsing, UniFi CEF extraction, severity mapping, facility mapping, malformed input |
-| `src/mcp.rs` | Health endpoint, auth middleware (valid/invalid/missing token, no-auth mode), tool dispatch, timestamp validation, MCP lifecycle |
+| `src/mcp.rs` + `src/mcp/` | Health endpoint, auth middleware (valid/invalid/missing token, no-auth mode), RMCP tool dispatch, timestamp validation, MCP lifecycle |
 | `src/main.rs` | Background interval timing |
 
 ### Running specific tests

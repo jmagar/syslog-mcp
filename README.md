@@ -624,12 +624,9 @@ server {
         include /config/nginx/proxy.conf;
         include /config/nginx/resolver.conf;
 
-        # SSE support
-        proxy_set_header Connection '';
+        # RMCP Streamable HTTP in stateless JSON-response mode.
+        # Clients use POST /mcp; GET/DELETE /mcp are not supported.
         proxy_http_version 1.1;
-        chunked_transfer_encoding off;
-        proxy_buffering off;
-        proxy_cache off;
 
         set $upstream_app syslog-mcp;
         set $upstream_port 3100;
@@ -778,7 +775,7 @@ Authorization: Bearer <token>
 | `src/config.rs` | Configuration loading and validation |
 | `src/db.rs` | SQLite schema, FTS5, retention, storage budget |
 | `src/syslog.rs` | UDP/TCP listeners, syslog parser, batch writer |
-| `src/mcp.rs` | MCP HTTP server, RMCP adapter, auth middleware, health endpoint |
+| `src/mcp.rs` + `src/mcp/` | MCP HTTP server, RMCP adapter, auth middleware, tools, health endpoint |
 | `.claude-plugin/plugin.json` | Claude plugin manifest |
 | `.codex-plugin/plugin.json` | Codex plugin manifest |
 | `gemini-extension.json` | Gemini extension manifest |

@@ -99,7 +99,7 @@ fn defaults_are_applied_without_env_vars() {
     assert!(cfg.mcp.allowed_hosts.is_empty());
     assert!(cfg.mcp.allowed_origins.is_empty());
     assert_eq!(cfg.storage.pool_size, 4);
-    assert_eq!(cfg.storage.retention_days, 90);
+    assert_eq!(cfg.storage.retention_days, 0);
     assert!(cfg.storage.wal_mode);
     assert_eq!(cfg.storage.max_db_size_mb, 1024);
     assert_eq!(cfg.storage.recovery_db_size_mb, 900);
@@ -136,6 +136,24 @@ fn env_var_overrides_mcp_allowed_hosts_and_origins() {
         cfg.mcp.allowed_origins,
         vec!["https://app.example.com", "https://syslog.example.com"]
     );
+}
+
+#[test]
+#[serial]
+fn env_var_can_clear_mcp_allowed_hosts_and_origins() {
+    let mut hosts = vec!["syslog.example.com".to_string()];
+    let mut origins = vec!["https://syslog.example.com".to_string()];
+    std::env::set_var("SYSLOG_MCP_ALLOWED_HOSTS", "  , ");
+    std::env::set_var("SYSLOG_MCP_ALLOWED_ORIGINS", "");
+
+    env_override_list("SYSLOG_MCP_ALLOWED_HOSTS", &mut hosts);
+    env_override_list("SYSLOG_MCP_ALLOWED_ORIGINS", &mut origins);
+
+    std::env::remove_var("SYSLOG_MCP_ALLOWED_HOSTS");
+    std::env::remove_var("SYSLOG_MCP_ALLOWED_ORIGINS");
+
+    assert!(hosts.is_empty());
+    assert!(origins.is_empty());
 }
 
 #[test]

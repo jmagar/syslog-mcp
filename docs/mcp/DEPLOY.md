@@ -111,10 +111,9 @@ Port 1514 is used instead of the standard syslog port 514 to avoid needing root 
 
 See `docs/syslog.subdomain.conf` for a working nginx config that exposes MCP over HTTPS at `https://syslog-mcp.tootie.tv/mcp`.
 
-Key requirements for SSE support:
-- `proxy_buffering off`
-- `chunked_transfer_encoding off`
-- `proxy_http_version 1.1`
+The MCP endpoint uses RMCP Streamable HTTP in stateless JSON-response mode.
+Clients use `POST /mcp`; `GET` and `DELETE` on `/mcp` are not supported after
+auth succeeds.
 
 ## See also
 

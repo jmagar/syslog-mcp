@@ -137,7 +137,6 @@ All tools are read-only. syslog-mcp exposes no destructive operations via MCP.
 | `anyhow` | Error handling |
 | `subtle` | Constant-time token comparison |
 | `rustix` | Filesystem stats (free disk space) |
-| `tokio-stream` / `futures-core` | SSE support |
 
 ### Development
 

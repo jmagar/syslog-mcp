@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use axum::{
     extract::State,
-    http::{header, StatusCode},
+    http::{HeaderValue, Method, StatusCode},
     middleware,
     response::{IntoResponse, Json},
     routing::get,
@@ -15,6 +15,7 @@ use tower_http::{
     limit::RequestBodyLimitLayer,
 };
 
+use super::rmcp_server::allowed_origins;
 use super::AppState;
 use super::{streamable_http_config, streamable_http_service};
 
@@ -35,25 +36,9 @@ pub fn router(state: AppState) -> Router {
         .merge(authenticated)
         .merge(unauthenticated)
         .fallback(|| async { (StatusCode::NOT_FOUND, Json(json!({"error": "not_found"}))) })
-        .layer(middleware::from_fn(enforce_body_limit))
         .layer(RequestBodyLimitLayer::new(MCP_BODY_LIMIT_BYTES as usize))
-        .layer(cors_layer(state.config.port))
+        .layer(cors_layer(&state.config))
         .with_state(state)
-}
-
-async fn enforce_body_limit(
-    req: axum::extract::Request,
-    next: middleware::Next,
-) -> axum::response::Response {
-    let content_length = req
-        .headers()
-        .get(header::CONTENT_LENGTH)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok());
-    if content_length.is_some_and(|length| length > MCP_BODY_LIMIT_BYTES) {
-        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
-    }
-    next.run(req).await
 }
 
 /// Bearer-token authentication middleware.
@@ -99,17 +84,21 @@ async fn require_auth(
     next.run(req).await
 }
 
-fn cors_layer(port: u16) -> CorsLayer {
+fn cors_layer(config: &crate::config::McpConfig) -> CorsLayer {
+    let origins: Vec<HeaderValue> = allowed_origins(config)
+        .into_iter()
+        .filter_map(|origin| match origin.parse::<HeaderValue>() {
+            Ok(value) => Some(value),
+            Err(error) => {
+                tracing::warn!(origin = %origin, error = %error, "Ignoring invalid CORS origin");
+                None
+            }
+        })
+        .collect();
+
     CorsLayer::new()
-        .allow_origin([
-            format!("http://localhost:{port}")
-                .parse::<axum::http::HeaderValue>()
-                .expect("valid localhost origin"),
-            format!("http://127.0.0.1:{port}")
-                .parse::<axum::http::HeaderValue>()
-                .expect("valid 127.0.0.1 origin"),
-        ])
-        .allow_methods([axum::http::Method::POST, axum::http::Method::GET])
+        .allow_origin(origins)
+        .allow_methods([Method::POST, Method::GET])
         .allow_headers(Any)
 }
 

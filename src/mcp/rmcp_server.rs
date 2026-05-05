@@ -1,4 +1,4 @@
-use std::{borrow::Cow, sync::Arc, time::Instant};
+use std::{borrow::Cow, net::Ipv6Addr, sync::Arc, time::Instant};
 
 use rmcp::{
     model::{
@@ -159,7 +159,7 @@ fn tool_result_from_json(value: Value) -> Result<CallToolResult, ErrorData> {
 fn is_validation_error(error: &anyhow::Error) -> bool {
     matches!(
         error.downcast_ref::<ServiceError>(),
-        Some(ServiceError::InvalidInput(_) | ServiceError::Busy(_))
+        Some(ServiceError::InvalidInput(_))
     ) || error.to_string().contains(" is required")
         || error.to_string().contains(" must be <=")
 }
@@ -174,29 +174,50 @@ fn safe_result_count(value: &Value) -> Option<usize> {
 }
 
 fn allowed_hosts(config: &McpConfig) -> Vec<String> {
-    let mut hosts = vec![
-        "localhost".to_string(),
-        "127.0.0.1".to_string(),
-        "::1".to_string(),
-    ];
-    hosts.extend(config.allowed_hosts.iter().cloned());
+    let mut hosts = vec!["localhost".to_string(), "127.0.0.1".to_string()];
+    for host in &config.allowed_hosts {
+        push_host_variants(&mut hosts, host, config.port);
+    }
     push_host_variants(&mut hosts, &config.host, config.port);
     push_host_variants(&mut hosts, "localhost", config.port);
     push_host_variants(&mut hosts, "127.0.0.1", config.port);
+    push_host_variants(&mut hosts, "::1", config.port);
     hosts.sort();
     hosts.dedup();
     hosts
 }
 
 fn push_host_variants(hosts: &mut Vec<String>, host: &str, port: u16) {
+    let host = host.trim();
     if host.is_empty() {
         return;
     }
     hosts.push(host.to_string());
-    hosts.push(format!("{host}:{port}"));
+    if host.starts_with('[') && host.contains("]:") {
+        return;
+    }
+    if let Some(inner) = host
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+    {
+        if !inner.is_empty() {
+            hosts.push(format!("[{inner}]:{port}"));
+        }
+    } else if host.parse::<Ipv6Addr>().is_ok() {
+        hosts.push(format!("[{host}]"));
+        hosts.push(format!("[{host}]:{port}"));
+    } else if !has_port(host) {
+        hosts.push(format!("{host}:{port}"));
+    }
 }
 
-fn allowed_origins(config: &McpConfig) -> Vec<String> {
+fn has_port(host: &str) -> bool {
+    host.rsplit_once(':')
+        .and_then(|(_, port)| port.parse::<u16>().ok())
+        .is_some()
+}
+
+pub(super) fn allowed_origins(config: &McpConfig) -> Vec<String> {
     let mut origins = vec![
         format!("http://localhost:{}", config.port),
         format!("http://127.0.0.1:{}", config.port),

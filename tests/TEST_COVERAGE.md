@@ -139,7 +139,8 @@ Timeout: 10 seconds
 #### Test: `auth: unauthenticated /mcp returns 401`
 
 **HTTP request (no auth header):**
-```
+
+```text
 POST <BASE_URL>/mcp
 Content-Type: application/json
 Accept: application/json, text/event-stream
@@ -155,7 +156,8 @@ Timeout: 10 seconds
 #### Test: `auth: bad token returns 401`
 
 **HTTP request (wrong token):**
-```
+
+```text
 POST <BASE_URL>/mcp
 Authorization: Bearer intentionally-wrong-token-for-testing
 Content-Type: application/json

@@ -15,6 +15,8 @@ use crate::{
     mcp::{streamable_http_config, streamable_http_service, AppState},
 };
 
+use super::{allowed_hosts, is_validation_error};
+
 fn test_state() -> (AppState, Arc<DbPool>, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let storage = StorageConfig::for_test(dir.path().join("rmcp-server-test.db"));
@@ -86,6 +88,39 @@ async fn post_rmcp(router: Router, body: Value) -> (StatusCode, Value) {
 fn content_json(response: &Value) -> Value {
     let text = response["result"]["content"][0]["text"].as_str().unwrap();
     serde_json::from_str(text).unwrap()
+}
+
+#[test]
+fn allowed_hosts_include_bracketed_ipv6_authority_variants() {
+    let mut config = McpConfig {
+        host: "::1".into(),
+        port: 3100,
+        server_name: "syslog-mcp".into(),
+        api_token: None,
+        allowed_hosts: vec!["[fd00::1]".into(), "syslog.example.com:443".into()],
+        allowed_origins: Vec::new(),
+    };
+
+    let hosts = allowed_hosts(&config);
+    assert!(hosts.contains(&"::1".to_string()));
+    assert!(hosts.contains(&"[::1]".to_string()));
+    assert!(hosts.contains(&"[::1]:3100".to_string()));
+    assert!(!hosts.contains(&"::1:3100".to_string()));
+
+    config.host = "0.0.0.0".into();
+    let hosts = allowed_hosts(&config);
+    assert!(hosts.contains(&"[fd00::1]:3100".to_string()));
+    assert!(hosts.contains(&"syslog.example.com:443".to_string()));
+    assert!(!hosts.contains(&"[syslog.example.com:443]".to_string()));
+}
+
+#[test]
+fn busy_errors_are_not_validation_errors() {
+    let error = anyhow::Error::new(crate::app::ServiceError::Busy(
+        "database worker limit reached".into(),
+    ));
+
+    assert!(!is_validation_error(&error));
 }
 
 #[tokio::test]

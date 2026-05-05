@@ -23,5 +23,5 @@ Index for the `mcp/` documentation subdirectory. These docs cover the MCP server
 | `SCHEMA.md` | Tool schema documentation: JSON Schema definitions in Rust |
 | `TESTS.md` | Testing: cargo test, live smoke tests, test coverage |
 | `TOOLS.md` | MCP tools reference: all 7 tools with parameters and response shapes |
-| `TRANSPORT.md` | Transport methods: HTTP (primary), SSE (legacy), port assignment |
+| `TRANSPORT.md` | RMCP Streamable HTTP transport, stateless mode, port assignment |
 | `WEBMCP.md` | Web MCP: CORS configuration, browser access restrictions |

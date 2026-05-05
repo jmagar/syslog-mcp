@@ -39,7 +39,7 @@ syslog-mcp/
 
 ## Development cycle
 
-1. **Edit source code** -- modify tool handlers in `src/mcp.rs`, database queries in `src/db.rs`, syslog parsing in `src/syslog.rs`.
+1. **Edit source code** -- modify tool schemas in `src/mcp/schemas.rs`, handlers in `src/mcp/tools.rs`, database queries in `src/db.rs`, and syslog parsing in `src/syslog/`.
 2. **Run dev server** -- `just dev` compiles and runs the binary.
 3. **Test interactively** -- call tools via curl:
    ```bash
@@ -67,7 +67,7 @@ syslog-mcp/
 2. **Add adapter entry** -- add a match arm in `execute_tool()`.
 3. **Implement handler** -- write an async function `tool_<name>()` that calls `LogService`.
 4. **Add database query** -- implement the query function in `src/db.rs` with parameterized SQL.
-5. **Add unit test** -- write `#[test]` or `#[tokio::test]` in the relevant module.
+5. **Add sidecar unit tests** -- place tests in the relevant `src/<module>_tests.rs` file and keep the source module limited to the `#[cfg(test)] #[path = "..._tests.rs"] mod tests;` hook.
 6. **Update syslog_help** -- add the tool to the help text in `tool_syslog_help()`.
 7. **Update SKILL.md** -- add the tool to the skill documentation.
 8. **Update plugin manifests** -- add the tool name to `.claude-plugin/plugin.json` tools array.
