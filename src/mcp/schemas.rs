@@ -17,6 +17,10 @@ pub(super) fn tool_definitions() -> Vec<Value> {
                         "type": "string",
                         "description": "Filter by hostname (exact match). Use list_hosts to see available hostnames."
                     },
+                    "source_ip": {
+                        "type": "string",
+                        "description": "Filter by exact verified network sender address (IP:port), independent of the claimed hostname."
+                    },
                     "severity": {
                         "type": "string",
                         "enum": ["emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"],
@@ -50,6 +54,10 @@ pub(super) fn tool_definitions() -> Vec<Value> {
                     "hostname": {
                         "type": "string",
                         "description": "Filter to a specific host"
+                    },
+                    "source_ip": {
+                        "type": "string",
+                        "description": "Filter by exact verified network sender address (IP:port)"
                     },
                     "app_name": {
                         "type": "string",
@@ -112,6 +120,10 @@ pub(super) fn tool_definitions() -> Vec<Value> {
                     "hostname": {
                         "type": "string",
                         "description": "Optional: limit correlation to a specific host"
+                    },
+                    "source_ip": {
+                        "type": "string",
+                        "description": "Optional: limit correlation to an exact verified network sender address (IP:port)"
                     },
                     "query": {
                         "type": "string",

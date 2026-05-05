@@ -36,7 +36,7 @@ Pre-commit hooks verify security invariants:
 ### Credential rotation
 
 1. Generate new token: `openssl rand -hex 32`
-2. Update `.env` with the new `SYSLOG_MCP_API_TOKEN` value
+2. Update `.env` with the new `SYSLOG_MCP_TOKEN` value
 3. Restart the server: `just restart`
 4. Update MCP client configuration with new token
 5. Verify: `just health`
@@ -47,17 +47,17 @@ syslog-mcp has a single authentication boundary: MCP clients authenticating to t
 
 ### Bearer token
 
-When `SYSLOG_MCP_API_TOKEN` is set, all requests to `/mcp` and `/sse` require:
+When `SYSLOG_MCP_TOKEN` is set, all requests to `/mcp` and `/sse` require:
 
 ```
-Authorization: Bearer {SYSLOG_MCP_API_TOKEN}
+Authorization: Bearer {SYSLOG_MCP_TOKEN}
 ```
 
 Token comparison uses `subtle::ConstantTimeEq` to prevent timing attacks.
 
 ### Unauthenticated by default
 
-When `SYSLOG_MCP_API_TOKEN` is not set, all endpoints are open. This is acceptable for LAN-only deployments but not recommended when exposed via reverse proxy.
+When `SYSLOG_MCP_TOKEN` is not set, all endpoints are open. This is acceptable for LAN-only deployments but not recommended when exposed via reverse proxy.
 
 ### Health endpoint
 
@@ -122,7 +122,7 @@ sudo iptables -t nat -A PREROUTING -p tcp --dport 514 -j REDIRECT --to-port 1514
 ### SWAG reverse proxy
 
 When exposing MCP over HTTPS via SWAG:
-- Add auth at the proxy layer or set `SYSLOG_MCP_API_TOKEN`
+- Add auth at the proxy layer or set `SYSLOG_MCP_TOKEN`
 - SSE requires: `proxy_buffering off`, `chunked_transfer_encoding off`, `proxy_http_version 1.1`
 - See `docs/syslog.subdomain.conf` for a working nginx config
 

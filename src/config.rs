@@ -4,10 +4,12 @@ use std::path::PathBuf;
 const MAX_CLEANUP_CHUNK_SIZE: usize = 1_000_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct Config {
     pub syslog: SyslogConfig,
     pub storage: StorageConfig,
     pub mcp: McpConfig,
+    pub api: ApiConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,6 +102,17 @@ impl McpConfig {
     pub fn bind_addr(&self) -> String {
         format!("{}:{}", self.host, self.port)
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ApiConfig {
+    /// Enable the non-MCP JSON API. Disabled by default.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Required bearer token when the non-MCP API is enabled.
+    #[serde(default)]
+    pub api_token: Option<String>,
 }
 
 // --- Defaults ---
@@ -281,6 +294,9 @@ impl Config {
             &mut config.storage.cleanup_chunk_size,
         )?;
 
+        env_override_bool("SYSLOG_API_ENABLED", &mut config.api.enabled)?;
+        env_override_opt_str("SYSLOG_API_TOKEN", &mut config.api.api_token);
+
         // Validation
         if config.storage.pool_size == 0 {
             return Err(anyhow::anyhow!("SYSLOG_MCP_POOL_SIZE must be > 0"));
@@ -288,6 +304,7 @@ impl Config {
         validate_storage_config(&config.storage)?;
         validate_host(&config.syslog.host)?;
         validate_host(&config.mcp.host)?;
+        validate_auth_config(&config)?;
 
         Ok(config)
     }
@@ -317,6 +334,52 @@ fn env_override_path(key: &str, target: &mut PathBuf) {
             *target = PathBuf::from(v);
         }
     }
+}
+
+fn env_override_bool(key: &str, target: &mut bool) -> anyhow::Result<()> {
+    let Ok(v) = std::env::var(key) else {
+        return Ok(());
+    };
+    if v.is_empty() {
+        return Ok(());
+    }
+
+    *target = match v.to_ascii_lowercase().as_str() {
+        "true" | "1" | "yes" | "y" | "on" => true,
+        "false" | "0" | "no" | "n" | "off" => false,
+        _ => {
+            return Err(anyhow::anyhow!(
+                "Invalid value for {key}={v}: expected true/false/1/0/yes/no/on/off"
+            ));
+        }
+    };
+    Ok(())
+}
+
+fn validate_auth_config(config: &Config) -> anyhow::Result<()> {
+    if token_is_blank(&config.mcp.api_token) {
+        return Err(anyhow::anyhow!("mcp.api_token must not be empty"));
+    }
+    if config.api.enabled {
+        match config.api.api_token.as_deref() {
+            Some(token) if !token.trim().is_empty() => {}
+            Some(_) => return Err(anyhow::anyhow!("api.api_token must not be empty")),
+            None => {
+                return Err(anyhow::anyhow!(
+                    "SYSLOG_API_TOKEN is required when SYSLOG_API_ENABLED=true"
+                ));
+            }
+        }
+    } else if token_is_blank(&config.api.api_token) {
+        return Err(anyhow::anyhow!("api.api_token must not be empty"));
+    }
+    Ok(())
+}
+
+fn token_is_blank(token: &Option<String>) -> bool {
+    token
+        .as_deref()
+        .is_some_and(|value| value.trim().is_empty())
 }
 
 fn env_override_parse<T: std::str::FromStr>(key: &str, target: &mut T) -> anyhow::Result<()>

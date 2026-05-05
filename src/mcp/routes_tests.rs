@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::LogService;
 use crate::config::{McpConfig, StorageConfig};
 use crate::db;
 use crate::mcp::AppState;
@@ -13,14 +14,13 @@ fn test_state_with_token(token: Option<String>) -> (AppState, tempfile::TempDir)
     let pool = Arc::new(db::init_pool(&storage).unwrap());
     (
         AppState {
-            pool,
+            service: LogService::new(pool, storage.clone()),
             config: McpConfig {
                 host: "127.0.0.1".into(),
                 port: 3100,
                 server_name: "syslog-mcp".into(),
                 api_token: token,
             },
-            storage,
         },
         dir,
     )
@@ -180,6 +180,46 @@ async fn integration_auth_correct_token_succeeds() {
     let body = jsonrpc_request(8, "tools/list", None);
     let (status, _) = mcp_post(router(h.state), body, Some("secret-token")).await;
     assert_eq!(status, axum::http::StatusCode::OK);
+}
+
+#[tokio::test]
+async fn mcp_accepts_case_insensitive_bearer_scheme() {
+    let h = TestHarness::with_token("secret-token".into());
+    let app = router(h.state);
+    let request = Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("Content-Type", "application/json")
+        .header("Authorization", "bearer secret-token")
+        .body(axum::body::Body::from(
+            serde_json::to_vec(&jsonrpc_request(10, "tools/list", None)).unwrap(),
+        ))
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+}
+
+#[tokio::test]
+async fn mcp_cors_uses_configured_port() {
+    let (mut state, _dir) = test_state_with_token(None);
+    state.config.port = 3201;
+    let app = router(state);
+    let request = Request::builder()
+        .method("GET")
+        .uri("/health")
+        .header("Origin", "http://localhost:3201")
+        .body(axum::body::Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .unwrap(),
+        "http://localhost:3201"
+    );
 }
 
 #[tokio::test]

@@ -85,7 +85,7 @@ fn test_purge_old_logs_removes_old() {
     let deleted = purge_old_logs(&pool, 90).unwrap();
     assert_eq!(deleted, 1, "should have deleted exactly the old entry");
 
-    let remaining = tail_logs(&pool, None, None, 10).unwrap();
+    let remaining = tail_logs(&pool, None, None, None, 10).unwrap();
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].message, "future message");
 }
@@ -121,7 +121,7 @@ fn test_enforce_storage_budget_deletes_by_received_at_until_recovery_target() {
     assert!(outcome.deleted_rows > 0);
     assert!(outcome.metrics.logical_db_size_bytes <= outcome.recovery.logical_db_size_bytes);
 
-    let rows = tail_logs(&pool, None, None, 10).unwrap();
+    let rows = tail_logs(&pool, None, None, None, 10).unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].message, large_new);
 }

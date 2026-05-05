@@ -1,7 +1,5 @@
-use std::sync::Arc;
-
-use crate::config::{McpConfig, StorageConfig};
-use crate::db::DbPool;
+use crate::app::LogService;
+use crate::config::McpConfig;
 
 mod protocol;
 mod routes;
@@ -13,7 +11,6 @@ pub use routes::router;
 /// Shared app state
 #[derive(Clone)]
 pub struct AppState {
-    pub pool: Arc<DbPool>,
+    pub service: LogService,
     pub config: McpConfig,
-    pub storage: StorageConfig,
 }

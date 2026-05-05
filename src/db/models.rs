@@ -115,6 +115,8 @@ pub struct SearchParams {
     pub query: Option<String>,
     /// Filter by hostname
     pub hostname: Option<String>,
+    /// Filter by verified network sender address (IP:port)
+    pub source_ip: Option<String>,
     /// Filter by severity (exact match: emerg, alert, crit, err, warning, notice, info, debug)
     pub severity: Option<String>,
     /// Filter by one of a set of severity levels (for threshold queries)

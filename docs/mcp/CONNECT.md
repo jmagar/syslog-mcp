@@ -22,7 +22,7 @@ With bearer auth:
 
 ```bash
 claude mcp add --transport http \
-  --header "Authorization: Bearer $SYSLOG_MCP_API_TOKEN" \
+  --header "Authorization: Bearer $SYSLOG_MCP_TOKEN" \
   syslog-mcp http://localhost:3100/mcp
 ```
 

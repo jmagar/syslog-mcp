@@ -51,6 +51,7 @@ fn test_search_fts() {
     let params = SearchParams {
         query: Some("disk".to_string()),
         hostname: None,
+        source_ip: None,
         severity: None,
         severity_in: None,
         app_name: None,
@@ -70,6 +71,7 @@ fn test_search_invalid_fts_returns_error() {
     let params = SearchParams {
         query: Some("(invalid fts syntax".to_string()),
         hostname: None,
+        source_ip: None,
         severity: None,
         severity_in: None,
         app_name: None,
@@ -145,7 +147,7 @@ fn test_tail_filter_by_host() {
     ];
     insert_logs_batch(&pool, &entries).unwrap();
 
-    let rows = tail_logs(&pool, Some("host-a"), None, 10).unwrap();
+    let rows = tail_logs(&pool, Some("host-a"), None, None, 10).unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].hostname, "host-a");
 }
@@ -164,6 +166,7 @@ fn test_search_timestamp_range_filtering() {
     let params = SearchParams {
         query: None,
         hostname: None,
+        source_ip: None,
         severity: None,
         severity_in: None,
         app_name: None,
@@ -178,6 +181,7 @@ fn test_search_timestamp_range_filtering() {
     let params = SearchParams {
         query: None,
         hostname: None,
+        source_ip: None,
         severity: None,
         severity_in: None,
         app_name: None,
@@ -192,6 +196,7 @@ fn test_search_timestamp_range_filtering() {
     let params = SearchParams {
         query: None,
         hostname: None,
+        source_ip: None,
         severity: None,
         severity_in: None,
         app_name: None,
@@ -259,6 +264,7 @@ fn test_search_severity_in_filter() {
     let params = SearchParams {
         query: None,
         hostname: None,
+        source_ip: None,
         severity: None,
         severity_in: Some(vec!["emerg".into(), "err".into(), "warning".into()]),
         app_name: None,
@@ -302,6 +308,7 @@ fn search_logs_ignores_deleted_fts_phantom_rows() {
     let params = SearchParams {
         query: Some("\"phantom-token\"".to_string()),
         hostname: None,
+        source_ip: None,
         severity: None,
         severity_in: None,
         app_name: None,

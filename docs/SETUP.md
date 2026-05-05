@@ -64,7 +64,7 @@ SYSLOG_MCP_PORT=3100
 
 # Optional: enable bearer auth on /mcp endpoint
 #   openssl rand -hex 32
-SYSLOG_MCP_API_TOKEN=
+SYSLOG_MCP_TOKEN=
 
 # Storage
 SYSLOG_MCP_DB_PATH=/data/syslog.db
@@ -161,8 +161,8 @@ See [docs/](.) for per-host configuration:
 
 ### "401 Unauthorized" on tool calls
 
-- Verify `SYSLOG_MCP_API_TOKEN` in `.env` matches the token configured in your MCP client
-- If behind a reverse proxy (SWAG), handle auth at the proxy layer and leave `SYSLOG_MCP_API_TOKEN` unset
+- Verify `SYSLOG_MCP_TOKEN` in `.env` matches the token configured in your MCP client
+- If behind a reverse proxy (SWAG), handle auth at the proxy layer and leave `SYSLOG_MCP_TOKEN` unset
 
 ### No syslog messages arriving
 

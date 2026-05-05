@@ -9,11 +9,11 @@ syslog-mcp uses a flat match on tool name rather than an action/subaction router
 ```rust
 async fn execute_tool(state: &AppState, name: &str, args: Value) -> anyhow::Result<Value> {
     match name {
-        "search_logs" => tool_search_logs(&state.pool, args).await,
-        "tail_logs" => tool_tail_logs(&state.pool, args).await,
-        "get_errors" => tool_get_errors(&state.pool, args).await,
-        "list_hosts" => tool_list_hosts(&state.pool, args).await,
-        "correlate_events" => tool_correlate_events(&state.pool, args).await,
+        "search_logs" => tool_search_logs(state, args).await,
+        "tail_logs" => tool_tail_logs(state, args).await,
+        "get_errors" => tool_get_errors(state, args).await,
+        "list_hosts" => tool_list_hosts(state, args).await,
+        "correlate_events" => tool_correlate_events(state, args).await,
         "get_stats" => tool_get_stats(state, args).await,
         "syslog_help" => tool_syslog_help().await,
         _ => Err(anyhow::anyhow!("Unknown tool: {name}")),
@@ -23,24 +23,26 @@ async fn execute_tool(state: &AppState, name: &str, args: Value) -> anyhow::Resu
 
 This pattern is appropriate when each tool has distinct parameters and behavior. The action/subaction router is better when tools share CRUD patterns on multiple resource types.
 
-## run_db helper
+## Shared LogService boundary
 
-All database operations run on tokio's blocking threadpool via a shared helper:
+MCP tools are adapters over the shared application layer. Transport code extracts JSON arguments, calls `LogService`, and serializes typed responses back into MCP content envelopes:
 
 ```rust
-async fn run_db<F, T>(pool: &Arc<DbPool>, f: F) -> anyhow::Result<T>
-where
-    F: FnOnce(&DbPool) -> anyhow::Result<T> + Send + 'static,
-    T: Send + 'static,
-{
-    let pool = Arc::clone(pool);
-    tokio::task::spawn_blocking(move || f(&pool))
-        .await
-        .map_err(|e| anyhow::anyhow!("Task join error: {e}"))?
+async fn tool_search_logs(state: &AppState, args: Value) -> anyhow::Result<Value> {
+    let response = state
+        .service
+        .search_logs(SearchLogsRequest {
+            query: string_arg(&args, "query"),
+            hostname: string_arg(&args, "hostname"),
+            source_ip: string_arg(&args, "source_ip"),
+            // ...
+        })
+        .await?;
+    Ok(serde_json::to_value(response)?)
 }
 ```
 
-This prevents blocking the tokio runtime with synchronous rusqlite calls.
+`LogService` owns timestamp normalization, defaults, severity threshold expansion, correlation grouping, and bounded blocking DB execution. MCP should not call `DbPool` directly for log use cases.
 
 ## Batch writer
 
