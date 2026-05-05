@@ -16,7 +16,7 @@ The MCP server listens on port 3100 (configurable via `SYSLOG_MCP_PORT`).
 ```bash
 SYSLOG_MCP_HOST=0.0.0.0
 SYSLOG_MCP_PORT=3100
-SYSLOG_MCP_API_TOKEN=your-token-here   # optional
+SYSLOG_MCP_TOKEN=your-token-here   # optional
 ```
 
 ### Endpoints

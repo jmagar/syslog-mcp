@@ -6,10 +6,10 @@ syslog-mcp has a single authentication boundary: MCP clients authenticating to t
 
 ## Bearer token
 
-When `SYSLOG_MCP_API_TOKEN` is set, all requests to `/mcp` and `/sse` require:
+When `SYSLOG_MCP_TOKEN` is set, all requests to `/mcp` and `/sse` require:
 
 ```
-Authorization: Bearer {SYSLOG_MCP_API_TOKEN}
+Authorization: Bearer {SYSLOG_MCP_TOKEN}
 ```
 
 Generate a token:
@@ -21,8 +21,10 @@ openssl rand -hex 32
 Set it in `.env`:
 
 ```bash
-SYSLOG_MCP_API_TOKEN=<generated-token>
+SYSLOG_MCP_TOKEN=<generated-token>
 ```
+
+`SYSLOG_MCP_API_TOKEN` is still accepted as a deprecated compatibility alias when `SYSLOG_MCP_TOKEN` is unset.
 
 ## Authentication middleware
 
@@ -49,11 +51,11 @@ The health endpoint is intentionally unauthenticated so Docker HEALTHCHECK, dock
 
 ## No-auth mode
 
-When `SYSLOG_MCP_API_TOKEN` is not set (the default), all endpoints pass through without authentication. This is acceptable for:
+When `SYSLOG_MCP_TOKEN` is not set (the default), all endpoints pass through without authentication. This is acceptable for:
 - LAN-only deployments behind a firewall
 - Deployments behind a reverse proxy that handles its own auth (SWAG with Authelia, Cloudflare Access)
 
-When exposed to the internet or untrusted networks, always set `SYSLOG_MCP_API_TOKEN`.
+When exposed to the internet or untrusted networks, always set `SYSLOG_MCP_TOKEN`.
 
 ## Plugin userConfig integration
 
@@ -62,7 +64,7 @@ When installed as a Claude Code plugin, the token is managed via `userConfig` in
 ```json
 {
   "userConfig": {
-    "SYSLOG_MCP_API_TOKEN": {
+    "syslog_mcp_token": {
       "type": "string",
       "title": "API Token",
       "description": "Bearer token for authenticating MCP requests (leave empty if auth is disabled)",

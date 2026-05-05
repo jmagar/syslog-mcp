@@ -98,7 +98,7 @@ SIGTERM and SIGINT are handled by tokio signal handlers:
 
 - Bearer tokens are never logged at any level
 - Auth failure logs include method and path but not the submitted token
-- `SYSLOG_MCP_API_TOKEN` value is never printed in startup config summary (only `auth_enabled = true/false`)
+- `SYSLOG_MCP_TOKEN` value is never printed in startup config summary (only `mcp_auth_enabled = true/false`)
 
 ## See also
 

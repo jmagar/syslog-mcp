@@ -46,7 +46,7 @@ All query parameters are SQL-parameterized. FTS5 queries use their own DSL (not 
 
 ## No outbound credentials
 
-syslog-mcp reads no `_URL`, `_API_KEY`, or similar environment variables for upstream connectivity. The only credential is the optional `SYSLOG_MCP_API_TOKEN` for inbound MCP authentication.
+syslog-mcp reads no `_URL`, `_API_KEY`, or similar environment variables for upstream connectivity. The only credential is the optional `SYSLOG_MCP_TOKEN` for inbound MCP authentication.
 
 ## Cross-references
 

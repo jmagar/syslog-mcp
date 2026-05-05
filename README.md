@@ -744,7 +744,7 @@ The server implements MCP over HTTP (JSON-RPC 2.0).
 - `GET /sse` — legacy SSE transport (returns endpoint redirect)
 - `GET /health` — unauthenticated health probe
 
-When `SYSLOG_MCP_API_TOKEN` is set, `/mcp` and `/sse` require:
+When `SYSLOG_MCP_TOKEN` is set, `/mcp` and `/sse` require:
 
 ```
 Authorization: Bearer <token>

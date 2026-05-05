@@ -42,7 +42,7 @@ All manifests must have the same `version` value.
       "sensitive": false,
       "default": "https://syslog.tootie.tv/mcp"
     },
-    "SYSLOG_MCP_API_TOKEN": {
+    "syslog_mcp_token": {
       "type": "string",
       "title": "API Token",
       "description": "Bearer token for authenticating MCP requests",

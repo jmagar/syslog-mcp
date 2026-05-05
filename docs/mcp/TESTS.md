@@ -82,7 +82,7 @@ curl -s -X POST http://localhost:3100/mcp \
 - [ ] **Auth: valid token** -- 200 with correct Bearer token
 - [ ] **Auth: invalid token** -- 401 Unauthorized
 - [ ] **Auth: no token when required** -- 401 Unauthorized
-- [ ] **Auth: no-auth mode** -- all endpoints accessible when SYSLOG_MCP_API_TOKEN is unset
+- [ ] **Auth: no-auth mode** -- all endpoints accessible when `SYSLOG_MCP_TOKEN` is unset
 - [ ] **Health endpoint** -- `GET /health` returns 200 with no auth
 - [ ] **FTS5 query syntax** -- AND, OR, NOT, phrases, prefix matching
 - [ ] **Time range filtering** -- from/to parameters parse ISO 8601 correctly
