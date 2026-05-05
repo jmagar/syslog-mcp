@@ -92,6 +92,18 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::Options;
+
+    #[test]
+    fn parser_rejects_missing_value_before_next_option() {
+        let err = Options::parse(vec!["--query".into(), "--limit".into(), "5".into()])
+            .expect_err("parser should reject missing option values");
+        assert!(err.to_string().contains("missing value for --query"));
+    }
+}
+
 #[derive(Debug)]
 struct Options {
     pairs: Vec<(String, String)>,
@@ -110,6 +122,7 @@ impl Options {
             } else {
                 let value = iter
                     .next()
+                    .filter(|value| !value.starts_with("--"))
                     .ok_or_else(|| anyhow!("missing value for --{key}"))?;
                 pairs.push((key.to_string(), value));
             }

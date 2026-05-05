@@ -10,11 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.5.0] - 2026-05-04
 
 ### Added
+
 - **Shared app layer**: Added `LogService` with typed request/response models for search, tail, errors, hosts, correlation, and stats. MCP, CLI, and API surfaces now call this shared layer instead of duplicating business rules.
 - **CLI**: Added `syslog-cli` for direct JSON search/tail/errors/hosts/correlate/stats queries without requiring the MCP server to run.
 - **Non-MCP API**: Added disabled-by-default `/api/*` JSON routes with separate `SYSLOG_API_TOKEN` bearer authentication.
 
 ### Changed
+
 - **Runtime**: Moved reusable config/DB/service/syslog/maintenance construction into `RuntimeCore`; `main.rs` is now a thin server entrypoint.
 - **Source identity**: Added first-class `source_ip` filters across the shared service, MCP schemas/help, CLI, and API.
 - **MCP tools**: Refactored tool handlers into thin JSON adapters while preserving MCP response envelopes and existing behavior.

@@ -304,11 +304,7 @@ impl Config {
         validate_storage_config(&config.storage)?;
         validate_host(&config.syslog.host)?;
         validate_host(&config.mcp.host)?;
-        if config.api.enabled && config.api.api_token.is_none() {
-            return Err(anyhow::anyhow!(
-                "SYSLOG_API_TOKEN is required when SYSLOG_API_ENABLED=true"
-            ));
-        }
+        validate_auth_config(&config)?;
 
         Ok(config)
     }
@@ -338,6 +334,32 @@ fn env_override_path(key: &str, target: &mut PathBuf) {
             *target = PathBuf::from(v);
         }
     }
+}
+
+fn validate_auth_config(config: &Config) -> anyhow::Result<()> {
+    if token_is_blank(&config.mcp.api_token) {
+        return Err(anyhow::anyhow!("mcp.api_token must not be empty"));
+    }
+    if config.api.enabled {
+        match config.api.api_token.as_deref() {
+            Some(token) if !token.trim().is_empty() => {}
+            Some(_) => return Err(anyhow::anyhow!("api.api_token must not be empty")),
+            None => {
+                return Err(anyhow::anyhow!(
+                    "SYSLOG_API_TOKEN is required when SYSLOG_API_ENABLED=true"
+                ));
+            }
+        }
+    } else if token_is_blank(&config.api.api_token) {
+        return Err(anyhow::anyhow!("api.api_token must not be empty"));
+    }
+    Ok(())
+}
+
+fn token_is_blank(token: &Option<String>) -> bool {
+    token
+        .as_deref()
+        .is_some_and(|value| value.trim().is_empty())
 }
 
 fn env_override_parse<T: std::str::FromStr>(key: &str, target: &mut T) -> anyhow::Result<()>

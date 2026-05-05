@@ -5,13 +5,12 @@ use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::Semaphore;
 
 use crate::config::StorageConfig;
 use crate::db::{self, DbPool, SearchParams};
 
 const DB_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
-const DB_TASK_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub struct LogService {
@@ -19,7 +18,6 @@ pub struct LogService {
     storage: StorageConfig,
     db_permits: Arc<Semaphore>,
     acquire_timeout: Duration,
-    task_timeout: Duration,
 }
 
 #[derive(Debug)]
@@ -236,7 +234,6 @@ impl LogService {
             storage,
             db_permits: Arc::new(Semaphore::new(permits)),
             acquire_timeout: DB_ACQUIRE_TIMEOUT,
-            task_timeout: DB_TASK_TIMEOUT,
         }
     }
 
@@ -252,24 +249,14 @@ impl LogService {
         .await
         .map_err(|_| ServiceError::Busy("database worker limit reached".into()))?
         .map_err(|_| ServiceError::Busy("database worker limit closed".into()))?;
-        self.run_db_with_permit(permit, f).await
-    }
-
-    async fn run_db_with_permit<F, T>(&self, permit: OwnedSemaphorePermit, f: F) -> ServiceResult<T>
-    where
-        F: FnOnce(&DbPool) -> anyhow::Result<T> + Send + 'static,
-        T: Send + 'static,
-    {
         let pool = Arc::clone(&self.pool);
-        let task = tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             let _permit = permit;
             f(&pool)
-        });
-        tokio::time::timeout(self.task_timeout, task)
-            .await
-            .map_err(|_| ServiceError::Busy("database operation timed out".into()))?
-            .map_err(|e| ServiceError::Internal(anyhow::anyhow!("Task join error: {e}")))?
-            .map_err(ServiceError::Internal)
+        })
+        .await
+        .map_err(|e| ServiceError::Internal(anyhow::anyhow!("Task join error: {e}")))?
+        .map_err(ServiceError::Internal)
     }
 
     pub async fn health_check(&self) -> ServiceResult<()> {

@@ -19,7 +19,7 @@ pub(super) fn tool_definitions() -> Vec<Value> {
                     },
                     "source_ip": {
                         "type": "string",
-                        "description": "Filter by verified network sender address (IP:port), independent of the claimed hostname."
+                        "description": "Filter by exact verified network sender address (IP:port), independent of the claimed hostname."
                     },
                     "severity": {
                         "type": "string",
@@ -57,7 +57,7 @@ pub(super) fn tool_definitions() -> Vec<Value> {
                     },
                     "source_ip": {
                         "type": "string",
-                        "description": "Filter by verified network sender address (IP:port)"
+                        "description": "Filter by exact verified network sender address (IP:port)"
                     },
                     "app_name": {
                         "type": "string",
@@ -123,7 +123,7 @@ pub(super) fn tool_definitions() -> Vec<Value> {
                     },
                     "source_ip": {
                         "type": "string",
-                        "description": "Optional: limit correlation to a verified network sender address (IP:port)"
+                        "description": "Optional: limit correlation to an exact verified network sender address (IP:port)"
                     },
                     "query": {
                         "type": "string",

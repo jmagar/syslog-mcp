@@ -138,6 +138,25 @@ fn api_token_is_separate_from_mcp_token() {
 }
 
 #[test]
+fn auth_validation_rejects_blank_mcp_token() {
+    let mut cfg = Config::default();
+    cfg.mcp.api_token = Some("  ".into());
+
+    let err = validate_auth_config(&cfg).unwrap_err();
+    assert!(err.to_string().contains("mcp.api_token"));
+}
+
+#[test]
+fn auth_validation_rejects_blank_api_token_when_enabled() {
+    let mut cfg = Config::default();
+    cfg.api.enabled = true;
+    cfg.api.api_token = Some("\t".into());
+
+    let err = validate_auth_config(&cfg).unwrap_err();
+    assert!(err.to_string().contains("api.api_token"));
+}
+
+#[test]
 #[serial]
 fn host_with_port_is_rejected() {
     std::env::set_var("SYSLOG_HOST", "0.0.0.0:1514");

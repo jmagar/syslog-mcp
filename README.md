@@ -35,7 +35,7 @@ Full-text search across all syslog messages with optional filters. Uses SQLite F
 |-----------|------|----------|---------|-------------|
 | `query` | string | no | — | FTS5 search query (see [FTS5 query syntax](#fts5-query-syntax)) |
 | `hostname` | string | no | — | Exact hostname match. Use `list_hosts` to enumerate. |
-| `source_ip` | string | no | — | Verified network sender address (`IP:port`) |
+| `source_ip` | string | no | — | Exact verified sender address (`IP:port`) captured from the network connection |
 | `severity` | string | no | — | One of: `emerg alert crit err warning notice info debug` |
 | `app_name` | string | no | — | Application name, e.g. `sshd`, `dockerd`, `kernel` |
 | `from` | string | no | — | Start of time range (ISO 8601 / RFC 3339, e.g. `2025-01-15T00:00:00Z`) |
@@ -87,7 +87,7 @@ Return the N most recent log entries. Equivalent to `tail -f` across all hosts.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `hostname` | string | no | — | Filter to a specific host |
-| `source_ip` | string | no | — | Filter to a verified network sender address (`IP:port`) |
+| `source_ip` | string | no | — | Filter to an exact verified sender address (`IP:port`) captured from the network connection |
 | `app_name` | string | no | — | Filter to a specific application |
 | `n` | integer | no | 50 | Number of recent entries (hard cap: 500) |
 
@@ -159,7 +159,7 @@ Search for related events across multiple hosts within a ±N minute window aroun
 | `window_minutes` | integer | no | 5 | Minutes before and after `reference_time` (max 60) |
 | `severity_min` | string | no | `warning` | Minimum severity to include. `warning` returns `warning/err/crit/alert/emerg`. `debug` returns everything. |
 | `hostname` | string | no | — | Limit correlation to one host |
-| `source_ip` | string | no | — | Limit correlation to a verified network sender address (`IP:port`) |
+| `source_ip` | string | no | — | Limit correlation to an exact verified sender address (`IP:port`) captured from the network connection |
 | `query` | string | no | — | FTS5 query to narrow results |
 | `limit` | integer | no | 500 | Max total events (hard cap: 999) |
 
@@ -260,7 +260,7 @@ Each stored log entry has these fields:
 | `process_id` | text\|null | PID from the syslog message |
 | `message` | text | Log message body (FTS5-indexed) |
 | `received_at` | text | Server-side receipt timestamp (RFC 3339, UTC). Used for retention. |
-| `source_ip` | text | Actual network sender address (`IP:port`). Trustworthy network identity. |
+| `source_ip` | text | Exact network sender address (`IP:port`) captured from the packet/connection peer. Trustworthy network identity, including the sender port. |
 
 **Important:** `hostname` is taken from the syslog message body, which any LAN device can set to an arbitrary value over UDP. `source_ip` is the only trustworthy network identifier. Retention cutoffs use `received_at` (server clock) so that devices with misconfigured clocks cannot cause premature or indefinite log retention.
 

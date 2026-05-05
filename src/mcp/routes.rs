@@ -36,19 +36,7 @@ pub fn router(state: AppState) -> Router {
         .merge(unauthenticated)
         .fallback(|| async { (StatusCode::NOT_FOUND, Json(json!({"error": "not_found"}))) })
         .layer(DefaultBodyLimit::max(65_536))
-        .layer(
-            CorsLayer::new()
-                .allow_origin([
-                    "http://localhost:3100"
-                        .parse::<axum::http::HeaderValue>()
-                        .expect("valid localhost origin"),
-                    "http://127.0.0.1:3100"
-                        .parse::<axum::http::HeaderValue>()
-                        .expect("valid 127.0.0.1 origin"),
-                ])
-                .allow_methods([axum::http::Method::POST, axum::http::Method::GET])
-                .allow_headers(Any),
-        )
+        .layer(cors_layer(state.config.port))
         .with_state(state)
 }
 
@@ -70,11 +58,10 @@ async fn require_auth(
             .headers()
             .get(axum::http::header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok());
-        let provided = auth.and_then(|v| v.strip_prefix("Bearer "));
-        let authorized = match provided {
-            Some(token) => token.as_bytes().ct_eq(expected.as_bytes()).unwrap_u8() == 1,
-            None => false,
-        };
+        let authorized = auth
+            .and_then(bearer_token)
+            .map(|token| token_matches(token, expected))
+            .unwrap_or(false);
         if !authorized {
             tracing::warn!(
                 method = %method,
@@ -94,6 +81,49 @@ async fn require_auth(
         }
     }
     next.run(req).await
+}
+
+fn cors_layer(port: u16) -> CorsLayer {
+    CorsLayer::new()
+        .allow_origin([
+            format!("http://localhost:{port}")
+                .parse::<axum::http::HeaderValue>()
+                .expect("valid localhost origin"),
+            format!("http://127.0.0.1:{port}")
+                .parse::<axum::http::HeaderValue>()
+                .expect("valid 127.0.0.1 origin"),
+        ])
+        .allow_methods([axum::http::Method::POST, axum::http::Method::GET])
+        .allow_headers(Any)
+}
+
+fn bearer_token(auth: &str) -> Option<&str> {
+    let mut parts = auth.split_whitespace();
+    let scheme = parts.next()?;
+    let token = parts.next()?;
+    if parts.next().is_some() || !scheme.eq_ignore_ascii_case("bearer") {
+        return None;
+    }
+    Some(token)
+}
+
+fn token_matches(provided: &str, expected: &str) -> bool {
+    const MAX_TOKEN_LEN: usize = 4096;
+    if provided.len() > MAX_TOKEN_LEN || expected.len() > MAX_TOKEN_LEN {
+        return false;
+    }
+
+    let mut provided_buf = [0_u8; MAX_TOKEN_LEN];
+    let mut expected_buf = [0_u8; MAX_TOKEN_LEN];
+    provided_buf[..provided.len()].copy_from_slice(provided.as_bytes());
+    expected_buf[..expected.len()].copy_from_slice(expected.as_bytes());
+
+    let bytes_match = provided_buf.ct_eq(&expected_buf).unwrap_u8() == 1;
+    let lengths_match = (provided.len() as u64)
+        .ct_eq(&(expected.len() as u64))
+        .unwrap_u8()
+        == 1;
+    bytes_match && lengths_match
 }
 
 /// Health check — lightweight probe that verifies DB connectivity without

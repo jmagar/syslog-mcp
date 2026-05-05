@@ -9,6 +9,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 use subtle::ConstantTimeEq;
+use tower_http::cors::{Any, CorsLayer};
 
 use crate::app::{
     CorrelateEventsRequest, GetErrorsRequest, LogService, SearchLogsRequest, TailLogsRequest,
@@ -19,6 +20,7 @@ use crate::config::ApiConfig;
 pub struct ApiState {
     pub service: LogService,
     pub config: ApiConfig,
+    pub cors_port: u16,
 }
 
 pub fn router(state: ApiState) -> anyhow::Result<Router> {
@@ -36,6 +38,7 @@ pub fn router(state: ApiState) -> anyhow::Result<Router> {
         .route("/api/correlate", get(correlate))
         .route("/api/stats", get(stats))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth))
+        .layer(cors_layer(state.cors_port))
         .with_state(state);
     Ok(routes)
 }
@@ -56,9 +59,9 @@ async fn require_auth(
         .headers()
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok());
-    let provided = auth.and_then(|v| v.strip_prefix("Bearer "));
-    let authorized = provided
-        .map(|token| token.as_bytes().ct_eq(expected.as_bytes()).unwrap_u8() == 1)
+    let authorized = auth
+        .and_then(bearer_token)
+        .map(|token| token_matches(token, expected))
         .unwrap_or(false);
     if !authorized {
         return (
@@ -194,12 +197,58 @@ fn respond<T: serde::Serialize>(result: crate::app::ServiceResult<T>) -> axum::r
         Err(crate::app::ServiceError::Busy(msg)) => {
             (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": msg}))).into_response()
         }
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": err.to_string()})),
-        )
-            .into_response(),
+        Err(crate::app::ServiceError::Internal(err)) => {
+            tracing::error!(error = %err, "API request failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "internal_error"})),
+            )
+                .into_response()
+        }
     }
+}
+
+fn cors_layer(port: u16) -> CorsLayer {
+    CorsLayer::new()
+        .allow_origin([
+            format!("http://localhost:{port}")
+                .parse::<axum::http::HeaderValue>()
+                .expect("valid localhost origin"),
+            format!("http://127.0.0.1:{port}")
+                .parse::<axum::http::HeaderValue>()
+                .expect("valid 127.0.0.1 origin"),
+        ])
+        .allow_methods([axum::http::Method::GET])
+        .allow_headers(Any)
+}
+
+fn bearer_token(auth: &str) -> Option<&str> {
+    let mut parts = auth.split_whitespace();
+    let scheme = parts.next()?;
+    let token = parts.next()?;
+    if parts.next().is_some() || !scheme.eq_ignore_ascii_case("bearer") {
+        return None;
+    }
+    Some(token)
+}
+
+fn token_matches(provided: &str, expected: &str) -> bool {
+    const MAX_TOKEN_LEN: usize = 4096;
+    if provided.len() > MAX_TOKEN_LEN || expected.len() > MAX_TOKEN_LEN {
+        return false;
+    }
+
+    let mut provided_buf = [0_u8; MAX_TOKEN_LEN];
+    let mut expected_buf = [0_u8; MAX_TOKEN_LEN];
+    provided_buf[..provided.len()].copy_from_slice(provided.as_bytes());
+    expected_buf[..expected.len()].copy_from_slice(expected.as_bytes());
+
+    let bytes_match = provided_buf.ct_eq(&expected_buf).unwrap_u8() == 1;
+    let lengths_match = (provided.len() as u64)
+        .ct_eq(&(expected.len() as u64))
+        .unwrap_u8()
+        == 1;
+    bytes_match && lengths_match
 }
 
 #[cfg(test)]

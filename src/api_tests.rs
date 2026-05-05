@@ -20,6 +20,7 @@ fn test_state(token: Option<String>) -> (ApiState, Arc<DbPool>, tempfile::TempDi
                 enabled: true,
                 api_token: token,
             },
+            cors_port: 3100,
         },
         pool,
         dir,
@@ -61,8 +62,7 @@ async fn get_json(
 
 #[test]
 fn router_requires_token_when_enabled() {
-    let (mut state, _pool, _dir) = test_state(None);
-    state.config.enabled = true;
+    let (state, _pool, _dir) = test_state(None);
     assert!(router(state).is_err());
 }
 
@@ -88,6 +88,43 @@ async fn stats_route_requires_bearer_token() {
     let (status, value) = get_json(app, "/api/stats", Some("secret")).await;
     assert_eq!(status, axum::http::StatusCode::OK);
     assert!(value.get("total_logs").is_some());
+}
+
+#[tokio::test]
+async fn stats_route_accepts_case_insensitive_bearer_scheme() {
+    let (state, _pool, _dir) = test_state(Some("secret".into()));
+    let app = router(state).unwrap();
+    let request = Request::builder()
+        .method("GET")
+        .uri("/api/stats")
+        .header("Authorization", "bearer secret")
+        .body(axum::body::Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+}
+
+#[tokio::test]
+async fn api_routes_emit_cors_for_configured_port() {
+    let (state, _pool, _dir) = test_state(Some("secret".into()));
+    let app = router(state).unwrap();
+    let request = Request::builder()
+        .method("GET")
+        .uri("/api/stats")
+        .header("Authorization", "Bearer secret")
+        .header("Origin", "http://localhost:3100")
+        .body(axum::body::Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .unwrap(),
+        "http://localhost:3100"
+    );
 }
 
 #[tokio::test]

@@ -41,6 +41,7 @@ async fn main() -> Result<()> {
         app = app.merge(api::router(api::ApiState {
             service: runtime.service(),
             config: runtime.config.api.clone(),
+            cors_port: runtime.config.mcp.port,
         })?);
         info!("Non-MCP API mounted under /api");
     }
