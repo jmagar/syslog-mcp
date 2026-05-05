@@ -2,6 +2,9 @@
 plugin: syslog-mcp
 surface: plugin-manifests
 version: 0.6.0
+author: Jacob Magar
+license: MIT
+description: Reference for syslog-mcp plugin manifests and version metadata.
 -->
 
 # Plugin Manifest Reference -- syslog-mcp

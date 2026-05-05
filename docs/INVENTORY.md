@@ -75,7 +75,7 @@ All tools are read-only. syslog-mcp exposes no destructive operations via MCP.
 | Endpoint | Method | Auth required | Description |
 | --- | --- | --- | --- |
 | `/mcp` | POST | yes (when token set) | RMCP stateless Streamable HTTP endpoint |
-| `/mcp` | GET, DELETE | yes (when token set) | 405 in stateless mode |
+| `/mcp` | GET, DELETE | yes (when token set) | 401 first if token auth is enabled and the bearer token is missing/invalid; otherwise 405 in stateless mode |
 | `/health` | GET | no | Health check -- verifies DB connectivity |
 | `/api/search` | GET | yes when API enabled | Plain JSON log search |
 | `/api/tail` | GET | yes when API enabled | Plain JSON recent logs |

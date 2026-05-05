@@ -99,7 +99,7 @@ fn defaults_are_applied_without_env_vars() {
     assert!(cfg.mcp.allowed_hosts.is_empty());
     assert!(cfg.mcp.allowed_origins.is_empty());
     assert_eq!(cfg.storage.pool_size, 4);
-    assert_eq!(cfg.storage.retention_days, 0);
+    assert_eq!(cfg.storage.retention_days, 90);
     assert!(cfg.storage.wal_mode);
     assert_eq!(cfg.storage.max_db_size_mb, 1024);
     assert_eq!(cfg.storage.recovery_db_size_mb, 900);

@@ -11,7 +11,7 @@ max_message_size = 8192
 [storage]
 db_path = "/data/syslog.db"
 pool_size = 4
-retention_days = 0    # 0 = keep forever
+retention_days = 90   # 0 = keep forever
 wal_mode = true
 max_db_size_mb = 1024         # 0 = disable DB logical-size guard
 recovery_db_size_mb = 900     # cleanup target after DB-size breach

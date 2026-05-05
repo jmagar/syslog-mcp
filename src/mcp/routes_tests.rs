@@ -334,7 +334,7 @@ async fn mcp_rejects_missing_accept_header() {
         .unwrap();
 
     let response = app.oneshot(request).await.unwrap();
-    assert!(response.status().is_client_error());
+    assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
 }
 
 #[tokio::test]
@@ -352,7 +352,7 @@ async fn mcp_rejects_missing_content_type_header() {
         .unwrap();
 
     let response = app.oneshot(request).await.unwrap();
-    assert!(response.status().is_client_error());
+    assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
 }
 
 #[tokio::test]
