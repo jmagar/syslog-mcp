@@ -138,6 +138,49 @@ fn api_token_is_separate_from_mcp_token() {
 }
 
 #[test]
+#[serial]
+fn api_enabled_accepts_common_truthy_values() {
+    for value in ["1", "yes", "Y", "on", "TRUE"] {
+        std::env::set_var("SYSLOG_API_ENABLED", value);
+        std::env::set_var("SYSLOG_API_TOKEN", "api-token");
+        let result = Config::load();
+        std::env::remove_var("SYSLOG_API_ENABLED");
+        std::env::remove_var("SYSLOG_API_TOKEN");
+
+        let cfg = result.unwrap_or_else(|err| panic!("value {value} should parse: {err}"));
+        assert!(cfg.api.enabled);
+    }
+}
+
+#[test]
+#[serial]
+fn api_enabled_accepts_common_falsy_values() {
+    for value in ["0", "no", "N", "off", "FALSE"] {
+        std::env::set_var("SYSLOG_API_ENABLED", value);
+        std::env::remove_var("SYSLOG_API_TOKEN");
+        let result = Config::load();
+        std::env::remove_var("SYSLOG_API_ENABLED");
+
+        let cfg = result.unwrap_or_else(|err| panic!("value {value} should parse: {err}"));
+        assert!(!cfg.api.enabled);
+    }
+}
+
+#[test]
+#[serial]
+fn api_enabled_rejects_invalid_bool_values() {
+    std::env::set_var("SYSLOG_API_ENABLED", "maybe");
+    let result = Config::load();
+    std::env::remove_var("SYSLOG_API_ENABLED");
+
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("SYSLOG_API_ENABLED"));
+}
+
+#[test]
 fn auth_validation_rejects_blank_mcp_token() {
     let mut cfg = Config::default();
     cfg.mcp.api_token = Some("  ".into());

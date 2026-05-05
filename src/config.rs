@@ -294,7 +294,7 @@ impl Config {
             &mut config.storage.cleanup_chunk_size,
         )?;
 
-        env_override_parse("SYSLOG_API_ENABLED", &mut config.api.enabled)?;
+        env_override_bool("SYSLOG_API_ENABLED", &mut config.api.enabled)?;
         env_override_opt_str("SYSLOG_API_TOKEN", &mut config.api.api_token);
 
         // Validation
@@ -334,6 +334,26 @@ fn env_override_path(key: &str, target: &mut PathBuf) {
             *target = PathBuf::from(v);
         }
     }
+}
+
+fn env_override_bool(key: &str, target: &mut bool) -> anyhow::Result<()> {
+    let Ok(v) = std::env::var(key) else {
+        return Ok(());
+    };
+    if v.is_empty() {
+        return Ok(());
+    }
+
+    *target = match v.to_ascii_lowercase().as_str() {
+        "true" | "1" | "yes" | "y" | "on" => true,
+        "false" | "0" | "no" | "n" | "off" => false,
+        _ => {
+            return Err(anyhow::anyhow!(
+                "Invalid value for {key}={v}: expected true/false/1/0/yes/no/on/off"
+            ));
+        }
+    };
+    Ok(())
 }
 
 fn validate_auth_config(config: &Config) -> anyhow::Result<()> {
