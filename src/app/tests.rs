@@ -1,15 +1,15 @@
 use std::sync::Arc;
 
 use crate::config::StorageConfig;
-use crate::db::{init_pool, insert_logs_batch, LogBatchEntry};
+use crate::db::{init_pool, insert_logs_batch, DbPool, LogBatchEntry};
 
 use super::*;
 
-fn test_service() -> (LogService, tempfile::TempDir) {
+fn test_service() -> (SyslogService, Arc<DbPool>, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let storage = StorageConfig::for_test(dir.path().join("app-test.db"));
     let pool = Arc::new(init_pool(&storage).unwrap());
-    (LogService::new(pool, storage), dir)
+    (SyslogService::new(Arc::clone(&pool), storage), pool, dir)
 }
 
 fn entry(ts: &str, host: &str, severity: &str, msg: &str, source_ip: &str) -> LogBatchEntry {
@@ -45,9 +45,9 @@ fn severity_threshold_expands_to_more_severe_levels() {
 
 #[tokio::test]
 async fn correlate_events_normalizes_window_groups_and_truncates() {
-    let (service, _dir) = test_service();
+    let (service, pool, _dir) = test_service();
     insert_logs_batch(
-        &service.pool,
+        &pool,
         &[
             entry(
                 "2026-01-01T00:00:00+00:00",
@@ -96,9 +96,9 @@ async fn correlate_events_normalizes_window_groups_and_truncates() {
 
 #[tokio::test]
 async fn source_ip_filter_uses_network_sender_identity() {
-    let (service, _dir) = test_service();
+    let (service, pool, _dir) = test_service();
     insert_logs_batch(
-        &service.pool,
+        &pool,
         &[
             entry(
                 "2026-01-01T00:00:00Z",

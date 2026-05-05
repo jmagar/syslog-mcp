@@ -12,13 +12,13 @@ use subtle::ConstantTimeEq;
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::app::{
-    CorrelateEventsRequest, GetErrorsRequest, LogService, SearchLogsRequest, TailLogsRequest,
+    CorrelateEventsRequest, GetErrorsRequest, SearchLogsRequest, SyslogService, TailLogsRequest,
 };
 use crate::config::ApiConfig;
 
 #[derive(Clone)]
 pub struct ApiState {
-    pub service: LogService,
+    pub service: SyslogService,
     pub config: ApiConfig,
     pub cors_port: u16,
 }
