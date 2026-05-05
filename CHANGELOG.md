@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-05-05
+
+### Added
+
+- **Docker socket-proxy ingest**: Added optional pull-based Docker container log ingestion through read-only docker-socket-proxy endpoints, including host reconnect loops, container start event handling, stdout/stderr parsing, and per-container checkpoints in SQLite.
+- **Shared ingest writer**: Routed syslog listener input and Docker log input through one bounded batch writer so retention, storage guardrails, and write blocking remain centralized.
+- **Configuration/docs**: Added Docker ingest config, env vars, setup guidance, Compose `/config` mount, and `.env.example` entries for remote Docker hosts.
+
 ## [0.6.1] - 2026-05-05
 
 ### Changed
@@ -369,7 +377,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/jmagar/syslog-mcp/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/jmagar/syslog-mcp/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/jmagar/syslog-mcp/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/jmagar/syslog-mcp/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/jmagar/syslog-mcp/compare/v0.5.0...v0.6.0
 [0.1.7]: https://github.com/jmagar/syslog-mcp/compare/v0.1.6...v0.1.7

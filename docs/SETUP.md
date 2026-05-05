@@ -151,6 +151,46 @@ See [docs/](.) for per-host configuration:
 - **WSL hosts**: rsyslog with Tailscale IP
 - **UniFi**: Settings > System > Advanced > Remote Syslog
 - **ATT BGW-320**: Diagnostics > Syslog > Remote Syslog
+- **Docker hosts**: optional docker-socket-proxy pull mode for container stdout/stderr logs
+
+### Optional Docker host log ingest
+
+If your hosts already run `docker-socket-proxy`, syslog-mcp can pull Docker container logs from those hosts without switching the Docker daemon to the syslog logging driver.
+
+On each remote Docker host, expose only the read endpoints syslog-mcp needs:
+
+```env
+CONTAINERS=1
+EVENTS=1
+PING=1
+VERSION=1
+POST=0
+```
+
+Create a hosts file mounted into the syslog-mcp container, for example `/config/docker-hosts.toml`. You can start from `config/docker-hosts.example.toml`:
+
+```toml
+[[hosts]]
+name = "edge-host-a"
+base_url = "http://edge-host-a:2375"
+allow_insecure_http = true
+
+[[hosts]]
+name = "app-host-b"
+base_url = "http://app-host-b:2375"
+allow_insecure_http = true
+```
+
+Enable it in `.env`:
+
+```env
+SYSLOG_DOCKER_INGEST_ENABLED=true
+SYSLOG_DOCKER_HOSTS_FILE=/config/docker-hosts.toml
+```
+
+The ingest loop follows existing containers, listens for container start events, records checkpoints in SQLite, and reconnects with backoff if a host is unavailable. Remote containers still start normally if syslog-mcp is down because this path does not use Docker's daemon-level syslog logging driver.
+
+Plain `http://` docker-socket-proxy URLs require `allow_insecure_http = true`. Use that only on trusted private networks, firewall the proxy so only syslog-mcp can connect, or put the proxy behind authenticated TLS. `CONTAINERS=1` exposes Docker's broader read-only container API to anything that can reach the proxy, not just the log endpoints syslog-mcp calls.
 
 ## Troubleshooting
 

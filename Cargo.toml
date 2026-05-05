@@ -1,6 +1,6 @@
 [package]
 name = "syslog-mcp"
-version = "0.6.1"
+version = "0.7.0"
 edition = "2021"
 rust-version = "1.86"
 description = "Syslog receiver + MCP server for homelab log intelligence"
@@ -18,9 +18,14 @@ tower-http = { version = "0.6", features = ["cors", "limit", "trace"] }
 rusqlite = { version = "0.32", features = ["bundled", "vtab"] }
 r2d2 = "0.8"
 r2d2_sqlite = "0.25"
+scheduled-thread-pool = "0.2"
 
 # Syslog parsing
 syslog_loose = "0.21"
+
+# Docker Engine API client for optional docker-socket-proxy ingestion
+bollard = { version = "0.19", default-features = false, features = ["http", "chrono"] }
+bytes = "1"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -41,6 +46,7 @@ anyhow = "1"
 subtle = "2"
 rustix = { version = "0.38", features = ["fs"] }
 
+futures-util = "0.3"
 [dev-dependencies]
 tempfile = "3"
 serial_test = "3"

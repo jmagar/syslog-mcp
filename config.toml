@@ -26,3 +26,8 @@ server_name = "syslog-mcp"
 # Optional extra RMCP Host/Origin allow-lists for reverse proxies.
 # allowed_hosts = ["syslog.example.com", "syslog.example.com:443"]
 # allowed_origins = ["https://syslog.example.com"]
+
+[docker_ingest]
+enabled = false
+reconnect_initial_ms = 1000
+reconnect_max_ms = 30000

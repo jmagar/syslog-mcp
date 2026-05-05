@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 const MAX_CLEANUP_CHUNK_SIZE: usize = 1_000_000;
@@ -10,6 +11,7 @@ pub struct Config {
     pub storage: StorageConfig,
     pub mcp: McpConfig,
     pub api: ApiConfig,
+    pub docker_ingest: DockerIngestConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,6 +123,36 @@ pub struct ApiConfig {
     pub api_token: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DockerIngestConfig {
+    /// Enable remote Docker log ingestion through docker-socket-proxy endpoints.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Remote Docker hosts to ingest from.
+    #[serde(default)]
+    pub hosts: Vec<DockerHostConfig>,
+    /// Initial reconnect backoff in milliseconds per Docker host.
+    #[serde(default = "default_docker_reconnect_initial_ms")]
+    pub reconnect_initial_ms: u64,
+    /// Maximum reconnect backoff in milliseconds per Docker host.
+    #[serde(default = "default_docker_reconnect_max_ms")]
+    pub reconnect_max_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DockerHostConfig {
+    pub name: String,
+    pub base_url: String,
+    #[serde(default)]
+    pub allow_insecure_http: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct DockerHostsFile {
+    hosts: Vec<DockerHostConfig>,
+}
+
 // --- Defaults ---
 
 fn default_syslog_host() -> String {
@@ -183,6 +215,12 @@ fn default_true() -> bool {
 fn default_server_name() -> String {
     "syslog-mcp".into()
 }
+fn default_docker_reconnect_initial_ms() -> u64 {
+    1_000
+}
+fn default_docker_reconnect_max_ms() -> u64 {
+    30_000
+}
 
 impl Default for SyslogConfig {
     fn default() -> Self {
@@ -224,6 +262,17 @@ impl Default for McpConfig {
             api_token: None,
             allowed_hosts: Vec::new(),
             allowed_origins: Vec::new(),
+        }
+    }
+}
+
+impl Default for DockerIngestConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            hosts: Vec::new(),
+            reconnect_initial_ms: default_docker_reconnect_initial_ms(),
+            reconnect_max_ms: default_docker_reconnect_max_ms(),
         }
     }
 }
@@ -310,6 +359,32 @@ impl Config {
         env_override_bool("SYSLOG_API_ENABLED", &mut config.api.enabled)?;
         env_override_opt_str("SYSLOG_API_TOKEN", &mut config.api.api_token);
 
+        env_override_bool(
+            "SYSLOG_DOCKER_INGEST_ENABLED",
+            &mut config.docker_ingest.enabled,
+        )?;
+        env_override_parse(
+            "SYSLOG_DOCKER_RECONNECT_INITIAL_MS",
+            &mut config.docker_ingest.reconnect_initial_ms,
+        )?;
+        env_override_parse(
+            "SYSLOG_DOCKER_RECONNECT_MAX_MS",
+            &mut config.docker_ingest.reconnect_max_ms,
+        )?;
+        if config.docker_ingest.enabled {
+            if let Ok(path) = std::env::var("SYSLOG_DOCKER_HOSTS_FILE") {
+                if !path.is_empty() {
+                    let contents = std::fs::read_to_string(&path).map_err(|e| {
+                        anyhow::anyhow!("Failed to read SYSLOG_DOCKER_HOSTS_FILE={path}: {e}")
+                    })?;
+                    let parsed: DockerHostsFile = toml::from_str(&contents).map_err(|e| {
+                        anyhow::anyhow!("Failed to parse SYSLOG_DOCKER_HOSTS_FILE={path}: {e}")
+                    })?;
+                    config.docker_ingest.hosts = parsed.hosts;
+                }
+            }
+        }
+
         // Validation
         if config.storage.pool_size == 0 {
             return Err(anyhow::anyhow!("SYSLOG_MCP_POOL_SIZE must be > 0"));
@@ -318,6 +393,7 @@ impl Config {
         validate_host(&config.syslog.host)?;
         validate_host(&config.mcp.host)?;
         validate_auth_config(&config)?;
+        validate_docker_ingest_config(&config.docker_ingest)?;
 
         Ok(config)
     }
@@ -398,6 +474,52 @@ fn validate_auth_config(config: &Config) -> anyhow::Result<()> {
         }
     } else if token_is_blank(&config.api.api_token) {
         return Err(anyhow::anyhow!("api.api_token must not be empty"));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_docker_ingest_config(config: &DockerIngestConfig) -> anyhow::Result<()> {
+    if !config.enabled {
+        return Ok(());
+    }
+    if config.hosts.is_empty() {
+        return Err(anyhow::anyhow!(
+            "docker_ingest.hosts must not be empty when docker ingest is enabled"
+        ));
+    }
+    if config.reconnect_initial_ms == 0 {
+        return Err(anyhow::anyhow!(
+            "docker_ingest.reconnect_initial_ms must be > 0"
+        ));
+    }
+    if config.reconnect_max_ms < config.reconnect_initial_ms {
+        return Err(anyhow::anyhow!(
+            "docker_ingest.reconnect_max_ms must be >= reconnect_initial_ms"
+        ));
+    }
+    let mut names = HashSet::new();
+    for host in &config.hosts {
+        if host.name.trim().is_empty() {
+            return Err(anyhow::anyhow!("docker_ingest host name must not be empty"));
+        }
+        if !names.insert(host.name.as_str()) {
+            return Err(anyhow::anyhow!(
+                "duplicate docker_ingest host name: {}",
+                host.name
+            ));
+        }
+        if !(host.base_url.starts_with("http://") || host.base_url.starts_with("https://")) {
+            return Err(anyhow::anyhow!(
+                "docker_ingest host {} base_url must start with http:// or https://",
+                host.name
+            ));
+        }
+        if host.base_url.starts_with("http://") && !host.allow_insecure_http {
+            return Err(anyhow::anyhow!(
+                "docker_ingest host {} uses insecure http://; set allow_insecure_http = true only for trusted private networks",
+                host.name
+            ));
+        }
     }
     Ok(())
 }

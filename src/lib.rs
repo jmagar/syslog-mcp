@@ -6,3 +6,5 @@ pub mod runtime;
 pub mod syslog;
 
 pub(crate) mod db;
+pub(crate) mod docker_ingest;
+pub(crate) mod ingest;

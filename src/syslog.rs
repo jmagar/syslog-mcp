@@ -5,12 +5,13 @@ use tracing::{error, info};
 
 use crate::config::{StorageConfig, SyslogConfig};
 use crate::db::{self, DbPool};
+use crate::ingest;
 
 mod listener;
 mod parser;
-mod writer;
+pub(crate) mod writer;
 
-const WRITE_CHANNEL_CAPACITY: usize = 10_000;
+pub(crate) const WRITE_CHANNEL_CAPACITY: usize = ingest::WRITE_CHANNEL_CAPACITY;
 
 pub async fn start_with_storage_state(
     config: SyslogConfig,
@@ -18,25 +19,14 @@ pub async fn start_with_storage_state(
     pool: Arc<DbPool>,
     storage_state: Arc<Mutex<Option<db::StorageBudgetState>>>,
 ) -> Result<()> {
-    let (tx, rx) = mpsc::channel::<db::LogBatchEntry>(WRITE_CHANNEL_CAPACITY);
+    let ingest_tx = ingest::start_writer_from_syslog_config(&config, storage, pool, storage_state);
+    start_listeners(config, ingest_tx.sender()).await
+}
 
-    let writer_pool = pool.clone();
-    let writer_storage = storage.clone();
-    let writer_storage_state = storage_state.clone();
-    let batch_size = config.batch_size;
-    let flush_interval = tokio::time::Duration::from_millis(config.flush_interval);
-    tokio::spawn(async move {
-        writer::batch_writer(
-            rx,
-            writer_pool,
-            writer_storage,
-            writer_storage_state,
-            batch_size,
-            flush_interval,
-        )
-        .await;
-    });
-
+pub async fn start_listeners(
+    config: SyslogConfig,
+    tx: mpsc::Sender<db::LogBatchEntry>,
+) -> Result<()> {
     let bind_addr = config.bind_addr();
 
     let udp_tx = tx.clone();
@@ -68,8 +58,6 @@ pub async fn start_with_storage_state(
 
     info!(
         bind = %bind_addr,
-        batch_size = config.batch_size,
-        flush_interval_ms = config.flush_interval,
         max_message_size = config.max_message_size,
         max_tcp_connections = config.max_tcp_connections,
         tcp_idle_timeout_secs = config.tcp_idle_timeout_secs,

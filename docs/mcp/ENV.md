@@ -51,6 +51,17 @@ syslog-mcp always runs as an HTTP daemon (it needs persistent syslog UDP/TCP lis
 | `SYSLOG_MCP_CLEANUP_INTERVAL_SECS` | no | `60` | Enforcement check interval in seconds | no |
 | `SYSLOG_MCP_CLEANUP_CHUNK_SIZE` | no | `2000` | Rows deleted per chunk (1 to 1,000,000) | no |
 
+## Docker socket-proxy ingest
+
+| Variable | Required | Default | Description | Sensitive |
+| --- | --- | --- | --- | --- |
+| `SYSLOG_DOCKER_INGEST_ENABLED` | no | `false` | Enable pull-based Docker log ingestion from remote docker-socket-proxy hosts | no |
+| `SYSLOG_DOCKER_HOSTS_FILE` | yes, if hosts are not configured elsewhere | (none) | TOML file with `[[hosts]]` entries containing `name` and `base_url` | no |
+| `SYSLOG_DOCKER_RECONNECT_INITIAL_MS` | no | `1000` | Initial reconnect delay after host stream failure | no |
+| `SYSLOG_DOCKER_RECONNECT_MAX_MS` | no | `30000` | Maximum reconnect delay after repeated failures | no |
+
+Plain `http://` hosts in the hosts file must set `allow_insecure_http = true`; use that only on trusted private networks or behind firewall/TLS controls.
+
 ## Logging
 
 | Variable | Required | Default | Description | Sensitive |
@@ -63,6 +74,7 @@ syslog-mcp always runs as an HTTP daemon (it needs persistent syslog UDP/TCP lis
 | --- | --- | --- | --- | --- |
 | `SYSLOG_UID` | no | `1000` | Container user ID | no |
 | `SYSLOG_GID` | no | `1000` | Container group ID | no |
+| `SYSLOG_MCP_CONFIG_VOLUME` | no | `./config` | Read-only config mount for optional files such as `docker-hosts.toml` | no |
 | `DOCKER_NETWORK` | no | `syslog-mcp` | External Docker network name | no |
 
 ## Token generation

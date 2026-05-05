@@ -26,6 +26,7 @@ fn make_entry(message: &str) -> db::LogBatchEntry {
         message: message.to_string(),
         raw: message.to_string(),
         source_ip: "127.0.0.1:514".to_string(),
+        docker_checkpoint: None,
     }
 }
 

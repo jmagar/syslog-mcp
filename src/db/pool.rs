@@ -2,10 +2,17 @@ use anyhow::Result;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::Connection;
+use scheduled_thread_pool::ScheduledThreadPool;
+use std::sync::{Arc, OnceLock};
 
 use crate::config::StorageConfig;
 
 pub type DbPool = Pool<SqliteConnectionManager>;
+
+fn shared_scheduled_thread_pool() -> Arc<ScheduledThreadPool> {
+    static POOL: OnceLock<Arc<ScheduledThreadPool>> = OnceLock::new();
+    Arc::clone(POOL.get_or_init(|| Arc::new(ScheduledThreadPool::new(1))))
+}
 
 /// Initialize the database pool and schema
 pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
@@ -17,7 +24,10 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
     let wal_mode = config.wal_mode;
     let manager = SqliteConnectionManager::file(&config.db_path)
         .with_init(move |conn| configure_connection_pragmas(conn, wal_mode));
-    let pool = Pool::builder().max_size(config.pool_size).build(manager)?;
+    let pool = Pool::builder()
+        .max_size(config.pool_size)
+        .thread_pool(shared_scheduled_thread_pool())
+        .build(manager)?;
 
     // Initialize schema
     let conn = pool.get()?;
@@ -129,6 +139,31 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
              INSERT INTO schema_migrations (version) VALUES (1);",
         )?;
         tracing::info!("Migration 1: dropped FTS5 DELETE/UPDATE triggers");
+    }
+
+    // Migration 2: store per Docker host/container checkpoints for optional
+    // docker-socket-proxy log ingestion. This lets short syslog-mcp outages
+    // replay from Docker's local log store with /containers/{id}/logs?since=.
+    let migration_2_applied: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 2",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
+    if !migration_2_applied {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS docker_ingest_checkpoints (
+                 host_name      TEXT NOT NULL,
+                 container_id   TEXT NOT NULL,
+                 last_timestamp TEXT NOT NULL,
+                 updated_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                 PRIMARY KEY (host_name, container_id)
+             );
+             INSERT INTO schema_migrations (version) VALUES (2);",
+        )?;
+        tracing::info!("Migration 2: created docker_ingest_checkpoints table");
     }
 
     tracing::info!(path = %config.db_path.display(), "Database initialized");

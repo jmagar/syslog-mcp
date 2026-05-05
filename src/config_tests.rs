@@ -85,6 +85,10 @@ fn defaults_are_applied_without_env_vars() {
         "SYSLOG_MCP_CLEANUP_CHUNK_SIZE",
         "SYSLOG_API_ENABLED",
         "SYSLOG_API_TOKEN",
+        "SYSLOG_DOCKER_INGEST_ENABLED",
+        "SYSLOG_DOCKER_HOSTS_FILE",
+        "SYSLOG_DOCKER_RECONNECT_INITIAL_MS",
+        "SYSLOG_DOCKER_RECONNECT_MAX_MS",
     ] {
         std::env::remove_var(key);
     }
@@ -110,6 +114,10 @@ fn defaults_are_applied_without_env_vars() {
     assert!(cfg.mcp.api_token.is_none());
     assert!(!cfg.api.enabled);
     assert!(cfg.api.api_token.is_none());
+    assert!(!cfg.docker_ingest.enabled);
+    assert!(cfg.docker_ingest.hosts.is_empty());
+    assert_eq!(cfg.docker_ingest.reconnect_initial_ms, 1_000);
+    assert_eq!(cfg.docker_ingest.reconnect_max_ms, 30_000);
 }
 
 #[test]
@@ -343,4 +351,136 @@ fn accepts_cleanup_chunk_size_at_max() {
 
     let cfg = result.expect("cleanup_chunk_size == 1_000_000 should be accepted");
     assert_eq!(cfg.storage.cleanup_chunk_size, 1_000_000);
+}
+
+#[test]
+fn docker_ingest_toml_hosts_parse() {
+    let raw = r#"
+        [docker_ingest]
+        enabled = true
+        reconnect_initial_ms = 250
+        reconnect_max_ms = 10000
+        [[docker_ingest.hosts]]
+        name = "edge-host-a"
+        base_url = "http://edge-host-a:2375"
+        allow_insecure_http = true
+
+        [[docker_ingest.hosts]]
+        name = "app-host-b"
+        base_url = "http://app-host-b:2375"
+        allow_insecure_http = true
+    "#;
+
+    let config: Config = toml::from_str(raw).unwrap();
+    assert!(config.docker_ingest.enabled);
+    assert_eq!(config.docker_ingest.hosts.len(), 2);
+    assert_eq!(config.docker_ingest.hosts[0].name, "edge-host-a");
+    assert_eq!(
+        config.docker_ingest.hosts[0].base_url,
+        "http://edge-host-a:2375"
+    );
+    assert_eq!(config.docker_ingest.hosts[1].name, "app-host-b");
+    assert_eq!(
+        config.docker_ingest.hosts[1].base_url,
+        "http://app-host-b:2375"
+    );
+}
+
+#[test]
+fn docker_ingest_requires_hosts_when_enabled() {
+    let mut config = DockerIngestConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    config.hosts.clear();
+
+    let err = validate_docker_ingest_config(&config).unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("docker_ingest.hosts must not be empty"));
+}
+
+#[test]
+fn docker_ingest_rejects_duplicate_host_names() {
+    let config = DockerIngestConfig {
+        enabled: true,
+        hosts: vec![
+            DockerHostConfig {
+                name: "edge-host-a".into(),
+                base_url: "http://edge-host-a:2375".into(),
+                allow_insecure_http: true,
+            },
+            DockerHostConfig {
+                name: "edge-host-a".into(),
+                base_url: "http://10.0.0.10:2375".into(),
+                allow_insecure_http: true,
+            },
+        ],
+        ..Default::default()
+    };
+
+    let err = validate_docker_ingest_config(&config).unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("duplicate docker_ingest host name"));
+}
+
+#[test]
+#[serial]
+fn docker_ingest_loads_hosts_file_from_env() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("docker-hosts.toml");
+    std::fs::write(
+        &path,
+        r#"
+            [[hosts]]
+            name = "edge-host-a"
+            base_url = "http://edge-host-a:2375"
+            allow_insecure_http = true
+        "#,
+    )
+    .unwrap();
+
+    std::env::set_var("SYSLOG_DOCKER_INGEST_ENABLED", "true");
+    std::env::set_var("SYSLOG_DOCKER_HOSTS_FILE", &path);
+    let result = Config::load();
+    std::env::remove_var("SYSLOG_DOCKER_INGEST_ENABLED");
+    std::env::remove_var("SYSLOG_DOCKER_HOSTS_FILE");
+
+    let config = result.expect("Config::load should parse docker host file");
+    assert!(config.docker_ingest.enabled);
+    assert_eq!(config.docker_ingest.hosts.len(), 1);
+    assert_eq!(config.docker_ingest.hosts[0].name, "edge-host-a");
+}
+
+#[test]
+#[serial]
+fn docker_ingest_ignores_hosts_file_when_disabled() {
+    std::env::set_var("SYSLOG_DOCKER_INGEST_ENABLED", "false");
+    std::env::set_var(
+        "SYSLOG_DOCKER_HOSTS_FILE",
+        "/tmp/syslog-mcp-missing-docker-hosts.toml",
+    );
+    let result = Config::load();
+    std::env::remove_var("SYSLOG_DOCKER_INGEST_ENABLED");
+    std::env::remove_var("SYSLOG_DOCKER_HOSTS_FILE");
+
+    let config = result.expect("disabled Docker ingest should ignore stale hosts file env");
+    assert!(!config.docker_ingest.enabled);
+}
+
+#[test]
+fn docker_ingest_rejects_insecure_http_without_explicit_opt_in() {
+    let config = DockerIngestConfig {
+        enabled: true,
+        hosts: vec![DockerHostConfig {
+            name: "edge-host-a".into(),
+            base_url: "http://edge-host-a:2375".into(),
+            allow_insecure_http: false,
+        }],
+        ..Default::default()
+    };
+
+    let err = validate_docker_ingest_config(&config).unwrap_err();
+    assert!(err.to_string().contains("allow_insecure_http"));
 }

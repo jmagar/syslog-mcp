@@ -35,7 +35,7 @@ Full-text search across all syslog messages with optional filters. Uses SQLite F
 |-----------|------|----------|---------|-------------|
 | `query` | string | no | — | FTS5 search query (see [FTS5 query syntax](#fts5-query-syntax)) |
 | `hostname` | string | no | — | Exact hostname match. Use `list_hosts` to enumerate. |
-| `source_ip` | string | no | — | Exact verified sender address (`IP:port`) captured from the network connection |
+| `source_ip` | string | no | — | Exact source identifier. Syslog entries use the verified network sender address (`IP:port`); Docker ingest entries use `docker://host/container/stream` from configured ingest metadata. |
 | `severity` | string | no | — | One of: `emerg alert crit err warning notice info debug` |
 | `app_name` | string | no | — | Application name, e.g. `sshd`, `dockerd`, `kernel` |
 | `from` | string | no | — | Start of time range (ISO 8601 / RFC 3339, e.g. `2025-01-15T00:00:00Z`) |
@@ -87,7 +87,7 @@ Return the N most recent log entries. Equivalent to `tail -f` across all hosts.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `hostname` | string | no | — | Filter to a specific host |
-| `source_ip` | string | no | — | Filter to an exact verified sender address (`IP:port`) captured from the network connection |
+| `source_ip` | string | no | — | Filter to an exact source identifier. Syslog entries use the verified network sender address (`IP:port`); Docker ingest entries use `docker://host/container/stream` from configured ingest metadata. |
 | `app_name` | string | no | — | Filter to a specific application |
 | `n` | integer | no | 50 | Number of recent entries (hard cap: 500) |
 
@@ -159,7 +159,7 @@ Search for related events across multiple hosts within a ±N minute window aroun
 | `window_minutes` | integer | no | 5 | Minutes before and after `reference_time` (max 60) |
 | `severity_min` | string | no | `warning` | Minimum severity to include. `warning` returns `warning/err/crit/alert/emerg`. `debug` returns everything. |
 | `hostname` | string | no | — | Limit correlation to one host |
-| `source_ip` | string | no | — | Limit correlation to an exact verified sender address (`IP:port`) captured from the network connection |
+| `source_ip` | string | no | — | Limit correlation to an exact source identifier. Syslog entries use the verified network sender address (`IP:port`); Docker ingest entries use `docker://host/container/stream`. |
 | `query` | string | no | — | FTS5 query to narrow results |
 | `limit` | integer | no | 500 | Max total events (hard cap: 999) |
 
@@ -260,9 +260,9 @@ Each stored log entry has these fields:
 | `process_id` | text\|null | PID from the syslog message |
 | `message` | text | Log message body (FTS5-indexed) |
 | `received_at` | text | Server-side receipt timestamp (RFC 3339, UTC). Used for retention. |
-| `source_ip` | text | Exact network sender address (`IP:port`) captured from the packet/connection peer. Trustworthy network identity, including the sender port. |
+| `source_ip` | text | Source identifier. Syslog entries use the exact network sender address (`IP:port`) captured from the packet/connection peer. Docker ingest entries use `docker://host/container/stream` from configured Docker ingest metadata. |
 
-**Important:** `hostname` is taken from the syslog message body, which any LAN device can set to an arbitrary value over UDP. `source_ip` is the only trustworthy network identifier. Retention cutoffs use `received_at` (server clock) so that devices with misconfigured clocks cannot cause premature or indefinite log retention.
+**Important:** `hostname` is taken from the syslog message body, which any LAN device can set to an arbitrary value over UDP. For syslog entries, `source_ip` is the only trustworthy network identifier. For Docker ingest entries, `source_ip` identifies the configured Docker ingest host/container/stream and should be trusted only as far as the configured docker-socket-proxy endpoint and network path are trusted. Retention cutoffs use `received_at` (server clock) so that devices with misconfigured clocks cannot cause premature or indefinite log retention.
 
 ### Severity levels
 
@@ -359,6 +359,33 @@ The plain JSON API is disabled by default. When enabled, it is mounted under `/a
 | `SYSLOG_BATCH_SIZE` | no | `100` | Number of messages per batch write |
 | `SYSLOG_FLUSH_INTERVAL` | no | `500` | Batch flush interval in milliseconds |
 
+#### Docker socket-proxy ingest
+
+Optional pull-based Docker log ingestion keeps each remote host on its normal Docker logging driver and has syslog-mcp read container stdout/stderr through read-only `docker-socket-proxy` endpoints. This avoids configuring Docker's daemon-level syslog driver and does not block container startup when syslog-mcp is down.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `SYSLOG_DOCKER_INGEST_ENABLED` | no | `false` | Enable remote Docker log ingestion |
+| `SYSLOG_DOCKER_HOSTS_FILE` | yes, if hosts are not configured elsewhere | — | TOML file containing remote Docker socket-proxy hosts |
+| `SYSLOG_DOCKER_RECONNECT_INITIAL_MS` | no | `1000` | Initial reconnect delay after host stream failure |
+| `SYSLOG_DOCKER_RECONNECT_MAX_MS` | no | `30000` | Maximum reconnect delay after repeated failures |
+
+The hosts file uses this shape:
+
+```toml
+[[hosts]]
+name = "edge-host-a"
+base_url = "http://edge-host-a:2375"
+allow_insecure_http = true
+
+[[hosts]]
+name = "app-host-b"
+base_url = "http://app-host-b:2375"
+allow_insecure_http = true
+```
+
+The docker-socket-proxy side only needs read access to containers, events, ping, and version endpoints: `CONTAINERS=1`, `EVENTS=1`, `PING=1`, `VERSION=1`, `POST=0`. `CONTAINERS=1` exposes the broader read-only Docker container API to anything that can reach the proxy, so bind it only on a trusted private network, firewall it to syslog-mcp, or put it behind authenticated TLS. Plain `http://` endpoints require `allow_insecure_http = true` in the hosts file so that this trust decision is explicit.
+
 #### Storage
 
 | Variable | Required | Default | Description |
@@ -380,6 +407,7 @@ The plain JSON API is disabled by default. When enabled, it is mounted under `/a
 | `SYSLOG_UID` | no | `1000` | Container user ID for data volume ownership |
 | `SYSLOG_GID` | no | `1000` | Container group ID for data volume ownership |
 | `SYSLOG_MCP_DATA_VOLUME` | no | `syslog-mcp-data` | Docker volume name or bind-mount path |
+| `SYSLOG_MCP_CONFIG_VOLUME` | no | `./config` | Read-only config mount for optional files such as `docker-hosts.toml` |
 | `DOCKER_NETWORK` | no | `syslog-mcp` | Docker network name (must exist) |
 | `RUST_LOG` | no | `info` | Log level (`trace`, `debug`, `info`, `warn`, `error`) |
 | `TZ` | no | `UTC` | Container timezone |
@@ -410,6 +438,16 @@ host = "0.0.0.0"
 port = 3100
 server_name = "syslog-mcp"
 # api_token = "your-secret-token"
+
+[docker_ingest]
+enabled = false
+reconnect_initial_ms = 1000
+reconnect_max_ms = 30000
+
+[[docker_ingest.hosts]]
+name = "edge-host-a"
+base_url = "http://edge-host-a:2375"
+allow_insecure_http = true
 ```
 
 ---

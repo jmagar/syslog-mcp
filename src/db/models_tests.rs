@@ -12,6 +12,7 @@ fn log_batch_entry_keeps_claimed_hostname_separate_from_source_ip() {
         message: "message".to_string(),
         raw: "raw".to_string(),
         source_ip: "192.0.2.10:514".to_string(),
+        docker_checkpoint: None,
     };
 
     assert_eq!(entry.hostname, "claimed-host");

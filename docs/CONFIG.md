@@ -39,6 +39,16 @@ allowed_origins = ["https://syslog.example.com"]
 
 [api]
 enabled = false
+
+[docker_ingest]
+enabled = false
+reconnect_initial_ms = 1000
+reconnect_max_ms = 30000
+
+[[docker_ingest.hosts]]
+name = "edge-host-a"
+base_url = "http://edge-host-a:2375"
+allow_insecure_http = true
 ```
 
 Bind host fields (`SYSLOG_HOST` and `SYSLOG_MCP_HOST`) must be hostnames or IP
@@ -59,6 +69,43 @@ such as `https://syslog.example.com`.
 | `SYSLOG_MAX_MESSAGE_SIZE` | no | `8192` | no | Max message size in bytes per syslog frame |
 | `SYSLOG_BATCH_SIZE` | no | `100` | no | Entries per batch flush to SQLite |
 | `SYSLOG_FLUSH_INTERVAL` | no | `500` | no | Batch flush interval in milliseconds |
+
+### Docker socket-proxy ingest (`SYSLOG_DOCKER_*`)
+
+This optional mode pulls stdout/stderr logs from remote Docker hosts through `docker-socket-proxy` instead of changing Docker's daemon-level logging driver. Containers keep their existing local logging behavior, and remote host/container startup does not depend on syslog-mcp being online.
+
+The hosts file is a TOML file with `[[hosts]]` entries:
+
+```toml
+[[hosts]]
+name = "edge-host-a"
+base_url = "http://edge-host-a:2375"
+allow_insecure_http = true
+
+[[hosts]]
+name = "app-host-b"
+base_url = "http://app-host-b:2375"
+allow_insecure_http = true
+```
+
+| Variable | Required | Default | Sensitive | Description |
+| --- | --- | --- | --- | --- |
+| `SYSLOG_DOCKER_INGEST_ENABLED` | no | `false` | no | Enable pull-based Docker log ingestion |
+| `SYSLOG_DOCKER_HOSTS_FILE` | yes, if hosts are not configured elsewhere | (none) | no | Path to TOML hosts file |
+| `SYSLOG_DOCKER_RECONNECT_INITIAL_MS` | no | `1000` | no | Initial reconnect delay after host stream failure |
+| `SYSLOG_DOCKER_RECONNECT_MAX_MS` | no | `30000` | no | Maximum reconnect delay after repeated failures |
+
+Minimum recommended docker-socket-proxy permissions on each remote host:
+
+```env
+CONTAINERS=1
+EVENTS=1
+PING=1
+VERSION=1
+POST=0
+```
+
+`CONTAINERS=1` exposes the broader read-only Docker container API to every client that can reach docker-socket-proxy. Bind the proxy on a trusted private network, firewall it so only syslog-mcp can connect, or put it behind authenticated TLS. Hosts using plain `http://` must set `allow_insecure_http = true` in the hosts file; otherwise config validation rejects them.
 
 ### MCP server (`SYSLOG_MCP_*`)
 
@@ -113,6 +160,7 @@ The plain JSON API is disabled by default. When enabled, it is mounted under `/a
 | `SYSLOG_PORT` | no | `1514` | no | Host-side syslog port mapping |
 | `SYSLOG_MCP_PORT` | no | `3100` | no | Host-side MCP port mapping |
 | `SYSLOG_MCP_DATA_VOLUME` | no | `syslog-mcp-data` | no | Named Docker volume for `/data` |
+| `SYSLOG_MCP_CONFIG_VOLUME` | no | `./config` | no | Read-only config mount for optional files such as `docker-hosts.toml` |
 | `DOCKER_NETWORK` | no | `syslog-mcp` | no | External Docker network name |
 
 ## Storage budget behavior
@@ -136,6 +184,10 @@ Set both `max_db_size_mb` and `min_free_disk_mb` to 0 to disable all storage enf
 - `SYSLOG_API_TOKEN` is required when `SYSLOG_API_ENABLED=true`
 - Bind host fields (`SYSLOG_HOST`, `SYSLOG_MCP_HOST`) must not contain a colon (port is a separate setting)
 - `SYSLOG_MCP_ALLOWED_HOSTS` values may include `host:port` to match reverse-proxy Host headers
+- `docker_ingest.hosts` or `SYSLOG_DOCKER_HOSTS_FILE` must contain at least one host when Docker ingest is enabled
+- Docker ingest host names must be unique
+- Docker ingest host `base_url` values must start with `http://` or `https://`
+- Docker ingest `http://` hosts must set `allow_insecure_http = true`
 
 ## Plugin deployment
 

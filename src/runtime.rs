@@ -8,7 +8,8 @@ use tokio::task::JoinHandle;
 use crate::app::SyslogService;
 use crate::config::Config;
 use crate::db::{self, DbPool, StorageBudgetState};
-use crate::{mcp, syslog};
+use crate::ingest::IngestTx;
+use crate::{docker_ingest, mcp, syslog};
 
 pub struct RuntimeCore {
     pub config: Config,
@@ -16,11 +17,13 @@ pub struct RuntimeCore {
     storage_state: Arc<Mutex<Option<StorageBudgetState>>>,
     service: SyslogService,
     maintenance_permit: Arc<Semaphore>,
+    ingest: IngestTx,
 }
 
 pub struct MaintenanceHandles {
     purge: Option<JoinHandle<()>>,
     storage: Option<JoinHandle<()>>,
+    docker_ingest: Vec<JoinHandle<()>>,
 }
 
 impl Drop for MaintenanceHandles {
@@ -29,6 +32,9 @@ impl Drop for MaintenanceHandles {
             handle.abort();
         }
         if let Some(handle) = &self.storage {
+            handle.abort();
+        }
+        for handle in &self.docker_ingest {
             handle.abort();
         }
     }
@@ -77,12 +83,19 @@ impl RuntimeCore {
             );
         }
         let service = SyslogService::new(Arc::clone(&pool), config.storage.clone());
+        let ingest = crate::ingest::start_writer_from_syslog_config(
+            &config.syslog,
+            config.storage.clone(),
+            Arc::clone(&pool),
+            Arc::clone(&storage_state),
+        );
         Ok(Self {
             config,
             pool,
             storage_state,
             service,
             maintenance_permit: Arc::new(Semaphore::new(1)),
+            ingest,
         })
     }
 
@@ -98,19 +111,22 @@ impl RuntimeCore {
     }
 
     pub async fn start_syslog(&self) -> Result<()> {
-        syslog::start_with_storage_state(
-            self.config.syslog.clone(),
-            self.config.storage.clone(),
-            Arc::clone(&self.pool),
-            Arc::clone(&self.storage_state),
-        )
-        .await
+        syslog::start_listeners(self.config.syslog.clone(), self.ingest.sender()).await
     }
 
     pub fn spawn_maintenance_tasks(&self) -> MaintenanceHandles {
         let purge = self.spawn_retention_task();
         let storage = self.spawn_storage_task();
-        MaintenanceHandles { purge, storage }
+        let docker_ingest = docker_ingest::spawn_all(
+            self.config.docker_ingest.clone(),
+            Arc::clone(&self.pool),
+            self.ingest.clone(),
+        );
+        MaintenanceHandles {
+            purge,
+            storage,
+            docker_ingest,
+        }
     }
 
     fn spawn_retention_task(&self) -> Option<JoinHandle<()>> {

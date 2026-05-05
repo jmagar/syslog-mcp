@@ -60,12 +60,12 @@ MCP Registry metadata at repo root:
   "name": "tv.tootie/syslog-mcp",
   "title": "Syslog MCP",
   "description": "Syslog receiver and MCP server for homelab log intelligence.",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/jmagar/syslog-mcp:0.6.0",
-      "version": "0.6.0"
+      "identifier": "ghcr.io/jmagar/syslog-mcp:0.7.0",
+      "version": "0.7.0"
     }
   ]
 }

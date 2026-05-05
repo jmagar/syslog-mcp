@@ -12,7 +12,7 @@ use super::WRITE_CHANNEL_CAPACITY;
 const INGEST_SUMMARY_INTERVAL_SECS: u64 = 60;
 
 /// Batch writer — collects messages and writes in batches for throughput.
-pub(super) async fn batch_writer(
+pub(crate) async fn batch_writer(
     mut rx: mpsc::Receiver<db::LogBatchEntry>,
     pool: Arc<DbPool>,
     storage: StorageConfig,
