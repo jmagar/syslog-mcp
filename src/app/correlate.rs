@@ -30,3 +30,7 @@ pub(super) fn group_by_host(logs: Vec<LogEntry>) -> Vec<CorrelatedHost> {
         })
         .collect()
 }
+
+#[cfg(test)]
+#[path = "correlate_tests.rs"]
+mod tests;

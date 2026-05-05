@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Shared ingest writer**: Routed syslog listener input and Docker log input through one bounded batch writer so retention, storage guardrails, and write blocking remain centralized.
 - **Configuration/docs**: Added Docker ingest config, env vars, setup guidance, Compose `/config` mount, and `.env.example` entries for remote Docker hosts.
 
+## [0.6.1] - 2026-05-05
+
+### Changed
+
+- **Test sidecars**: Split `src/app/` unit tests into per-module sidecar files and moved `syslog-cli` parser tests into a bin-local sidecar directory so Cargo does not treat them as a standalone binary target.
+- **Repository hygiene**: Ignore local `storage/` data and remove stale `.app.json` metadata from the committed tree.
+
 ## [0.6.0] - 2026-05-05
 
 ### Added
@@ -371,7 +378,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ---
 
 [Unreleased]: https://github.com/jmagar/syslog-mcp/compare/v0.7.0...HEAD
-[0.7.0]: https://github.com/jmagar/syslog-mcp/compare/v0.6.0...v0.7.0
+[0.7.0]: https://github.com/jmagar/syslog-mcp/compare/v0.6.1...v0.7.0
+[0.6.1]: https://github.com/jmagar/syslog-mcp/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/jmagar/syslog-mcp/compare/v0.5.0...v0.6.0
 [0.1.7]: https://github.com/jmagar/syslog-mcp/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/jmagar/syslog-mcp/compare/v0.1.5...v0.1.6

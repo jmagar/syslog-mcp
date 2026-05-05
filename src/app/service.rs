@@ -180,3 +180,7 @@ impl SyslogService {
         Ok(stats)
     }
 }
+
+#[cfg(test)]
+#[path = "service_tests.rs"]
+mod tests;
