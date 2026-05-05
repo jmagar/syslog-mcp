@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::time::Instant;
 
 use axum::{
@@ -15,6 +14,7 @@ use axum::{
 use futures_core::Stream;
 use serde_json::json;
 use subtle::ConstantTimeEq;
+use tower_http::cors::{Any, CorsLayer};
 
 use super::protocol::{dispatch, DispatchResult, JsonRpcRequest};
 use super::AppState;
@@ -36,6 +36,19 @@ pub fn router(state: AppState) -> Router {
         .merge(unauthenticated)
         .fallback(|| async { (StatusCode::NOT_FOUND, Json(json!({"error": "not_found"}))) })
         .layer(DefaultBodyLimit::max(65_536))
+        .layer(
+            CorsLayer::new()
+                .allow_origin([
+                    "http://localhost:3100"
+                        .parse::<axum::http::HeaderValue>()
+                        .expect("valid localhost origin"),
+                    "http://127.0.0.1:3100"
+                        .parse::<axum::http::HeaderValue>()
+                        .expect("valid 127.0.0.1 origin"),
+                ])
+                .allow_methods([axum::http::Method::POST, axum::http::Method::GET])
+                .allow_headers(Any),
+        )
         .with_state(state)
 }
 
@@ -87,38 +100,19 @@ async fn require_auth(
 /// running COUNT(*) over the entire logs table.
 async fn health(State(state): State<AppState>) -> impl IntoResponse {
     let started = Instant::now();
-    let pool = Arc::clone(&state.pool);
-    match tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-        let conn = pool.get()?;
-        conn.query_row("SELECT 1", [], |_| Ok(()))?;
-        Ok(())
-    })
-    .await
-    {
-        Ok(Ok(())) => {
+    match state.service.health_check().await {
+        Ok(()) => {
             tracing::debug!(
                 elapsed_ms = started.elapsed().as_millis(),
                 "Health check passed"
             );
             Json(json!({ "status": "ok" })).into_response()
         }
-        Ok(Err(e)) => {
-            tracing::error!(
-                error = %e,
-                elapsed_ms = started.elapsed().as_millis(),
-                "Health check failed"
-            );
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "status": "error", "error": e.to_string() })),
-            )
-                .into_response()
-        }
         Err(e) => {
             tracing::error!(
                 error = %e,
                 elapsed_ms = started.elapsed().as_millis(),
-                "Health check task join failed"
+                "Health check failed"
             );
             (
                 StatusCode::INTERNAL_SERVER_ERROR,

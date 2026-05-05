@@ -35,6 +35,7 @@ Full-text search across all syslog messages with optional filters. Uses SQLite F
 |-----------|------|----------|---------|-------------|
 | `query` | string | no | — | FTS5 search query (see [FTS5 query syntax](#fts5-query-syntax)) |
 | `hostname` | string | no | — | Exact hostname match. Use `list_hosts` to enumerate. |
+| `source_ip` | string | no | — | Verified network sender address (`IP:port`) |
 | `severity` | string | no | — | One of: `emerg alert crit err warning notice info debug` |
 | `app_name` | string | no | — | Application name, e.g. `sshd`, `dockerd`, `kernel` |
 | `from` | string | no | — | Start of time range (ISO 8601 / RFC 3339, e.g. `2025-01-15T00:00:00Z`) |
@@ -86,6 +87,7 @@ Return the N most recent log entries. Equivalent to `tail -f` across all hosts.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `hostname` | string | no | — | Filter to a specific host |
+| `source_ip` | string | no | — | Filter to a verified network sender address (`IP:port`) |
 | `app_name` | string | no | — | Filter to a specific application |
 | `n` | integer | no | 50 | Number of recent entries (hard cap: 500) |
 
@@ -157,6 +159,7 @@ Search for related events across multiple hosts within a ±N minute window aroun
 | `window_minutes` | integer | no | 5 | Minutes before and after `reference_time` (max 60) |
 | `severity_min` | string | no | `warning` | Minimum severity to include. `warning` returns `warning/err/crit/alert/emerg`. `debug` returns everything. |
 | `hostname` | string | no | — | Limit correlation to one host |
+| `source_ip` | string | no | — | Limit correlation to a verified network sender address (`IP:port`) |
 | `query` | string | no | — | FTS5 query to narrow results |
 | `limit` | integer | no | 500 | Max total events (hard cap: 999) |
 
@@ -331,9 +334,18 @@ Configuration is loaded from three sources in priority order (highest wins):
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `SYSLOG_MCP_API_TOKEN` | no | — | Bearer token for `/mcp` and `/sse`. Omit to disable auth. |
+| `SYSLOG_MCP_TOKEN` | no | — | Bearer token for `/mcp` and `/sse`. Omit to disable auth. |
 | `SYSLOG_MCP_HOST` | no | `0.0.0.0` | Bind host for the MCP HTTP server |
 | `SYSLOG_MCP_PORT` | no | `3100` | Bind port for the MCP HTTP server |
+
+#### Non-MCP API
+
+The plain JSON API is disabled by default. When enabled, it is mounted under `/api/*` on the same HTTP listener and requires a separate bearer token.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `SYSLOG_API_ENABLED` | no | `false` | Enable the non-MCP JSON API |
+| `SYSLOG_API_TOKEN` | yes, when enabled | — | Bearer token for `/api/*` routes |
 
 #### Syslog listener
 
@@ -397,6 +409,21 @@ port = 3100
 server_name = "syslog-mcp"
 # api_token = "your-secret-token"
 ```
+
+---
+
+## CLI
+
+The `syslog-cli` binary calls the shared application layer directly; it does not require the MCP server to be running.
+
+```bash
+cargo run --bin syslog-cli -- stats
+cargo run --bin syslog-cli -- search --query error --limit 5
+cargo run --bin syslog-cli -- tail --source-ip 10.0.0.1:514 --n 20
+cargo run --bin syslog-cli -- correlate --reference-time 2026-01-01T00:00:00Z --window-minutes 5
+```
+
+Commands output JSON and share the same defaults, timestamp normalization, limits, severity expansion, and source identity behavior as MCP and API surfaces.
 
 ---
 
@@ -739,7 +766,11 @@ Authorization: Bearer <token>
 | `Dockerfile` | Container image definition |
 | `docker-compose.yml` | Docker Compose stack |
 | `Justfile` | Development command shortcuts |
-| `src/main.rs` | Entry point, startup orchestration |
+| `src/main.rs` | Thin server binary entrypoint |
+| `src/lib.rs` | Reusable library boundary |
+| `src/app.rs` | Shared typed log application service |
+| `src/runtime.rs` | Config, DB, syslog, and maintenance orchestration |
+| `src/api.rs` | Optional non-MCP JSON API routes |
 | `src/config.rs` | Configuration loading and validation |
 | `src/db.rs` | SQLite schema, FTS5, retention, storage budget |
 | `src/syslog.rs` | UDP/TCP listeners, syslog parser, batch writer |

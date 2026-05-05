@@ -34,6 +34,9 @@ cleanup_interval_secs = 60
 host = "0.0.0.0"
 port = 3100
 server_name = "syslog-mcp"
+
+[api]
+enabled = false
 ```
 
 ## Environment variables
@@ -54,7 +57,16 @@ server_name = "syslog-mcp"
 | --- | --- | --- | --- | --- |
 | `SYSLOG_MCP_HOST` | no | `0.0.0.0` | no | HTTP listen host for MCP endpoint |
 | `SYSLOG_MCP_PORT` | no | `3100` | no | HTTP listen port for MCP endpoint |
-| `SYSLOG_MCP_API_TOKEN` | no | (none) | **yes** | Bearer token for `/mcp` and `/sse` auth. Generate: `openssl rand -hex 32`. When unset, auth is disabled. |
+| `SYSLOG_MCP_TOKEN` | no | (none) | **yes** | Bearer token for `/mcp` and `/sse` auth. Generate: `openssl rand -hex 32`. When unset, auth is disabled. |
+
+### Non-MCP API (`SYSLOG_API_*`)
+
+The plain JSON API is disabled by default. When enabled, it is mounted under `/api/*` on the same HTTP listener and requires its own bearer token.
+
+| Variable | Required | Default | Sensitive | Description |
+| --- | --- | --- | --- | --- |
+| `SYSLOG_API_ENABLED` | no | `false` | no | Enable the non-MCP JSON API |
+| `SYSLOG_API_TOKEN` | yes, when enabled | (none) | **yes** | Bearer token for `/api/*` routes |
 
 ### Storage (`SYSLOG_MCP_*`)
 
@@ -110,6 +122,7 @@ Set both `max_db_size_mb` and `min_free_disk_mb` to 0 to disable all storage enf
 - `recovery_free_disk_mb` must be > 0 and > `min_free_disk_mb` when free-disk guard is enabled
 - `cleanup_interval_secs` must be >= 5
 - `cleanup_chunk_size` must be between 1 and 1,000,000
+- `SYSLOG_API_TOKEN` is required when `SYSLOG_API_ENABLED=true`
 - Host fields must not contain a colon (port is a separate setting)
 
 ## Plugin deployment

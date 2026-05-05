@@ -81,6 +81,8 @@ fn defaults_are_applied_without_env_vars() {
         "SYSLOG_MCP_RECOVERY_FREE_DISK_MB",
         "SYSLOG_MCP_CLEANUP_INTERVAL_SECS",
         "SYSLOG_MCP_CLEANUP_CHUNK_SIZE",
+        "SYSLOG_API_ENABLED",
+        "SYSLOG_API_TOKEN",
     ] {
         std::env::remove_var(key);
     }
@@ -102,6 +104,37 @@ fn defaults_are_applied_without_env_vars() {
     assert_eq!(cfg.storage.cleanup_interval_secs, 60);
     assert_eq!(cfg.storage.cleanup_chunk_size, 2_000);
     assert!(cfg.mcp.api_token.is_none());
+    assert!(!cfg.api.enabled);
+    assert!(cfg.api.api_token.is_none());
+}
+
+#[test]
+#[serial]
+fn api_enabled_requires_separate_token() {
+    std::env::set_var("SYSLOG_API_ENABLED", "true");
+    std::env::remove_var("SYSLOG_API_TOKEN");
+    let result = Config::load();
+    std::env::remove_var("SYSLOG_API_ENABLED");
+
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("SYSLOG_API_TOKEN"));
+}
+
+#[test]
+#[serial]
+fn api_token_is_separate_from_mcp_token() {
+    std::env::set_var("SYSLOG_API_ENABLED", "true");
+    std::env::set_var("SYSLOG_API_TOKEN", "api-token");
+    std::env::set_var("SYSLOG_MCP_TOKEN", "mcp-token");
+    let result = Config::load();
+    std::env::remove_var("SYSLOG_API_ENABLED");
+    std::env::remove_var("SYSLOG_API_TOKEN");
+    std::env::remove_var("SYSLOG_MCP_TOKEN");
+
+    let cfg = result.expect("Config::load() should accept separately authenticated API");
+    assert!(cfg.api.enabled);
+    assert_eq!(cfg.api.api_token, Some("api-token".into()));
+    assert_eq!(cfg.mcp.api_token, Some("mcp-token".into()));
 }
 
 #[test]

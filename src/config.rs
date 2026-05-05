@@ -4,10 +4,12 @@ use std::path::PathBuf;
 const MAX_CLEANUP_CHUNK_SIZE: usize = 1_000_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct Config {
     pub syslog: SyslogConfig,
     pub storage: StorageConfig,
     pub mcp: McpConfig,
+    pub api: ApiConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,6 +102,17 @@ impl McpConfig {
     pub fn bind_addr(&self) -> String {
         format!("{}:{}", self.host, self.port)
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ApiConfig {
+    /// Enable the non-MCP JSON API. Disabled by default.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Required bearer token when the non-MCP API is enabled.
+    #[serde(default)]
+    pub api_token: Option<String>,
 }
 
 // --- Defaults ---
@@ -281,6 +294,9 @@ impl Config {
             &mut config.storage.cleanup_chunk_size,
         )?;
 
+        env_override_parse("SYSLOG_API_ENABLED", &mut config.api.enabled)?;
+        env_override_opt_str("SYSLOG_API_TOKEN", &mut config.api.api_token);
+
         // Validation
         if config.storage.pool_size == 0 {
             return Err(anyhow::anyhow!("SYSLOG_MCP_POOL_SIZE must be > 0"));
@@ -288,6 +304,11 @@ impl Config {
         validate_storage_config(&config.storage)?;
         validate_host(&config.syslog.host)?;
         validate_host(&config.mcp.host)?;
+        if config.api.enabled && config.api.api_token.is_none() {
+            return Err(anyhow::anyhow!(
+                "SYSLOG_API_TOKEN is required when SYSLOG_API_ENABLED=true"
+            ));
+        }
 
         Ok(config)
     }

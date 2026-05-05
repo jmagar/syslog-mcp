@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::LogService;
 use crate::config::{McpConfig, StorageConfig};
 use crate::db;
 use crate::mcp::AppState;
@@ -13,14 +14,13 @@ fn test_state_with_token(token: Option<String>) -> (AppState, tempfile::TempDir)
     let pool = Arc::new(db::init_pool(&storage).unwrap());
     (
         AppState {
-            pool,
+            service: LogService::new(pool, storage.clone()),
             config: McpConfig {
                 host: "127.0.0.1".into(),
                 port: 3100,
                 server_name: "syslog-mcp".into(),
                 api_token: token,
             },
-            storage,
         },
         dir,
     )

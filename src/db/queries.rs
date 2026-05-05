@@ -84,6 +84,7 @@ pub fn search_logs(pool: &DbPool, params: &SearchParams) -> Result<Vec<LogEntry>
 pub fn tail_logs(
     pool: &DbPool,
     hostname: Option<&str>,
+    source_ip: Option<&str>,
     app_name: Option<&str>,
     n: u32,
 ) -> Result<Vec<LogEntry>> {
@@ -101,6 +102,11 @@ pub fn tail_logs(
     if let Some(h) = hostname {
         sql.push_str(&format!(" AND hostname = ?{idx}"));
         bindings.push(Box::new(h.to_string()));
+        idx += 1;
+    }
+    if let Some(source_ip) = source_ip {
+        sql.push_str(&format!(" AND source_ip = ?{idx}"));
+        bindings.push(Box::new(source_ip.to_string()));
         idx += 1;
     }
     if let Some(a) = app_name {
@@ -234,6 +240,11 @@ fn append_filters(
     if let Some(ref h) = params.hostname {
         sql.push_str(&format!(" AND l.hostname = ?{}", *idx));
         bindings.push(rusqlite::types::Value::Text(h.clone()));
+        *idx += 1;
+    }
+    if let Some(ref source_ip) = params.source_ip {
+        sql.push_str(&format!(" AND l.source_ip = ?{}", *idx));
+        bindings.push(rusqlite::types::Value::Text(source_ip.clone()));
         *idx += 1;
     }
     if let Some(ref s) = params.severity {

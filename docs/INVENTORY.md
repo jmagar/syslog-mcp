@@ -8,8 +8,8 @@ syslog-mcp uses a flat tool pattern (7 independent tools) rather than the action
 
 | Tool | Description | Destructive |
 | --- | --- | --- |
-| `search_logs` | Full-text search across syslog messages with FTS5 syntax, host/severity/app/time filters | no |
-| `tail_logs` | Get N most recent log entries, optionally filtered by host and/or application | no |
+| `search_logs` | Full-text search across syslog messages with FTS5 syntax, host/source_ip/severity/app/time filters | no |
+| `tail_logs` | Get N most recent log entries, optionally filtered by host, source_ip, and/or application | no |
 | `get_errors` | Error/warning summary grouped by hostname and severity level with counts | no |
 | `list_hosts` | List all hosts with first/last seen timestamps and total log counts | no |
 | `correlate_events` | Cross-host event correlation within a time window around a reference timestamp | no |
@@ -35,7 +35,9 @@ All tools are read-only. syslog-mcp exposes no destructive operations via MCP.
 | `SYSLOG_FLUSH_INTERVAL` | no | `500` | no |
 | `SYSLOG_MCP_HOST` | no | `0.0.0.0` | no |
 | `SYSLOG_MCP_PORT` | no | `3100` | no |
-| `SYSLOG_MCP_API_TOKEN` | no | (none) | yes |
+| `SYSLOG_MCP_TOKEN` | no | (none) | yes |
+| `SYSLOG_API_ENABLED` | no | `false` | no |
+| `SYSLOG_API_TOKEN` | yes when enabled | (none) | yes |
 | `SYSLOG_MCP_DB_PATH` | no | `/data/syslog.db` | no |
 | `SYSLOG_MCP_POOL_SIZE` | no | `4` | no |
 | `SYSLOG_MCP_RETENTION_DAYS` | no | `90` | no |
@@ -73,6 +75,12 @@ All tools are read-only. syslog-mcp exposes no destructive operations via MCP.
 | `/mcp` | POST | yes (when token set) | MCP JSON-RPC 2.0 endpoint |
 | `/sse` | GET | yes (when token set) | Server-Sent Events (legacy transport) |
 | `/health` | GET | no | Health check -- verifies DB connectivity |
+| `/api/search` | GET | yes when API enabled | Plain JSON log search |
+| `/api/tail` | GET | yes when API enabled | Plain JSON recent logs |
+| `/api/errors` | GET | yes when API enabled | Plain JSON error summary |
+| `/api/hosts` | GET | yes when API enabled | Plain JSON host list |
+| `/api/correlate` | GET | yes when API enabled | Plain JSON event correlation |
+| `/api/stats` | GET | yes when API enabled | Plain JSON database stats |
 
 ## Docker
 
