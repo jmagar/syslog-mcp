@@ -4,7 +4,7 @@ syslog-mcp does not use Claude Code scheduled tasks (triggers). Internal schedul
 
 ## Internal schedules
 
-The syslog-mcp binary runs two periodic background tasks:
+`syslog serve mcp` runs two periodic background tasks:
 
 | Task | Interval | Purpose |
 | --- | --- | --- |

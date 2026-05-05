@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-05-05
+
+### Changed
+
+- **Single `syslog` binary**: Collapsed the HTTP and stdio MCP transports behind one installed executable. `syslog serve mcp` starts the daemon with syslog ingest and HTTP MCP, while `syslog mcp` starts query-only MCP over stdio.
+- **Packaging**: Plugin builds now install only `bin/syslog`; the separate `syslog-mcp-stdio` artifact and legacy `syslog-cli` binary target were removed.
+- **Docs/tests**: Updated transport docs and stdio child-process tests for the new command shape.
+
 ## [0.8.0] - 2026-05-05
 
 ### Added
@@ -385,7 +393,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/jmagar/syslog-mcp/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/jmagar/syslog-mcp/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/jmagar/syslog-mcp/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/jmagar/syslog-mcp/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/jmagar/syslog-mcp/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/jmagar/syslog-mcp/compare/v0.6.0...v0.6.1

@@ -191,7 +191,7 @@ Set both `max_db_size_mb` and `min_free_disk_mb` to 0 to disable all storage enf
 
 ## Plugin deployment
 
-syslog-mcp runs as a daemon (syslog listener + HTTP MCP server), so the plugin connects via HTTP -- not stdio.
+`syslog serve mcp` runs as a daemon (syslog listener + HTTP MCP server), so the plugin connects via HTTP -- not stdio.
 
 When installed as a Claude Code plugin, users are prompted for:
 

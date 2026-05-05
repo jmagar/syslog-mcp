@@ -5,7 +5,7 @@ Deployment patterns for syslog-mcp. Choose the method that fits your environment
 ## Local development
 
 ```bash
-cargo run
+cargo run -- serve mcp
 ```
 
 Or via Justfile:
@@ -20,16 +20,16 @@ The server reads `config.toml` in the working directory. Syslog listens on `0.0.
 
 ```bash
 cargo install syslog-mcp
-syslog-mcp
+syslog serve mcp
 ```
 
 The binary reads `config.toml` from the current directory and accepts env var overrides.
 
-Cargo installs `syslog-mcp-stdio` as a second binary for local MCP clients that require stdio. This binary is query-only: it reads `SYSLOG_MCP_DB_PATH`, exposes the MCP tools over stdin/stdout, and does not start syslog listeners, HTTP routes, retention purge, or storage-budget cleanup. Keep the daemon running for ingestion.
+The installed binary is `syslog`. Use `syslog mcp` for local MCP clients that require stdio. That mode is query-only: it reads `SYSLOG_MCP_DB_PATH`, exposes the MCP tools over stdin/stdout, and does not start syslog listeners, HTTP routes, retention purge, or storage-budget cleanup. Keep `syslog serve mcp` running somewhere for ingestion.
 
 ## Docker
 
-The Docker image is daemon-focused: it runs `syslog-mcp` for syslog ingest and HTTP MCP. Direct stdio is intended for host-installed binaries where the MCP client can launch `syslog-mcp-stdio` and read the SQLite DB path directly.
+The Docker image is daemon-focused: it runs `syslog serve mcp` for syslog ingest and HTTP MCP. Direct stdio is intended for host-installed binaries where the MCP client can launch `syslog mcp` and read the SQLite DB path directly.
 
 ### Build
 

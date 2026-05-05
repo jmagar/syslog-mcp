@@ -14,11 +14,11 @@ Rust syslog receiver and MCP server for homelab log intelligence. Ingests syslog
                     │   │  SQLite + FTS5 (WAL mode) │   │
                     │   └──────────────────────────┘   │
   Claude / MCP ◀──── ▶  RMCP HTTP :3100/mcp             │
-  local MCP client ◀──▶  syslog-mcp-stdio query process │
+  local MCP client ◀──▶  syslog mcp query process       │
                     └─────────────────────────────────┘
 ```
 
-The daemon listens on a single port for both UDP and TCP syslog (default `1514`). All inbound messages are parsed, batched, and written to SQLite with full-text indexing. The MCP HTTP server runs on a separate port (default `3100`) and uses RMCP Streamable HTTP in stateless JSON-response mode. Local stdio-only MCP clients can launch `syslog-mcp-stdio`, a query-only MCP process that reads the same SQLite database without starting syslog listeners or the HTTP server.
+The daemon listens on a single port for both UDP and TCP syslog (default `1514`). All inbound messages are parsed, batched, and written to SQLite with full-text indexing. The MCP HTTP server runs on a separate port (default `3100`) and uses RMCP Streamable HTTP in stateless JSON-response mode. Local stdio-only MCP clients can launch `syslog mcp`, a query-only MCP process that reads the same SQLite database without starting syslog listeners or the HTTP server.
 
 ---
 
@@ -316,7 +316,7 @@ Requires Rust 1.86+.
 
 ```bash
 cargo build --release
-./target/release/syslog-mcp
+./target/release/syslog serve mcp
 ```
 
 ---
@@ -453,18 +453,14 @@ allow_insecure_http = true
 
 ---
 
-## CLI
-
-The `syslog-cli` binary calls the shared application layer directly; it does not require the MCP server to be running.
+## Command modes
 
 ```bash
-cargo run --bin syslog-cli -- stats
-cargo run --bin syslog-cli -- search --query error --limit 5
-cargo run --bin syslog-cli -- tail --source-ip 10.0.0.1:514 --n 20
-cargo run --bin syslog-cli -- correlate --reference-time 2026-01-01T00:00:00Z --window-minutes 5
+syslog serve mcp  # UDP/TCP syslog ingest plus HTTP MCP on /mcp
+syslog mcp        # query-only MCP stdio transport
 ```
 
-Commands output JSON and share the same defaults, timestamp normalization, limits, severity expansion, and source identity behavior as MCP and API surfaces.
+Both modes use the same config and environment variable loader. `syslog mcp` is for local child-process MCP clients that can read `SYSLOG_MCP_DB_PATH`; it does not bind network ports or run retention/storage cleanup jobs.
 
 ---
 
@@ -680,7 +676,7 @@ server {
 ## Development
 
 ```bash
-just dev       # cargo run
+just dev       # cargo run -- serve mcp
 just check     # cargo check
 just lint      # cargo clippy -- -D warnings
 just fmt       # cargo fmt
@@ -783,7 +779,7 @@ The daemon implements MCP through RMCP Streamable HTTP in stateless JSON-respons
 - `POST /mcp` — RMCP Streamable HTTP request/response endpoint
 - `GET /mcp` and `DELETE /mcp` — `405 Method Not Allowed` in stateless mode
 - `GET /health` — unauthenticated health probe
-- `syslog-mcp-stdio` — local query-only stdio MCP binary for clients that launch MCP servers as child processes
+- `syslog mcp` — local query-only stdio MCP mode for clients that launch MCP servers as child processes
 
 When `SYSLOG_MCP_TOKEN` is set, `/mcp` requires:
 
@@ -799,7 +795,8 @@ Stdio mode does not use bearer auth because it is local child-process access. It
 {
   "mcpServers": {
     "syslog-mcp": {
-      "command": "/path/to/syslog-mcp-stdio",
+      "command": "/path/to/syslog",
+      "args": ["mcp"],
       "env": {
         "SYSLOG_MCP_DB_PATH": "/data/syslog.db",
         "RUST_LOG": "warn"
@@ -811,7 +808,7 @@ Stdio mode does not use bearer auth because it is local child-process access. It
 
 Use `mcp-remote` instead of direct stdio when the database is only reachable through the running HTTP daemon or a reverse proxy.
 
-The Docker image remains daemon-focused and exposes HTTP MCP; use the host `syslog-mcp-stdio` binary for direct local stdio.
+The Docker image remains daemon-focused and exposes HTTP MCP via `syslog serve mcp`; use `syslog mcp` on a host that can read the SQLite DB for direct local stdio.
 
 ---
 
@@ -827,8 +824,7 @@ The Docker image remains daemon-focused and exposes HTTP MCP; use the host `sysl
 | `Dockerfile` | Container image definition |
 | `docker-compose.yml` | Docker Compose stack |
 | `Justfile` | Development command shortcuts |
-| `src/main.rs` | Thin server binary entrypoint |
-| `src/bin/syslog-mcp-stdio.rs` | Query-only stdio MCP binary entrypoint |
+| `src/main.rs` | `syslog` binary entrypoint for HTTP and stdio MCP modes |
 | `src/lib.rs` | Reusable library boundary |
 | `src/app/` | Shared typed log application service |
 | `src/runtime.rs` | Config, DB, syslog, and maintenance orchestration |

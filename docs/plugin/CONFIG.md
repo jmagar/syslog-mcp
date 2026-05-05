@@ -4,10 +4,10 @@ Plugin configuration and user-facing settings for Claude Code plugin deployment.
 
 ## How it works
 
-syslog-mcp ships two binaries:
+syslog-mcp ships one `syslog` binary with two MCP modes:
 
-- `syslog-mcp` -- long-lived daemon with syslog listener + MCP HTTP server.
-- `syslog-mcp-stdio` -- local query-only stdio MCP server.
+- `syslog serve mcp` -- long-lived daemon with syslog listener + MCP HTTP server.
+- `syslog mcp` -- local query-only stdio MCP server.
 
 The published Claude Code plugin remains HTTP-first because plugin installs commonly target a running Docker, systemd, or reverse-proxy deployment.
 

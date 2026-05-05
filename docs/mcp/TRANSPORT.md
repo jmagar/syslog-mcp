@@ -4,15 +4,15 @@
 
 syslog-mcp supports two first-party MCP transports:
 
-- `syslog-mcp` daemon: receives syslog over UDP/TCP and exposes RMCP Streamable HTTP.
-- `syslog-mcp-stdio`: query-only child process for local stdio MCP clients.
+- `syslog serve mcp`: receives syslog over UDP/TCP and exposes RMCP Streamable HTTP.
+- `syslog mcp`: query-only child process mode for local stdio MCP clients.
 
-The daemon binary itself is not a stdio MCP server. Direct stdio support lives in the dedicated `syslog-mcp-stdio` binary so child-process clients do not accidentally start network listeners or maintenance tasks.
+The same `syslog` binary supports both modes. `syslog mcp` is intentionally query-only so child-process clients do not accidentally start network listeners or maintenance tasks.
 
 | Transport | Auth | Use Case | Default |
 | --- | --- | --- | --- |
-| RMCP Streamable HTTP, stateless JSON response | Bearer token (optional) | Docker, remote servers, reverse proxy | yes |
-| Direct stdio via `syslog-mcp-stdio` | Local process access | Local MCP clients with direct DB access | no |
+| RMCP Streamable HTTP, stateless JSON response via `syslog serve mcp` | Bearer token (optional) | Docker, remote servers, reverse proxy | yes |
+| Direct stdio via `syslog mcp` | Local process access | Local MCP clients with direct DB access | no |
 | Stateful Streamable HTTP sessions/SSE | n/a | Deferred; not enabled in this release | no |
 
 ## HTTP transport
@@ -111,7 +111,7 @@ SYSLOG_MCP_ALLOWED_ORIGINS=https://syslog.example.com
 
 ## Direct stdio transport
 
-`syslog-mcp-stdio` is a local query-only MCP server over stdin/stdout:
+`syslog mcp` is a local query-only MCP server over stdin/stdout:
 
 - It exposes the same seven read-only tools as HTTP.
 - It loads `RuntimeCore::load_query_only()`.
@@ -127,7 +127,8 @@ Ingestion still requires the daemon to be running somewhere. Stdio mode only que
 {
   "mcpServers": {
     "syslog-mcp": {
-      "command": "/path/to/syslog-mcp-stdio",
+      "command": "/path/to/syslog",
+      "args": ["mcp"],
       "env": {
         "SYSLOG_MCP_DB_PATH": "/data/syslog.db",
         "RUST_LOG": "warn"

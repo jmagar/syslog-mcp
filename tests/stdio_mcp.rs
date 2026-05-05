@@ -15,9 +15,10 @@ async fn stdio_client(
     rmcp::service::RunningService<rmcp::RoleClient, ()>,
     Option<tokio::process::ChildStderr>,
 )> {
-    let binary = env!("CARGO_BIN_EXE_syslog-mcp-stdio");
+    let binary = env!("CARGO_BIN_EXE_syslog");
     let (transport, stderr) = TokioChildProcess::builder(Command::new(binary).configure(|cmd| {
-        cmd.env("SYSLOG_MCP_DB_PATH", db_path)
+        cmd.arg("mcp")
+            .env("SYSLOG_MCP_DB_PATH", db_path)
             .env("SYSLOG_MCP_RETENTION_DAYS", "0")
             .env("SYSLOG_MCP_MAX_DB_SIZE_MB", "0")
             .env("SYSLOG_MCP_RECOVERY_DB_SIZE_MB", "0")

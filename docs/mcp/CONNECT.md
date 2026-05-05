@@ -12,7 +12,7 @@ How to connect to the syslog-mcp server from every supported client.
 
 The plugin manifest handles transport and tool registration. Configure the MCP URL and optional API token when prompted.
 
-syslog-mcp uses RMCP Streamable HTTP in stateless JSON-response mode for daemon deployments. Local stdio clients can launch `syslog-mcp-stdio` when they can read the SQLite database directly.
+syslog-mcp uses RMCP Streamable HTTP in stateless JSON-response mode for daemon deployments. Local stdio clients can launch `syslog mcp` when they can read the SQLite database directly.
 
 ## Claude Code CLI
 
@@ -74,13 +74,14 @@ claude mcp add --transport http \
 
 ## Direct stdio clients
 
-Use `syslog-mcp-stdio` for local query-only access. It exposes the same seven read-only tools as HTTP, but it does not receive syslog, start `/mcp`, run cleanup jobs, or require `SYSLOG_MCP_TOKEN`.
+Use `syslog mcp` for local query-only access. It exposes the same seven read-only tools as HTTP, but it does not receive syslog, start `/mcp`, run cleanup jobs, or require `SYSLOG_MCP_TOKEN`.
 
 ```json
 {
   "mcpServers": {
     "syslog-mcp": {
-      "command": "/path/to/syslog-mcp-stdio",
+      "command": "/path/to/syslog",
+      "args": ["mcp"],
       "env": {
         "SYSLOG_MCP_DB_PATH": "/data/syslog.db",
         "RUST_LOG": "warn"

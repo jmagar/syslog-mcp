@@ -1,20 +1,44 @@
 use anyhow::Result;
 use axum::Router;
+use rmcp::{transport::stdio, ServiceExt};
 use syslog_mcp::{api, mcp, runtime::RuntimeCore};
 use tracing::info;
 use tracing_subscriber::{fmt, EnvFilter};
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let mode = Mode::parse(std::env::args().skip(1).collect())?;
+    if mode == Mode::Help {
+        print_usage();
+        return Ok(());
+    }
+
     fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new(mode.default_log_filter())),
         )
+        .with_writer(std::io::stderr)
         .with_target(true)
         .init();
 
     info!("syslog-mcp v{}", env!("CARGO_PKG_VERSION"));
 
+    match mode {
+        Mode::ServeMcp => serve_mcp().await,
+        Mode::StdioMcp => serve_stdio_mcp().await,
+        Mode::Help => unreachable!("handled before logging initialization"),
+    }
+}
+
+async fn serve_stdio_mcp() -> Result<()> {
+    let runtime = RuntimeCore::load_query_only()?;
+    let service = mcp::rmcp_server(runtime.mcp_state()).serve(stdio()).await?;
+    service.waiting().await?;
+    Ok(())
+}
+
+async fn serve_mcp() -> Result<()> {
     let runtime = RuntimeCore::load()?;
     info!(
         syslog_bind = %runtime.config.syslog.bind_addr(),
@@ -58,6 +82,48 @@ async fn main() -> Result<()> {
         .await?;
 
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    ServeMcp,
+    StdioMcp,
+    Help,
+}
+
+impl Mode {
+    fn parse(args: Vec<String>) -> Result<Self> {
+        match args.as_slice() {
+            [] => Ok(Self::ServeMcp),
+            [flag] if flag == "--help" || flag == "-h" || flag == "help" => Ok(Self::Help),
+            [command] if command == "mcp" => Ok(Self::StdioMcp),
+            [serve, service] if serve == "serve" && service == "mcp" => Ok(Self::ServeMcp),
+            _ => {
+                print_usage();
+                anyhow::bail!("unknown command: {}", args.join(" "));
+            }
+        }
+    }
+
+    fn default_log_filter(self) -> &'static str {
+        match self {
+            Self::ServeMcp => "info",
+            Self::StdioMcp => "warn",
+            Self::Help => "info",
+        }
+    }
+}
+
+fn print_usage() {
+    eprintln!(
+        "Usage:
+  syslog serve mcp    Start syslog UDP/TCP ingest plus HTTP MCP server
+  syslog mcp          Start query-only MCP stdio transport
+
+Environment:
+  SYSLOG_MCP_DB_PATH  SQLite database path used by both transports
+  RUST_LOG            Log filter; stdio logs always go to stderr"
+    );
 }
 
 async fn shutdown_signal() {
