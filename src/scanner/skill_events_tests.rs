@@ -1,4 +1,41 @@
 use super::*;
+
+#[test]
+fn codex_completed_skill_read_preserves_typed_evidence_without_paths_or_content() {
+    let value = serde_json::json!({"type":"event_msg","payload":{"type":"item_completed","item":{
+        "type":"CommandExecution","status":"completed","exit_code":0,
+        "aggregated_output":"---\nname: limetech-ai-review\n---\nPrivate skill content",
+        "parsed_cmd":[{"type":"read","path":"/Users/private/.codex/skills/limetech-ai-review/SKILL.md"}]
+    }}});
+    let summary = codex_skill_read_summary(&value).unwrap();
+    assert!(!summary.contains("private"));
+    assert!(!summary.contains("Private skill content"));
+    let events = extract_codex_skill_events(&summary);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].skill_name, "limetech-ai-review");
+    assert_eq!(events[0].event_kind, SkillEventKind::CodexSkillRead);
+    for (field, replacement) in [
+        ("exit_code", serde_json::json!(1)),
+        ("status", serde_json::json!("in_progress")),
+        ("aggregated_output", serde_json::json!("")),
+        (
+            "parsed_cmd",
+            serde_json::json!([{"type":"search","path":"/skills/review/SKILL.md"}]),
+        ),
+        (
+            "parsed_cmd",
+            serde_json::json!([{"type":"read","path":"/skills/review/README.md"}]),
+        ),
+        (
+            "parsed_cmd",
+            serde_json::json!([{"type":"read","path":"/skills/review/SKILL.md"},{"type":"unknown","cmd":"true"}]),
+        ),
+    ] {
+        let mut invalid = value.clone();
+        invalid["payload"]["item"][field] = replacement;
+        assert!(codex_skill_read_summary(&invalid).is_none(), "{field}");
+    }
+}
 use serde_json::json;
 
 #[test]
@@ -90,6 +127,30 @@ fn extracts_single_codex_skill_tag() {
         events[0].evidence_kind,
         SkillEvidenceKind::TranscriptContent
     );
+}
+
+#[test]
+fn extracts_current_codex_skill_content_even_when_forwarded_body_is_truncated() {
+    let prefix = "<skill>\n<name>limetech-ai-review</name>\n<path>/Users/example/.codex/skills/limetech-ai-review/SKILL.md</path>\n---\nname: limetech-ai-review\n---\n";
+    for body in [
+        format!("{prefix}Review instructions\n</skill>"),
+        format!("{prefix}{}", "x".repeat(3000)),
+    ] {
+        let events = extract_codex_skill_events(&body);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].skill_name, "limetech-ai-review");
+    }
+}
+
+#[test]
+fn rejects_catalog_paths_and_incomplete_skill_headers() {
+    for text in [
+        "- limetech-ai-review: (file: /skills/limetech-ai-review/SKILL.md)",
+        "<skill><name>limetech-ai-review</name>",
+        "<skill><name>limetech-ai-review</name><path>/tmp/notes.md</path>",
+    ] {
+        assert!(extract_codex_skill_events(text).is_empty());
+    }
 }
 
 #[test]

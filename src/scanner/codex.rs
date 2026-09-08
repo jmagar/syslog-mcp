@@ -268,6 +268,9 @@ fn payload(value: &Value) -> &Value {
 }
 
 fn extract_message(value: &Value) -> String {
+    if let Some(summary) = super::skill_events::codex_skill_read_summary(value) {
+        return summary;
+    }
     if let Some(text) = value.get("content").and_then(Value::as_str) {
         return text.to_string();
     }

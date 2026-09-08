@@ -1,4 +1,36 @@
 use super::*;
+
+#[tokio::test]
+async fn skill_read_recovery_uses_stable_receipts_without_rewinding_live_checkpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join(".codex/sessions");
+    fs::create_dir_all(&root).unwrap();
+    let transcript = root.join("rollout-2026-09-08T12-00-00-test.jsonl");
+    let record = serde_json::json!({"type":"event_msg","timestamp":"2026-09-08T12:00:00Z","payload":{"type":"item_completed","item":{
+        "type":"CommandExecution","status":"completed","exit_code":0,"aggregated_output":"skill content",
+        "parsed_cmd":[{"type":"read","path":"/skills/limetech-ai-review/SKILL.md"}]
+    }}});
+    write_file(&transcript, &format!("{record}\n"));
+    let checkpoint_path = dir.path().join("live-checkpoint.json");
+    write_file(&checkpoint_path, "untouched");
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/v1/ai-transcripts"))
+        .respond_with(accepted_receipt_response)
+        .expect(2)
+        .mount(&server)
+        .await;
+    let mut config = AiTranscriptForwardConfig::new(server.uri(), None, checkpoint_path.clone());
+    config.roots = vec![root];
+    assert_eq!(backfill_codex_skill_reads(config.clone()).await.unwrap(), 1);
+    assert_eq!(backfill_codex_skill_reads(config).await.unwrap(), 1);
+    assert_eq!(fs::read_to_string(checkpoint_path).unwrap(), "untouched");
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests[0].body, requests[1].body);
+    let body = String::from_utf8(requests[0].body.clone()).unwrap();
+    assert!(body.contains("cortex_skill_read"));
+    assert!(!body.contains("/skills/limetech-ai-review"));
+}
 use std::io::Write;
 
 fn write_file(path: &Path, content: &str) {

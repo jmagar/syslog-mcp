@@ -396,6 +396,24 @@ fn insert_envelopes_with_receipts(
             .into_iter()
             .next()
             .expect("one transcript envelope must insert one log row");
+        // Keep skill evidence atomic with the canonical log and its replay
+        // receipt. A retry must never duplicate either the log or the skill.
+        let entry = &entries[0];
+        if entry.ai_tool.as_deref() == Some("codex") {
+            let events = crate::scanner::skill_events::extract_codex_skill_events(&entry.message)
+                .into_iter()
+                .map(|event| db::SkillEventInsert {
+                    log_id,
+                    ai_tool: "codex".to_string(),
+                    ai_project: entry.ai_project.clone(),
+                    ai_session_id: entry.ai_session_id.clone(),
+                    hostname: entry.hostname.clone(),
+                    timestamp: entry.timestamp.clone(),
+                    event,
+                })
+                .collect::<Vec<_>>();
+            db::insert_skill_events_in_tx(&tx, &events)?;
+        }
         tx.execute(
             "INSERT INTO ai_transcript_forward_receipts
                 (source_record_id, envelope_version, log_id, provider,
