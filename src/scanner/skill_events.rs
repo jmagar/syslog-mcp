@@ -28,6 +28,7 @@ const MAX_SKILL_FIELD_CHARS: usize = 256;
 pub enum SkillEventKind {
     ClaudeAttribution,
     CodexSkillBlock,
+    CodexSkillRead,
 }
 
 impl SkillEventKind {
@@ -35,6 +36,7 @@ impl SkillEventKind {
         match self {
             Self::ClaudeAttribution => "claude_attribution",
             Self::CodexSkillBlock => "codex_skill_block",
+            Self::CodexSkillRead => "codex_skill_read",
         }
     }
 }
@@ -159,7 +161,12 @@ pub fn extract_claude_skill_events(value: &serde_json::Value) -> Vec<ExtractedSk
 /// short but transcripts can wrap). Non-greedy `.*?` keeps each match scoped
 /// to one tag pair even when multiple `<skill>` blocks appear in one message.
 static CODEX_SKILL_TAG: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)<skill>\s*<name>\s*(.*?)\s*</name>\s*</skill>").expect("static regex")
+    // Current Codex emits a path and the entire skill body after the name.
+    // The forwarding byte budget can truncate that body, so require the
+    // complete structured header, not the closing tag beyond the budget.
+    // Keep the historical name-only form and reject ordinary catalog paths.
+    Regex::new(r"(?s)<skill>\s*<name>\s*([^<]*?)\s*</name>\s*(?:</skill>|<path>[^<>\r\n]+/SKILL\.md</path>)")
+        .expect("static regex")
 });
 
 /// Extract Codex skill-invocation events from transcript message text. Scans
@@ -173,6 +180,28 @@ static CODEX_SKILL_TAG: LazyLock<Regex> = LazyLock::new(|| {
 /// transcript rows contain no skill tag, so this bounds the common case to
 /// one `str::contains` call instead of a full regex scan.
 pub fn extract_codex_skill_events(text: &str) -> Vec<ExtractedSkillEvent> {
+    if text.starts_with("{\"cortex_skill_read\":") {
+        let name = serde_json::from_str::<serde_json::Value>(text)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("cortex_skill_read")
+                    .and_then(|name| name.as_str())
+                    .map(str::to_owned)
+            });
+        return name
+            .and_then(|skill_name| {
+                ExtractedSkillEvent {
+                    skill_name,
+                    skill_plugin: None,
+                    event_kind: SkillEventKind::CodexSkillRead,
+                    evidence_kind: SkillEvidenceKind::StructuredJsonField,
+                }
+                .normalized()
+            })
+            .into_iter()
+            .collect();
+    }
     if !text.contains("<skill>") {
         return Vec::new();
     }
@@ -194,6 +223,41 @@ pub fn extract_codex_skill_events(text: &str) -> Vec<ExtractedSkillEvent> {
         }
     }
     events
+}
+
+/// Native Codex command-completion evidence, not a path guessed from shell
+/// text. Restrict this to a single parsed read with a successful completion:
+/// a multi-command shell's final exit code cannot prove each read succeeded.
+pub(crate) fn codex_skill_read_summary(value: &serde_json::Value) -> Option<String> {
+    if value.get("type")?.as_str()? != "event_msg"
+        || value.pointer("/payload/type")?.as_str()? != "item_completed"
+    {
+        return None;
+    }
+    let item = value.pointer("/payload/item")?;
+    if item.get("type")?.as_str()? != "CommandExecution"
+        || item.get("status")?.as_str()? != "completed"
+        || item.get("exit_code")?.as_i64()? != 0
+        || item.get("aggregated_output")?.as_str()?.trim().is_empty()
+    {
+        return None;
+    }
+    let commands = item.get("parsed_cmd")?.as_array()?;
+    if commands.len() != 1 || commands[0].get("type")?.as_str()? != "read" {
+        return None;
+    }
+    let path = commands[0].get("path")?.as_str()?;
+    let directory = path.strip_suffix("/SKILL.md")?;
+    let name = directory.rsplit('/').next()?;
+    if name.is_empty()
+        || name.len() > MAX_SKILL_FIELD_CHARS
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_-.:".contains(&byte))
+    {
+        return None;
+    }
+    Some(serde_json::json!({"cortex_skill_read": name}).to_string())
 }
 
 #[cfg(test)]

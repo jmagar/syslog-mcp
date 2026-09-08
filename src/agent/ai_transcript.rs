@@ -472,6 +472,23 @@ async fn scan_and_forward(
         return Ok(0);
     }
 
+    let sent = send_records(config, client, records).await?;
+    save_checkpoint_updates(
+        &config.checkpoint_path,
+        checkpoint,
+        new_totals,
+        new_fingerprints,
+        new_jsonl_positions,
+        discovery_updates,
+    )?;
+    Ok(sent)
+}
+
+async fn send_records(
+    config: &AiTranscriptForwardConfig,
+    client: &reqwest::Client,
+    records: Vec<AiTranscriptRecord>,
+) -> Result<usize> {
     let sent = records.len();
     let expected_receipts: HashSet<String> = records
         .iter()
@@ -533,16 +550,12 @@ async fn scan_and_forward(
     // Only advance after the server supplied an exact receipt for every
     // submitted source-record ID. A lost/malformed response leaves the local
     // cursor untouched; a retry is deduplicated by the server receipt table.
-    save_checkpoint_updates(
-        &config.checkpoint_path,
-        checkpoint,
-        new_totals,
-        new_fingerprints,
-        new_jsonl_positions,
-        discovery_updates,
-    )?;
     Ok(sent)
 }
+
+#[path = "ai_transcript_skill_recovery.rs"]
+mod skill_recovery;
+pub use skill_recovery::backfill_codex_skill_reads;
 
 /// Run the AI-transcript forward loop forever, polling every
 /// `config.poll_interval`. Errors from a single scan are logged and do not

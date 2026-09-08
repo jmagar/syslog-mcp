@@ -1183,7 +1183,9 @@ pub fn index_file_with_options(
                 let record_key = parsed.record_key;
                 let skill_source = match source_kind {
                     SourceKind::CodexSession => {
-                        if parsed.message.contains("<skill>") {
+                        if parsed.message.contains("<skill>")
+                            || parsed.message.starts_with("{\"cortex_skill_read\":")
+                        {
                             ChunkSkillSource::Codex(parsed.message.clone())
                         } else {
                             ChunkSkillSource::None
