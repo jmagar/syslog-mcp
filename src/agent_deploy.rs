@@ -727,10 +727,7 @@ fn ssh_capture(host: &str, cmd: &str) -> io::Result<String> {
         ])
         .output()?;
     if !out.status.success() {
-        return Err(io::Error::other(format!(
-            "ssh {host}: '{}' exited non-zero",
-            redact_secret_envs(cmd)
-        )));
+        return Err(ssh_command_failed(host, cmd));
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
@@ -758,12 +755,19 @@ fn ssh_run(host: &str, cmd: &str) -> io::Result<()> {
         ])
         .status()?;
     if !status.success() {
-        return Err(io::Error::other(format!(
-            "ssh {host}: '{}' exited non-zero",
-            redact_secret_envs(cmd)
-        )));
+        return Err(ssh_command_failed(host, cmd));
     }
     Ok(())
+}
+
+/// The failure every remote step reports: which host, which command, redacted.
+/// A deploy runs a fixed sequence of ssh commands, so naming the command is the
+/// only way the operator learns *where* the deploy stopped.
+fn ssh_command_failed(host: &str, cmd: &str) -> io::Error {
+    io::Error::other(format!(
+        "ssh {host}: '{}' exited non-zero",
+        redact_secret_envs(cmd)
+    ))
 }
 
 fn ssh_run_with_stdin(host: &str, cmd: &str, input: &[u8]) -> io::Result<()> {
@@ -785,19 +789,33 @@ fn ssh_run_with_stdin(host: &str, cmd: &str, input: &[u8]) -> io::Result<()> {
         ])
         .stdin(Stdio::piped())
         .spawn()?;
-    child
+    let mut stdin = child
         .stdin
         .take()
-        .ok_or_else(|| io::Error::other("ssh stdin unavailable"))?
-        .write_all(input)?;
+        .ok_or_else(|| io::Error::other("ssh stdin unavailable"))?;
+
+    // Write, then *always* close stdin and reap the child before deciding.
+    // A remote that dies or exits without reading breaks the pipe mid-write;
+    // returning that `BrokenPipe` straight away would both leak the unreaped
+    // child and report the symptom ("Broken pipe (os error 32)") instead of the
+    // cause. The exit status names the failing command, so it wins; the write
+    // error only surfaces when the remote claimed success without taking the
+    // input, which means the env file was never written.
+    let written = stdin.write_all(input);
+    drop(stdin);
     let status = child.wait()?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(io::Error::other(format!(
-            "ssh {host}: command exited non-zero"
-        )))
+    if !status.success() {
+        return Err(ssh_command_failed(host, cmd));
     }
+    written.map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "ssh {host}: '{}' exited before accepting its piped input: {error}",
+                redact_secret_envs(cmd)
+            ),
+        )
+    })
 }
 
 fn render_env_file(env_pairs: &[(String, String)]) -> io::Result<String> {

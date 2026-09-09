@@ -457,11 +457,16 @@ esac
 fn deploy_agent_redacts_secret_envs_from_failure_detail() {
     let dir = tempfile::tempdir().unwrap();
     let local_binary = write_local_binary(dir.path());
+    // The `cat >` branch must drain stdin, exactly as real ssh forwards stdin to
+    // a remote `cat` that reads to EOF. A shim that exits without reading races
+    // the deploy's write: whichever side loses, the deploy stops at the env
+    // write with a broken pipe and never reaches the install command below.
     write_executable(
         &dir.path().join("ssh"),
         r#"#!/bin/sh
 case "$*" in
   *"/etc/unraid-version"*) printf 'no\n'; exit 0 ;;
+  *"cat >"*) cat > /dev/null; exit 0 ;;
   *"setup heartbeatagent install"*) exit 42 ;;
   *) exit 0 ;;
 esac
@@ -482,9 +487,71 @@ esac
         },
     );
 
-    assert!(!result.ok);
-    assert!(!result.detail.contains("super secret token"));
-    assert!(result.detail.contains("setup heartbeatagent install"));
+    assert!(!result.ok, "{result:?}");
+    assert!(
+        !result.detail.contains("super secret token"),
+        "the heartbeat token leaked into the failure detail: {:?}",
+        result.detail
+    );
+    assert!(
+        result.detail.contains("setup heartbeatagent install"),
+        "the failure detail must name the command that failed, got: {:?}",
+        result.detail
+    );
+}
+
+/// Larger than any pipe buffer, so a remote that never reads stdin is
+/// guaranteed to break the pipe while the write is still in flight — the
+/// scheduling race that made the deploy report `Broken pipe (os error 32)`
+/// instead of the failing command, deterministically.
+const UNREADABLE_STDIN_INPUT_LEN: usize = 1 << 20;
+
+#[test]
+#[serial]
+fn ssh_run_with_stdin_reports_the_command_when_the_remote_exits_non_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    write_executable(&dir.path().join("ssh"), "#!/bin/sh\nexit 42\n");
+    let _path = prepend_path(dir.path());
+
+    let error = ssh_run_with_stdin(
+        "linux-host",
+        "cat > ~/.cortex/heartbeat-agent.env.new",
+        &vec![b'x'; UNREADABLE_STDIN_INPUT_LEN],
+    )
+    .unwrap_err();
+
+    let detail = error.to_string();
+    assert!(
+        detail.contains("cat > ~/.cortex/heartbeat-agent.env.new"),
+        "the exit status must win over the broken pipe, got: {detail:?}"
+    );
+    assert!(detail.contains("exited non-zero"), "got: {detail:?}");
+}
+
+#[test]
+#[serial]
+fn ssh_run_with_stdin_fails_when_a_successful_remote_never_took_the_input() {
+    let dir = tempfile::tempdir().unwrap();
+    write_executable(&dir.path().join("ssh"), "#!/bin/sh\nexit 0\n");
+    let _path = prepend_path(dir.path());
+
+    let error = ssh_run_with_stdin(
+        "linux-host",
+        "cat > ~/.cortex/heartbeat-agent.env.new",
+        &vec![b'x'; UNREADABLE_STDIN_INPUT_LEN],
+    )
+    .unwrap_err();
+
+    let detail = error.to_string();
+    assert!(
+        detail.contains("cat > ~/.cortex/heartbeat-agent.env.new"),
+        "got: {detail:?}"
+    );
+    assert!(
+        detail.contains("exited before accepting its piped input"),
+        "a remote that exits 0 without reading never wrote the env file, \
+         so the deploy must not continue, got: {detail:?}"
+    );
 }
 
 #[test]
@@ -546,7 +613,7 @@ fn deploy_agent_env_install_failure_never_starts_service() {
 printf 'ssh %s\n' "$*" >> "$CORTEX_TEST_AGENT_DEPLOY_LOG"
 case "$*" in
   *"/etc/unraid-version"*) printf 'no\n'; exit 0 ;;
-  *"cat > ~/.cortex/heartbeat-agent.env.new"*) exit 42 ;;
+  *"cat > ~/.cortex/heartbeat-agent.env.new"*) cat > /dev/null; exit 42 ;;
   *) exit 0 ;;
 esac
 "#,
