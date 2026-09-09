@@ -116,10 +116,29 @@ live_ingest_syslog() {
   live_ingest_case syslog.adversarial pass artifacts/syslog-oversize-query.json
 }
 
+live_ingest_udp_relay_ready() {
+  docker exec "$1" python -c '
+import errno, socket, sys
+with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+    try:
+        probe.bind(("0.0.0.0", 11514))
+    except OSError as error:
+        sys.exit(0 if error.errno == errno.EADDRINUSE else 1)
+sys.exit(1)
+'
+}
+
 live_ingest_downtime() {
-  local candidate udp_lost tcp_retry http_retry status tcp_exit
+  local candidate udp_redirector udp_lost udp_recovered tcp_retry http_retry status tcp_exit
   candidate="$(live_ingest_candidate_id)"; udp_lost="$(live_ingest_marker downtime-udp-loss 70)"; tcp_retry="$(live_ingest_marker downtime-tcp-retry 71)"; http_retry="$(live_ingest_marker downtime-http-retry 72)"
-  docker stop -t 5 "$candidate" >/dev/null
+  udp_redirector="$(docker ps -q --filter "label=com.docker.compose.project=$LIVE_COMPOSE_PROJECT" --filter label=com.docker.compose.service=udp-redirector)"
+  [[ -n "$udp_redirector" && "$udp_redirector" != *$'\n'* ]] || { live_die 'expected exactly one UDP redirector'; return 1; }
+  # This is an ingress-outage test, not a promise that UDP can never queue.
+  # Leaving the relay alive permits DNS/neighbor resolution or socket queues
+  # to delay forwarding until the candidate returns, invalidating the probe.
+  docker stop -t 5 "$udp_redirector" "$candidate" >/dev/null
+  [[ "$(docker inspect -f '{{.State.Running}}' "$udp_redirector")" == false ]]
+  [[ "$(docker inspect -f '{{.State.Running}}' "$candidate")" == false ]]
   printf '<134>1 2026-08-27T12:10:00Z down udp 70 ID70 - %s\n' "$udp_lost" | nc -u -w 1 127.0.0.1 "$LIVE_SYSLOG_UDP_PORT" || true
   set +e
   printf '<134>1 2026-08-27T12:10:01Z down tcp 71 ID71 - %s\n' "$tcp_retry" | nc -w 2 127.0.0.1 "$LIVE_SYSLOG_TCP_PORT"
@@ -127,10 +146,15 @@ live_ingest_downtime() {
   set -e
   status="$(curl -sS --max-time 2 -o "$LIVE_RUN_ROOT/artifacts/downtime-http.stderr" -w '%{http_code}' -H 'Host: localhost' "$(live_ingest_http /health)" 2>/dev/null || true)"; [[ "$status" == 000 || -z "$status" ]]
   docker start "$candidate" >/dev/null; live_wait_until 30 downtime-health _live_http_health_ready; live_wait_until 30 downtime-mcp _live_mcp_ready
+  docker start "$udp_redirector" >/dev/null
+  live_wait_until 30 downtime-udp-ready live_ingest_udp_relay_ready "$udp_redirector"
+  udp_recovered="$(live_ingest_marker downtime-udp-recovered 73)"
+  printf '<134>1 2026-08-27T12:10:02Z retry udp 73 ID73 - %s\n' "$udp_recovered" | nc -u -w 1 127.0.0.1 "$LIVE_SYSLOG_UDP_PORT"
+  live_ingest_wait_marker "$udp_recovered" downtime-udp-recovered 73
   # A TCP proxy may accept locally while its upstream is absent. Acceptance is
   # not durability: prove the first attempt was not stored before retrying.
   if live_ingest_mcp_search "$tcp_retry" "$LIVE_RUN_ROOT/artifacts/downtime-tcp-before-retry.json"; then live_die 'TCP attempt made during downtime was unexpectedly stored'; return 1; fi
-  jq -cn --argjson tcp_exit "$tcp_exit" --arg http_status "${status:-000}" '{tcp_proxy_exit:$tcp_exit,http_status_while_down:$http_status,tcp_contract:"retry_required_after_unconfirmed_delivery"}' >"$LIVE_RUN_ROOT/artifacts/downtime-transport.json"
+  jq -cn --argjson tcp_exit "$tcp_exit" --arg http_status "${status:-000}" '{udp_ingress_while_down:"stopped",udp_recovery:"observed",tcp_proxy_exit:$tcp_exit,http_status_while_down:$http_status,tcp_contract:"retry_required_after_unconfirmed_delivery"}' >"$LIVE_RUN_ROOT/artifacts/downtime-transport.json"
   printf '<134>1 2026-08-27T12:10:02Z retry tcp 72 ID72 - %s\n' "$tcp_retry" | nc -w 3 127.0.0.1 "$LIVE_SYSLOG_TCP_PORT"; live_ingest_wait_marker "$tcp_retry" downtime-tcp-retry 71
   local body; body="$(jq -cn --arg m "$http_retry" '[{started_at:"2026-08-27T12:10:03Z",finished_at:"2026-08-27T12:10:04Z",duration_ms:1000,exit_status:0,command:$m,cwd:null,agent:$m,command_surface:null,hostname:$m,user:null,pid:72,session_id:$m,schema_version:1,content_scrubbed:true}]')"
   [[ "$(live_ingest_curl_status "$LIVE_RUN_ROOT/artifacts/downtime-http-retry.json" -X POST -H "Authorization: Bearer $LIVE_CORTEX_TOKEN" -H 'Content-Type: application/json' --data-binary "$body" "$(live_ingest_http /v1/agent-commands)")" == 200 ]]; live_ingest_wait_marker "$http_retry" downtime-http-retry 72

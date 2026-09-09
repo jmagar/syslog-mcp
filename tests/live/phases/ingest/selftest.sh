@@ -23,4 +23,5 @@ for required in producer_bound file-tail-registration downtime.udp-loss ingest-c
 grep -F 'Accept: application/json, text/event-stream' "$root/tests/live/phases/ingest/run.sh" >/dev/null
 grep -F '?os=linux&arch=x86_64' "$root/tests/live/phases/ingest/run.sh" >/dev/null
 grep -F 'MCP initialize semantic probe failed' "$root/tests/live/phases/ingest/run.sh" >/dev/null
+bash "$root/tests/live/phases/ingest/downtime-selftest.sh"
 echo 'ingest phase selftest passed'
