@@ -498,8 +498,15 @@ pub(super) fn transcript_record(
         provider.as_bytes(),
         canonical_bytes,
     ]);
+    // A derived format change must not reuse immutable v1 receipt identities.
+    // Both live forwarding and recovery use this same discriminator.
+    let record_format: &[u8] = if details.event_kind.as_deref() == Some("codex_skill_read") {
+        b"codex-skill-read-v2"
+    } else {
+        b"ai-transcript-record-v1"
+    };
     let source_record_id = sha256_id([
-        b"ai-transcript-record-v1",
+        record_format,
         provider.as_bytes(),
         source_identity.as_bytes(),
         epoch.as_bytes(),

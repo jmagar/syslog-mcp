@@ -116,10 +116,29 @@ live_ingest_syslog() {
   live_ingest_case syslog.adversarial pass artifacts/syslog-oversize-query.json
 }
 
+live_ingest_udp_relay_ready() {
+  docker exec "$1" python -c '
+import errno, socket, sys
+with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+    try:
+        probe.bind(("0.0.0.0", 11514))
+    except OSError as error:
+        sys.exit(0 if error.errno == errno.EADDRINUSE else 1)
+sys.exit(1)
+'
+}
+
 live_ingest_downtime() {
-  local candidate udp_lost tcp_retry http_retry status tcp_exit
+  local candidate udp_redirector udp_lost udp_recovered tcp_retry http_retry status tcp_exit
   candidate="$(live_ingest_candidate_id)"; udp_lost="$(live_ingest_marker downtime-udp-loss 70)"; tcp_retry="$(live_ingest_marker downtime-tcp-retry 71)"; http_retry="$(live_ingest_marker downtime-http-retry 72)"
-  docker stop -t 5 "$candidate" >/dev/null
+  udp_redirector="$(docker ps -q --filter "label=com.docker.compose.project=$LIVE_COMPOSE_PROJECT" --filter label=com.docker.compose.service=udp-redirector)"
+  [[ -n "$udp_redirector" && "$udp_redirector" != *$'\n'* ]] || { live_die 'expected exactly one UDP redirector'; return 1; }
+  # This is an ingress-outage test, not a promise that UDP can never queue.
+  # Leaving the relay alive permits DNS/neighbor resolution or socket queues
+  # to delay forwarding until the candidate returns, invalidating the probe.
+  docker stop -t 5 "$udp_redirector" "$candidate" >/dev/null
+  [[ "$(docker inspect -f '{{.State.Running}}' "$udp_redirector")" == false ]]
+  [[ "$(docker inspect -f '{{.State.Running}}' "$candidate")" == false ]]
   printf '<134>1 2026-08-27T12:10:00Z down udp 70 ID70 - %s\n' "$udp_lost" | nc -u -w 1 127.0.0.1 "$LIVE_SYSLOG_UDP_PORT" || true
   set +e
   printf '<134>1 2026-08-27T12:10:01Z down tcp 71 ID71 - %s\n' "$tcp_retry" | nc -w 2 127.0.0.1 "$LIVE_SYSLOG_TCP_PORT"
@@ -127,10 +146,19 @@ live_ingest_downtime() {
   set -e
   status="$(curl -sS --max-time 2 -o "$LIVE_RUN_ROOT/artifacts/downtime-http.stderr" -w '%{http_code}' -H 'Host: localhost' "$(live_ingest_http /health)" 2>/dev/null || true)"; [[ "$status" == 000 || -z "$status" ]]
   docker start "$candidate" >/dev/null; live_wait_until 30 downtime-health _live_http_health_ready; live_wait_until 30 downtime-mcp _live_mcp_ready
+  docker start "$udp_redirector" >/dev/null
+  live_wait_until 30 downtime-udp-ready live_ingest_udp_relay_ready "$udp_redirector"
+  # Docker allocates a new ephemeral host port when this relay restarts.
+  # The pre-outage binding is no longer an ingress endpoint.
+  LIVE_SYSLOG_UDP_PORT="$(live_topology_port "" "$LIVE_COMPOSE_PROJECT" udp-redirector 11514 udp)"
+  export LIVE_SYSLOG_UDP_PORT
+  udp_recovered="$(live_ingest_marker downtime-udp-recovered 73)"
+  printf '<134>1 2026-08-27T12:10:02Z retry udp 73 ID73 - %s\n' "$udp_recovered" | nc -u -w 1 127.0.0.1 "$LIVE_SYSLOG_UDP_PORT"
+  live_ingest_wait_marker "$udp_recovered" downtime-udp-recovered 73
   # A TCP proxy may accept locally while its upstream is absent. Acceptance is
   # not durability: prove the first attempt was not stored before retrying.
   if live_ingest_mcp_search "$tcp_retry" "$LIVE_RUN_ROOT/artifacts/downtime-tcp-before-retry.json"; then live_die 'TCP attempt made during downtime was unexpectedly stored'; return 1; fi
-  jq -cn --argjson tcp_exit "$tcp_exit" --arg http_status "${status:-000}" '{tcp_proxy_exit:$tcp_exit,http_status_while_down:$http_status,tcp_contract:"retry_required_after_unconfirmed_delivery"}' >"$LIVE_RUN_ROOT/artifacts/downtime-transport.json"
+  jq -cn --argjson tcp_exit "$tcp_exit" --arg http_status "${status:-000}" '{udp_ingress_while_down:"stopped",udp_recovery:"observed",tcp_proxy_exit:$tcp_exit,http_status_while_down:$http_status,tcp_contract:"retry_required_after_unconfirmed_delivery"}' >"$LIVE_RUN_ROOT/artifacts/downtime-transport.json"
   printf '<134>1 2026-08-27T12:10:02Z retry tcp 72 ID72 - %s\n' "$tcp_retry" | nc -w 3 127.0.0.1 "$LIVE_SYSLOG_TCP_PORT"; live_ingest_wait_marker "$tcp_retry" downtime-tcp-retry 71
   local body; body="$(jq -cn --arg m "$http_retry" '[{started_at:"2026-08-27T12:10:03Z",finished_at:"2026-08-27T12:10:04Z",duration_ms:1000,exit_status:0,command:$m,cwd:null,agent:$m,command_surface:null,hostname:$m,user:null,pid:72,session_id:$m,schema_version:1,content_scrubbed:true}]')"
   [[ "$(live_ingest_curl_status "$LIVE_RUN_ROOT/artifacts/downtime-http-retry.json" -X POST -H "Authorization: Bearer $LIVE_CORTEX_TOKEN" -H 'Content-Type: application/json' --data-binary "$body" "$(live_ingest_http /v1/agent-commands)")" == 200 ]]; live_ingest_wait_marker "$http_retry" downtime-http-retry 72
@@ -149,7 +177,7 @@ live_ingest_http_json_lanes() {
       heartbeat) path=/v1/heartbeats; body="$(jq -cn --arg m "$marker" '{host:{host_id:$m,hostname:$m,os:"linux",kernel:"6.8-live",architecture:"x86_64",boot_id:$m,timezone:"UTC"},sample:{sequence:1,sampled_at:"2026-08-27T12:00:00Z",uptime_secs:1,monotonic_ms:1,collection_ms:1,partial:true,probe_errors:[],skipped_probes:[]},agent:{version:"3.15.0",mode:"always_on",interval_secs:30,push_latency_ms:1,retry_backlog:0},cpu:{load1:0.1,load5:0.1,load15:0.1,usage_pct:1,iowait_pct:0,steal_pct:0,core_count:1},memory:{mem_total_bytes:1000,mem_available_bytes:900,swap_total_bytes:0,swap_used_bytes:0},disks:[],network:[],processes:{total:1,running:1,sleeping:0,zombies:0,top:[]},containers:{runtime:"docker",reachable:true,running:0,exited:0,restarting:0,unhealthy:0,details:[]}}')";;
       agent-command) path=/v1/agent-commands; body="$(jq -cn --arg m "$marker" --arg agent "$(live_ingest_identity agent-command "$seq")" '[{started_at:"2026-08-27T12:00:00Z",finished_at:"2026-08-27T12:00:01Z",duration_ms:1000,exit_status:0,command:$m,cwd:null,agent:$agent,command_surface:null,hostname:$m,user:null,pid:42,session_id:$m,schema_version:1,content_scrubbed:true}]')";;
       shell-history) path=/v1/shell-history; body="$(jq -cn --arg m "$marker" '{records:[{source:"zsh",hostname:$m,timestamp:"2026-08-27T12:00:00Z",duration_ms:1,command:$m,cwd:null,exit_status:0,session_id:$m}]}')";;
-      ai-transcript) path=/v1/ai-transcripts; body="$(jq -cn --arg m "$marker" --arg tool "$(live_ingest_identity ai-tool "$seq")" '{records:[{timestamp:"2026-08-27T12:00:00Z",hostname:$m,ai_tool:$tool,ai_project:$m,ai_session_id:$m,ai_transcript_path:"/synthetic/cortex-live.jsonl",message:$m}]}')";;
+      ai-transcript) path=/v1/ai-transcripts; body="$(jq -c --arg m "$marker" --arg digest "sha256:$(printf '%s' "$marker" | shasum -a 256 | cut -d ' ' -f 1)" 'walk(if . == "live-smoke-transcript" then $m elif (type == "string" and startswith("sha256:")) then $digest else . end)' "$LIVE_PROJECT_ROOT/tests/live/fixtures/ingest/transcript.json")";;
     esac
     response="$LIVE_RUN_ROOT/artifacts/ingest-${kind}-post.json"
     live_budget_add fixture_records 1; live_budget_add fixture_bytes "${#body}"
@@ -188,6 +216,37 @@ live_ingest_http_json_lanes() {
   docker exec "$candidate" cortex state host "$heartbeat" --http --server http://127.0.0.1:3100 --json >"$LIVE_RUN_ROOT/artifacts/heartbeat-host-state-cli.json"
   grep -F "$heartbeat" "$LIVE_RUN_ROOT/artifacts/heartbeat-host-state-cli.json" >/dev/null
   live_ingest_case heartbeat.state pass artifacts/heartbeat-host-state-rest.json
+}
+
+# Forwarded syslog is the replayable sibling of the best-effort TCP listener:
+# it must commit the frame, echo a stable receipt, refuse a reused key that
+# carries different content, and never store a second copy on retry.
+live_ingest_syslog_forward() {
+  local marker instance key body conflict response status
+  marker="$(live_ingest_marker syslog-forward 15)"; instance="$(live_ingest_identity syslog-forward 15)"; key="$instance-1"
+  body="$(jq -cn --arg instance "$instance" --arg key "$key" --arg m "$marker" '{records:[{source_instance:$instance,source_epoch:1,sequence:1,idempotency_key:$key,observed_at:"2026-08-27T12:00:08Z",line:("<134>1 2026-08-27T12:00:08Z "+$instance+" forwarder 15 ID54 - "+$m)}],gaps:[]}')"
+  response="$LIVE_RUN_ROOT/artifacts/ingest-syslog-forward-post.json"
+  live_budget_add fixture_records 1; live_budget_add fixture_bytes "${#body}"
+  status="$(live_ingest_curl_status "$response" -X POST -H "Authorization: Bearer $LIVE_CORTEX_TOKEN" -H 'Content-Type: application/json' --data-binary "$body" "$(live_ingest_http /v1/syslog-forward)")"
+  if [[ "$status" != 200 ]]; then live_die "syslog-forward ingest returned HTTP $status"; return 1; fi
+  jq -e --arg key "$key" '.receipts==[$key]' "$response" >/dev/null
+  live_ingest_wait_marker "$marker" syslog-forward 15
+  # The forwarder identity is server-derived: a hostname claimed in the frame
+  # never becomes the stored identity.
+  jq -e --arg claimed "$instance" '.count==1 and .logs[0].hostname!=$claimed and (.logs[0].hostname|startswith("agent-"))' "$LIVE_RUN_ROOT/artifacts/ingest-syslog-forward-15-rest.json" >/dev/null
+  # Replay is the point of the receipt: an identical batch is acknowledged
+  # without a second row.
+  [[ "$(live_ingest_curl_status "$LIVE_RUN_ROOT/artifacts/ingest-syslog-forward-replay.json" -X POST -H "Authorization: Bearer $LIVE_CORTEX_TOKEN" -H 'Content-Type: application/json' --data-binary "$body" "$(live_ingest_http /v1/syslog-forward)")" == 200 ]]
+  jq -e --arg key "$key" '.receipts==[$key]' "$LIVE_RUN_ROOT/artifacts/ingest-syslog-forward-replay.json" >/dev/null
+  live_ingest_rest_search "$marker" "$LIVE_RUN_ROOT/artifacts/ingest-syslog-forward-replay-search.json"
+  jq -e '.count==1' "$LIVE_RUN_ROOT/artifacts/ingest-syslog-forward-replay-search.json" >/dev/null
+  # A reused key carrying different content is a client defect, not a retry.
+  conflict="$(jq -c '.records[0].line += "-conflict"' <<<"$body")"
+  [[ "$(live_ingest_curl_status "$LIVE_RUN_ROOT/artifacts/ingest-syslog-forward-conflict.json" -X POST -H "Authorization: Bearer $LIVE_CORTEX_TOKEN" -H 'Content-Type: application/json' --data-binary "$conflict" "$(live_ingest_http /v1/syslog-forward)")" == 409 ]]
+  [[ "$(live_ingest_curl_status "$LIVE_RUN_ROOT/artifacts/ingest-syslog-forward-unauth.json" -X POST -H 'Content-Type: application/json' --data-binary "$body" "$(live_ingest_http /v1/syslog-forward)")" == 401 ]]
+  [[ "$(live_ingest_curl_status "$LIVE_RUN_ROOT/artifacts/ingest-syslog-forward-malformed.json" -X POST -H "Authorization: Bearer $LIVE_CORTEX_TOKEN" -H 'Content-Type: application/json' --data-binary '{' "$(live_ingest_http /v1/syslog-forward)")" =~ ^(400|422)$ ]]
+  live_budget_add fixture_records 3; live_budget_add connections 5
+  live_ingest_case http.syslog-forward pass artifacts/ingest-syslog-forward-post.json
 }
 
 live_ingest_otlp() {
@@ -370,6 +429,7 @@ live_ingest_matrix_run() {
   live_ingest_syslog
   live_ingest_downtime
   live_ingest_http_json_lanes
+  live_ingest_syslog_forward
   live_ingest_otlp
   live_ingest_file_tail
   live_ingest_inventory_cli
@@ -410,6 +470,9 @@ live_ingest_surface_results() {
       ingest.post-v1-ai-transcripts/semantic-positive) evidence=artifacts/ingest-ai-transcript-post.json ;;
       ingest.post-v1-ai-transcripts/validation-negative) evidence=artifacts/ingest-ai-transcript-malformed.json ;;
       ingest.post-v1-ai-transcripts/authorization) evidence=artifacts/ingest-ai-transcript-unauth.json ;;
+      ingest.post-v1-syslog-forward/semantic-positive) evidence=artifacts/ingest-syslog-forward-post.json ;;
+      ingest.post-v1-syslog-forward/validation-negative) evidence=artifacts/ingest-syslog-forward-malformed.json ;;
+      ingest.post-v1-syslog-forward/authorization) evidence=artifacts/ingest-syslog-forward-unauth.json ;;
       ingest.post-v1-logs/semantic-positive) evidence=artifacts/otlp-logs-response.pb ;;
       ingest.post-v1-logs/validation-negative) evidence=artifacts/otlp-logs-malformed.json ;;
       ingest.post-v1-logs/authorization) evidence=artifacts/otlp-logs-unauth.json ;;

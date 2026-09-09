@@ -1,5 +1,5 @@
 //! Prompt construction for the `skill-improvement-assessment`
-//! skill. This module deliberately does **not** spawn Gemini or duplicate
+//! skill. This module deliberately does **not** spawn an LLM or duplicate
 //! any part of PR 1's `LlmRunner` — the guarded invocation happens in
 //! `src/app/services/skill_assessment.rs` (Task 3), which builds an
 //! `LlmInvocationSpec` from the prompt this module returns and calls

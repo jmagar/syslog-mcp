@@ -1,5 +1,5 @@
 {
   "schema":"cortex-live-ingest-cases-v1",
-  "required":["syslog.udp.rfc3164","syslog.udp.rfc5424","syslog.tcp.rfc3164","syslog.tcp.rfc5424","syslog.tcp.framing","syslog.retry-duplicate","syslog.adversarial","downtime.udp-loss","downtime.tcp-retry","downtime.http-retry","http.heartbeat","http.agent-command","http.shell-history","http.ai-transcript","http.capacity","heartbeat.state","otlp.logs","otlp.metrics","otlp.traces","otlp.logs.oversize","otlp.metrics.oversize","otlp.traces.oversize","filetail.start-position","filetail.lifecycle","filetail.hardlink-regular-file","filetail.security","inventory.status","legacy-docker.live"],
+  "required":["syslog.udp.rfc3164","syslog.udp.rfc5424","syslog.tcp.rfc3164","syslog.tcp.rfc5424","syslog.tcp.framing","syslog.retry-duplicate","syslog.adversarial","downtime.udp-loss","downtime.tcp-retry","downtime.http-retry","http.heartbeat","http.agent-command","http.shell-history","http.ai-transcript","http.syslog-forward","http.capacity","heartbeat.state","otlp.logs","otlp.metrics","otlp.traces","otlp.logs.oversize","otlp.metrics.oversize","otlp.traces.oversize","filetail.start-position","filetail.lifecycle","filetail.hardlink-regular-file","filetail.security","inventory.status","legacy-docker.live"],
   "cross_bead_required":["otlp-storage-blocked"]
 }

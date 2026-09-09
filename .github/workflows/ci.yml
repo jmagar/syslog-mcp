@@ -24,7 +24,7 @@ env:
 jobs:
   changes:
     name: Changes
-    runs-on: ci-pool-ops
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       all: ${{ steps.classify.outputs.all }}
@@ -84,7 +84,7 @@ jobs:
 
   version-sync:
     name: Version Sync
-    runs-on: ci-pool-ops
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     needs: [changes]
     if: ${{ needs.changes.outputs.release == 'true' || needs.changes.outputs.skills == 'true' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.workflow == 'true' }}
@@ -107,7 +107,7 @@ jobs:
 
   identity:
     name: Public Identity
-    runs-on: ci-pool-ops
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     needs: [changes]
     # check-public-identity.sh scans config/*, scripts/*, .github/*,
@@ -124,6 +124,13 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
+      - name: Install identity scan prerequisites
+        run: |
+          # A vendor apt repo outage on the hosted image must not gate this
+          # scan; apt-get install still fails if ripgrep is unavailable.
+          sudo apt-get update || echo "::warning::apt-get update reported index errors; continuing with the indexes that resolved."
+          sudo apt-get install -y ripgrep
+
       - name: Check public identity strings
         run: |
           bash scripts/check-public-identity.sh
@@ -133,7 +140,7 @@ jobs:
 
   fmt:
     name: Formatting
-    runs-on: ci-pool-rust
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     needs: [changes]
     if: ${{ needs.changes.outputs.rust == 'true' }}
@@ -150,7 +157,7 @@ jobs:
 
   clippy:
     name: Clippy
-    runs-on: ci-pool-rust
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     needs: [changes]
     if: ${{ needs.changes.outputs.rust == 'true' }}
@@ -167,7 +174,7 @@ jobs:
 
   test:
     name: Tests
-    runs-on: ci-pool-rust
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     needs: [changes]
     if: ${{ needs.changes.outputs.rust == 'true' }}
@@ -203,7 +210,7 @@ jobs:
 
   session-query-benchmark:
     name: Session query benchmark
-    runs-on: ci-pool-rust
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     needs: [changes]
     if: ${{ needs.changes.outputs.rust == 'true' }}
@@ -229,7 +236,7 @@ jobs:
 
   docs-contract:
     name: Docs Contract
-    runs-on: ci-pool-ops
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     needs: [changes]
     # When `rust` is true, the Tests job already runs docs_tests:: via nextest,
@@ -258,7 +265,7 @@ jobs:
 
   coverage:
     name: Coverage
-    runs-on: ci-pool-rust
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     needs: [changes, test]
     # PR runs already execute the full suite in the Tests job; the instrumented
@@ -283,7 +290,7 @@ jobs:
 
   deny:
     name: Dependency Check (cargo-deny)
-    runs-on: ci-pool-rust
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     needs: [changes]
     if: ${{ needs.changes.outputs.security == 'true' }}
@@ -338,6 +345,10 @@ jobs:
       - name: Run fail-closed live smoke
         env:
           LIVE_RUNS_ROOT: ${{ github.workspace }}/.live-runs
+          # This same-repository job runs on a disposable GitHub-hosted VM.
+          # Match the isolated Linux topology used by live-qualification.yml.
+          LIVE_PLATFORM_POLICY: linux-full
+          CORTEX_LIVE_DIND_AUTHORIZED: "1"
         run: bash tests/live/run-profile.sh smoke
 
       - name: Reconcile leases after success, failure, or cancellation
@@ -383,7 +394,7 @@ jobs:
 
   ci-gate:
     name: CI Gate
-    runs-on: ci-pool-ops
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     if: always()
     needs:
@@ -424,7 +435,7 @@ jobs:
 
   npm:
     name: npm launcher
-    runs-on: ci-pool-typescript
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     needs: [changes]
     if: ${{ needs.changes.outputs.release == 'true' || needs.changes.outputs.workflow == 'true' || needs.changes.outputs.docs == 'true' }}

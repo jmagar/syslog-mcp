@@ -2,13 +2,12 @@
 //! `CortexService::investigate_ai_skill_incidents` to resolve a skill (or
 //! plugin) name to its highest-priority (or all, with `--all`) matching
 //! `SkillIncidentEvidence` bundle(s), and optionally runs the guarded
-//! Gemini assessment through PR 1's `LlmRunner` using the
+//! Codex app-server assessment through `LlmRunner` using the
 //! `skill-improvement-assessment` skill prompt
 //! (`crate::skill_assessment::build_skill_assessment_prompt`).
 //!
-//! This module does NOT reimplement Gemini process spawning, an audit
-//! table, or a skill-incident schema — all three already exist upstream
-//! (PR 1's `LlmRunner`, PR 3's `investigate_ai_skill_incidents`). It also
+//! This module retains the existing audit table and skill-incident schema.
+//! The isolated app-server protocol is owned by `codex_assessment`. It also
 //! does NOT fall back to the AI-transcript abuse-incident pipeline for
 //! skill evidence; that was an earlier-draft workaround made obsolete by
 //! PR 3 landing.
@@ -18,7 +17,7 @@ use crate::app::models::{
     AiSkillInvestigateRequest, SkillAssessRequest, SkillAssessResponse, SkillAssessResult,
     SkillIncidentEvidence,
 };
-use crate::assessment::GeminiAssessConfig;
+use crate::codex_assessment::CodexAssessConfig;
 use crate::skill_assessment::build_skill_assessment_prompt;
 
 impl CortexService {
@@ -86,8 +85,7 @@ impl CortexService {
             )));
         }
 
-        let gemini_config =
-            GeminiAssessConfig::from_env(req.model.clone(), self.llm().timeout_secs());
+        let codex_config = CodexAssessConfig::from_env(req.model.clone());
         let mut results = Vec::with_capacity(invest_resp.evidence.len());
         for evidence in &invest_resp.evidence {
             let mut result = SkillAssessResult {
@@ -98,7 +96,7 @@ impl CortexService {
             };
             if run_llm {
                 result = self
-                    .run_one_skill_assessment(evidence, &gemini_config, &mut on_delta)
+                    .run_one_skill_assessment(evidence, &codex_config, &mut on_delta)
                     .await?;
             }
             results.push(result);
@@ -114,13 +112,13 @@ impl CortexService {
         })
     }
 
-    /// Runs one guarded Gemini assessment for a single `SkillIncidentEvidence`
+    /// Runs one guarded Codex app-server assessment for a `SkillIncidentEvidence`
     /// bundle via `LlmRunner::run`, forwarding deltas directly through the
     /// borrowed callback without an intermediate allocation or channel.
     async fn run_one_skill_assessment<F>(
         &self,
         evidence: &SkillIncidentEvidence,
-        gemini_config: &GeminiAssessConfig,
+        codex_config: &CodexAssessConfig,
         on_delta: &mut F,
     ) -> ServiceResult<SkillAssessResult>
     where
@@ -147,13 +145,22 @@ impl CortexService {
                     || evidence.transcript_after_truncated,
             },
             prompt,
-            provider: "gemini-cli".to_string(),
-            model: gemini_config.model.clone(),
-            program: gemini_config.program.clone(),
+            provider: "codex-app-server".to_string(),
+            model: codex_config
+                .model
+                .clone()
+                .unwrap_or_else(|| "server-default".into()),
+            program: codex_config.program.clone(),
             extra_metadata: serde_json::json!({ "skill_name": evidence.incident.skill_name }),
         };
-        let output =
-            super::run_gemini_with_delta(self.llm(), spec, gemini_config, on_delta).await?;
+        let output = self
+            .llm()
+            .run(spec, |prompt| async move {
+                crate::codex_assessment::run(&prompt, codex_config, on_delta).await
+            })
+            .await
+            .map_err(|error| ServiceError::Internal(anyhow::anyhow!(error)))?
+            .output;
 
         Ok(SkillAssessResult {
             incident_id: evidence.incident.incident_id.clone(),

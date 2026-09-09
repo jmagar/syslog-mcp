@@ -10,6 +10,9 @@ use super::*;
 use crate::config::StorageConfig;
 use crate::mcp::AuthPolicy;
 
+#[path = "ai_transcript_replay_tests.rs"]
+mod replay_metadata;
+
 fn test_app(token: Option<&str>) -> (Router, tempfile::TempDir) {
     test_app_with(
         token,
@@ -78,6 +81,17 @@ fn transcript_request(body: String) -> Request<Body> {
         .unwrap()
 }
 
+#[tokio::test]
+async fn live_smoke_transcript_fixture_is_accepted() {
+    let body = include_str!("../tests/live/fixtures/ingest/transcript.json");
+    let (app, _dir) = test_app(Some("secret"));
+    let response = app
+        .oneshot(transcript_request(body.to_string()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
 async fn barrier_transcript_request(
     app: Router,
     barrier: Arc<tokio::sync::Barrier>,
@@ -88,6 +102,44 @@ async fn barrier_transcript_request(
         .await
         .unwrap()
         .status()
+}
+
+#[tokio::test]
+async fn forwarded_codex_skill_is_available_to_reflection_queries() {
+    let (app, dir) = test_app(Some("secret"));
+    let mut record = sample_record();
+    record["envelope"]["source"]["provider"] = json!("codex");
+    record["envelope"]["message"] = json!(
+        "<skill>\n<name>cortex:skill-improvement-assessment</name>\n<path>/skills/skill-improvement-assessment/SKILL.md</path>\n---\nname: skill-improvement-assessment\n---\n[forwarded body truncated]"
+    );
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/ai-transcripts")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, "Bearer secret")
+                .body(Body::from(json!({"records": [record]}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let conn = rusqlite::Connection::open(dir.path().join("ai-transcript-ingest-test.db")).unwrap();
+    let events: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM ai_skill_events s JOIN logs l ON l.id = s.log_id
+         WHERE s.skill_name = 'cortex:skill-improvement-assessment'
+           AND s.ai_tool = 'codex' AND s.ai_session_id = 'session:sha256:test'
+           AND s.hostname = 'agent-shared_bearer' AND s.timestamp = l.timestamp",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        events, 1,
+        "remote skill evidence must retain its source log and session"
+    );
 }
 
 #[tokio::test]
@@ -105,6 +157,103 @@ async fn rejects_missing_bearer_token() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn completed_codex_read_is_projected_once_on_replay() {
+    let (app, dir) = test_app(Some("secret"));
+    let mut record = sample_record();
+    record["envelope"]["source"]["provider"] = json!("codex");
+    record["envelope"]["event_kind"] = json!("codex_skill_read");
+    record["envelope"]["message"] = json!("{\"cortex_skill_read\":\"limetech-ai-review\"}");
+    for _ in 0..2 {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/ai-transcripts")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(Body::from(json!({"records":[record.clone()]}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    let conn = rusqlite::Connection::open(dir.path().join("ai-transcript-ingest-test.db")).unwrap();
+    let count: i64 = conn.query_row("SELECT count(*) FROM ai_skill_events WHERE skill_name='limetech-ai-review' AND event_kind='codex_skill_read' AND evidence_kind='structured_json_field'", [], |row| row.get(0)).unwrap();
+    assert_eq!(count, 1);
+}
+
+#[tokio::test]
+async fn skill_projection_failure_rolls_back_the_forwarded_log() {
+    let (app, dir) = test_app(Some("secret"));
+    let conn = rusqlite::Connection::open(dir.path().join("ai-transcript-ingest-test.db")).unwrap();
+    conn.execute_batch(
+        "CREATE TRIGGER reject_skill BEFORE INSERT ON ai_skill_events
+         BEGIN SELECT RAISE(ABORT, 'test projection failure'); END;",
+    )
+    .unwrap();
+    let mut record = sample_record();
+    record["envelope"]["source"]["provider"] = json!("codex");
+    record["envelope"]["message"] = json!("<skill><name>test-skill</name></skill>");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/ai-transcripts")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, "Bearer secret")
+                .body(Body::from(json!({"records": [record]}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let count: i64 = conn
+        .query_row("SELECT count(*) FROM logs", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(
+        count, 0,
+        "agents must be able to retry without a partial write"
+    );
+}
+
+#[tokio::test]
+async fn ordinary_mentions_and_other_provider_text_do_not_become_codex_skill_events() {
+    let (app, dir) = test_app(Some("secret"));
+    let mut mention = sample_record();
+    mention["envelope"]["source"]["provider"] = json!("codex");
+    mention["envelope"]["message"] = json!("Please use the test-skill skill from SKILL.md");
+    let mut claude = sample_record();
+    claude["envelope"]["source_record_id"] = json!(format!("sha256:{}", "f".repeat(64)));
+    claude["envelope"]["message"] = json!("<skill><name>test-skill</name></skill>");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/ai-transcripts")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, "Bearer secret")
+                .body(Body::from(
+                    json!({"records": [mention, claude]}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let conn = rusqlite::Connection::open(dir.path().join("ai-transcript-ingest-test.db")).unwrap();
+    let counts: (i64, i64) = conn
+        .query_row(
+            "SELECT (SELECT count(*) FROM logs), (SELECT count(*) FROM ai_skill_events)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(counts, (2, 0));
 }
 
 #[tokio::test]
@@ -968,4 +1117,39 @@ async fn rejects_unknown_fields_in_record() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn forwarded_plain_marker_text_is_not_completed_read_evidence() {
+    let (app, dir) = test_app(Some("secret"));
+    for (index, kind) in ["user", "assistant", "unknown"].iter().enumerate() {
+        let mut record = sample_record();
+        record["envelope"]["source"]["provider"] = json!("codex");
+        record["envelope"]["event_kind"] = json!(kind);
+        record["envelope"]["source_record_id"] = json!(format!("sha256:{index:064x}"));
+        record["envelope"]["message"] = json!(r#"{"cortex_skill_read":"fake"}"#);
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/ai-transcripts")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(Body::from(json!({"records":[record]}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    let conn = rusqlite::Connection::open(dir.path().join("ai-transcript-ingest-test.db")).unwrap();
+    let counts: (i64, i64) = conn
+        .query_row(
+            "SELECT (SELECT count(*) FROM logs), (SELECT count(*) FROM ai_skill_events)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(counts, (3, 0));
 }

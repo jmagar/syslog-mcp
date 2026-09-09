@@ -19,7 +19,12 @@ pub fn provider_for_transcript_layout(path: &Path) -> Option<Provider> {
         Some(Provider::Codex)
     } else if has_segment(".claude") && has_segment("projects") {
         Some(Provider::Claude)
-    } else if has_segment(".gemini") && has_segment("tmp") {
+    } else if path
+        .components()
+        .collect::<Vec<_>>()
+        .windows(2)
+        .any(|pair| pair[0].as_os_str() == ".gemini" && pair[1].as_os_str() == "tmp")
+    {
         Some(Provider::Gemini)
     } else if has_segment(".gemini")
         && (has_segment("antigravity") || has_segment("antigravity-cli"))

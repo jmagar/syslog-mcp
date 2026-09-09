@@ -24,7 +24,9 @@ use crate::scanner::hook_events::extract_claude_hook_events;
 use crate::scanner::mcp_events::{
     extract_antigravity_mcp_events, extract_claude_mcp_events, extract_codex_mcp_events,
 };
-use crate::scanner::skill_events::{extract_claude_skill_events, extract_codex_skill_events};
+use crate::scanner::skill_events::{
+    extract_claude_skill_events, extract_codex_skill_events_with_kind,
+};
 
 pub(crate) mod antigravity;
 mod checkpoint;
@@ -347,7 +349,7 @@ pub struct IndexFileOptions {
 #[derive(Debug, Clone)]
 enum ChunkSkillSource {
     Claude(serde_json::Value),
-    Codex(String),
+    Codex(String, String),
     None,
 }
 
@@ -1183,8 +1185,13 @@ pub fn index_file_with_options(
                 let record_key = parsed.record_key;
                 let skill_source = match source_kind {
                     SourceKind::CodexSession => {
-                        if parsed.message.contains("<skill>") {
-                            ChunkSkillSource::Codex(parsed.message.clone())
+                        if parsed.message.contains("<skill>")
+                            || parsed.event_kind == "codex_skill_read"
+                        {
+                            ChunkSkillSource::Codex(
+                                parsed.message.clone(),
+                                parsed.event_kind.clone(),
+                            )
                         } else {
                             ChunkSkillSource::None
                         }
@@ -1652,7 +1659,9 @@ fn flush_chunk(
         {
             let extracted = match skill_source {
                 ChunkSkillSource::Claude(value) => extract_claude_skill_events(value),
-                ChunkSkillSource::Codex(text) => extract_codex_skill_events(text),
+                ChunkSkillSource::Codex(text, kind) => {
+                    extract_codex_skill_events_with_kind(text, Some(kind))
+                }
                 ChunkSkillSource::None => Vec::new(),
             };
             for event in extracted {

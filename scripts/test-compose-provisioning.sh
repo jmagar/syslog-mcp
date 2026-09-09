@@ -88,6 +88,11 @@ EOF
   export CORTEX_HOME_VOLUME="$live_home/.cortex"
   export CORTEX_SSH_VOLUME="$live_home/.cortex/ssh"
   export CORTEX_WORKSPACE_VOLUME="$live_home/workspace"
+  # Bind mounts retain the creator's UID/GID. Hosted runners need not use
+  # the image's default UID 1000; preserve private 0700 modes and run the
+  # fixture with its actual owner instead of making its data world-writable.
+  export CORTEX_UID="$(id -u)"
+  export CORTEX_GID="$(id -g)"
   export CORTEX_RECEIVER_HOST_PORT=0
   export CORTEX_PORT=0
   bash "$repo_dir/scripts/prepare-compose-dirs.sh" -p "$project" -f "$repo_dir/docker-compose.yml" -f "$compose_override"
@@ -97,7 +102,11 @@ EOF
     [[ "$(docker inspect -f '{{.State.Health.Status}}' "$container_id")" == "healthy" ]] && break
     sleep 1
   done
-  [[ "$(docker inspect -f '{{.State.Health.Status}}' "$container_id")" == "healthy" ]]
+  if [[ "$(docker inspect -f '{{.State.Health.Status}}' "$container_id")" != "healthy" ]]; then
+    docker logs --tail 60 "$container_id" >&2
+    docker inspect -f '{{json .State}}' "$container_id" >&2
+    exit 1
+  fi
   mounted_source="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/backups"}}{{.Source}}{{end}}{{end}}' "$container_id")"
   [[ "$mounted_source" == "$(cd "$live_backups" && pwd -P)" ]]
   docker compose -p "$project" -f "$repo_dir/docker-compose.yml" -f "$compose_override" down -v --remove-orphans
