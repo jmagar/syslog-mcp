@@ -1,0 +1,22 @@
+services:
+  legacy-docker:
+    image: ${LIVE_ORACLE_IMAGE:?}
+    entrypoint: [python, /ingest/legacy_mock.py]
+    environment:
+      LEGACY_MARKER: ${LIVE_LEGACY_MARKER:?}
+    volumes:
+      - ${LIVE_PROJECT_ROOT:?}/tests/live/phases/ingest:/ingest:ro
+    networks: [isolated]
+    labels:
+      cortex.live.run_id: ${LIVE_RUN_ID:?}
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs: [/tmp]
+  candidate:
+    environment:
+      CORTEX_DOCKER_INGEST_ENABLED: "true"
+      CORTEX_DOCKER_HOSTS: legacy-docker
+    depends_on:
+      legacy-docker:
+        condition: service_started

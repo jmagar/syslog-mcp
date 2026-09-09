@@ -20,6 +20,29 @@ fn mode_parse_accepts_single_binary_transport_commands() {
 }
 
 #[test]
+fn main_owned_operational_commands_are_in_surface_contract() {
+    let contract = cortex::surfaces::contract();
+    for command in ["serve", "mcp", "setup", "update", "doctor"] {
+        assert!(
+            contract
+                .entries
+                .iter()
+                .any(|entry| entry.kind == "cli" && entry.spelling == command),
+            "main-owned command {command} is missing from SurfaceContract"
+        );
+    }
+    for command in ["setup deploy", "doctor binary", "update config"] {
+        assert!(
+            contract
+                .entries
+                .iter()
+                .any(|entry| entry.kind == "cli" && entry.spelling == command),
+            "main-owned command path {command} is missing from SurfaceContract"
+        );
+    }
+}
+
+#[test]
 fn mode_parse_accepts_heartbeat_state_commands() {
     // Regression: state/correlate state are routed in
     // parse.rs + run.rs, but were missing from Mode::parse's top-level command
@@ -399,6 +422,8 @@ fn mode_parse_accepts_setup_doctor_namespace() {
 
 #[test]
 fn mode_parse_accepts_setup_deploy_namespace() {
+    let token_file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(token_file.path(), "secret\n").unwrap();
     assert!(matches!(
         Mode::parse(vec![
             "setup".into(),
@@ -441,8 +466,8 @@ fn mode_parse_accepts_setup_deploy_namespace() {
             "nashost,devhost".into(),
             "--target".into(),
             "https://cortex.example.test".into(),
-            "--heartbeat-token".into(),
-            "secret".into(),
+            "--heartbeat-token-file".into(),
+            token_file.path().to_string_lossy().into_owned(),
             "--binary".into(),
             "/tmp/cortex".into(),
             "--docker".into(),
@@ -552,14 +577,17 @@ fn parse_deploy_agent_trims_and_drops_empty_hosts() {
 
 #[test]
 fn parse_deploy_agent_preserves_all_options() {
+    let token_file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(token_file.path(), "secret\n").unwrap();
+    let token_path = token_file.path().to_string_lossy().into_owned();
     let command = super::parse_deploy_command(&[
         "agent".into(),
         "--hosts".into(),
         "nashost,devhost".into(),
         "--target".into(),
         "https://cortex.example.test".into(),
-        "--heartbeat-token".into(),
-        "secret".into(),
+        "--heartbeat-token-file".into(),
+        token_path,
         "--binary".into(),
         "/tmp/cortex".into(),
         "--docker".into(),
@@ -590,7 +618,7 @@ fn parse_deploy_agent_preserves_all_options() {
 
 #[test]
 fn parse_deploy_agent_reports_missing_option_values() {
-    for flag in ["--hosts", "--target", "--heartbeat-token", "--binary"] {
+    for flag in ["--hosts", "--target", "--heartbeat-token-file", "--binary"] {
         let err = super::parse_deploy_command(&["agent".into(), flag.into()]).unwrap_err();
         assert!(
             err.to_string().contains("requires a value"),
@@ -934,6 +962,20 @@ fn parse_setup_command_accepts_main_modes_and_rejects_bad_args() {
         .unwrap_err()
         .to_string();
     assert!(err.contains("unknown debugcompose argument"));
+}
+
+#[test]
+fn setup_install_rejects_unknown_options_before_side_effects() {
+    let error =
+        super::parse_setup_command(&["install".into(), "--cortex-live-invalid-option".into()])
+            .unwrap_err();
+    assert!(error.to_string().contains("unknown setup install argument"));
+}
+
+#[test]
+fn update_rejects_unknown_options_before_dispatch() {
+    let error = super::parse_update_command(&["--cortex-live-invalid-option".into()]).unwrap_err();
+    assert!(error.to_string().contains("unknown update scope"));
 }
 
 #[test]

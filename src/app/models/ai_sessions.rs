@@ -38,6 +38,10 @@ pub struct AiSessionEntry {
     pub first_seen: String,
     pub last_seen: String,
     pub event_count: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title_provenance: Option<String>,
 }
 
 impl From<db::AiSessionEntry> for AiSessionEntry {
@@ -58,6 +62,8 @@ impl From<db::AiSessionEntry> for AiSessionEntry {
             first_seen: value.first_seen,
             last_seen: value.last_seen,
             event_count: value.event_count,
+            title: value.title,
+            title_provenance: value.title_provenance,
         }
     }
 }
@@ -87,6 +93,10 @@ pub struct SearchedSessionEntry {
     pub match_count: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub best_snippet: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title_provenance: Option<String>,
 }
 
 impl From<db::SearchedAiSessionEntry> for SearchedSessionEntry {
@@ -108,6 +118,8 @@ impl From<db::SearchedAiSessionEntry> for SearchedSessionEntry {
             event_count: value.event_count,
             match_count: value.match_count,
             best_snippet: value.best_snippet,
+            title: value.title,
+            title_provenance: value.title_provenance,
         }
     }
 }

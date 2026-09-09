@@ -2,7 +2,8 @@
 //!
 //! Claude transcripts carry first-class hook *runtime execution* evidence:
 //! attachment rows whose `attachment.type` begins with `hook_` (e.g.
-//! `hook_success`), carrying `hookName`, `hookEvent`, `command`, `exitCode`,
+//! `hook_success`) plus the observed `async_hook_response` shape, carrying
+//! `hookName`, `hookEvent`, `command`, `exitCode`,
 //! `durationMs`, `stdout`, `stderr`, `content`, and an optional persisted
 //! output path pointer when the captured output is too large to inline.
 //!
@@ -106,7 +107,8 @@ impl HookStatus {
             "success" | "ok" | "completed" | "complete" => Self::Success,
             "failure" | "failed" | "fail" | "nonzero" => Self::Failed,
             "blocked" | "block" | "denied" | "deny" => Self::Blocked,
-            "error" | "errored" | "timeout" | "timed_out" | "parse_error" => Self::Error,
+            "error" | "errored" | "timeout" | "timed_out" | "parse_error"
+            | "non_blocking_error" => Self::Error,
             _ => Self::Unknown,
         }
     }
@@ -263,7 +265,8 @@ fn clamp_chars(value: &str, max_chars: usize) -> String {
 ///
 /// Claude transcript lines carry hook execution evidence in an `attachment`
 /// object (or an `attachments` array of them) whose `type` begins with
-/// `hook_`. This walks both the top-level record and the `message.*` nesting
+/// `hook_`, or the explicit `async_hook_response` type. This walks both the
+/// top-level record and the `message.*` nesting
 /// (the same two candidate locations the skill extractor checks), collecting
 /// one event per hook attachment found.
 ///
@@ -291,17 +294,25 @@ pub fn extract_claude_hook_events(value: &serde_json::Value) -> Vec<ExtractedHoo
     events
 }
 
-/// Parse a single attachment object into a hook event if its `type` marks it as
-/// a hook attachment. Non-hook attachments are ignored.
+/// Parse a single attachment object into a hook event if its `type` is one of
+/// the observed hook shapes. Non-hook attachments are ignored.
 fn collect_hook_attachment(attachment: &serde_json::Value, out: &mut Vec<ExtractedHookEvent>) {
     let Some(attachment_type) = attachment.get("type").and_then(serde_json::Value::as_str) else {
         return;
     };
-    if !attachment_type.starts_with("hook_") {
+    if !attachment_type.starts_with("hook_") && attachment_type != "async_hook_response" {
         return;
     }
 
-    let status = HookStatus::from_attachment_type(attachment_type);
+    let status = if attachment_type == "async_hook_response" {
+        match int_field(attachment, "exitCode").or_else(|| int_field(attachment, "exit_code")) {
+            Some(0) => HookStatus::Success,
+            Some(_) => HookStatus::Failed,
+            None => HookStatus::Unknown,
+        }
+    } else {
+        HookStatus::from_attachment_type(attachment_type)
+    };
     let hook_event = str_field(attachment, "hookEvent")
         .or_else(|| str_field(attachment, "hook_event"))
         // Fall back to the attachment type suffix so an event with a missing
@@ -324,6 +335,7 @@ fn collect_hook_attachment(attachment: &serde_json::Value, out: &mut Vec<Extract
     // `content` is a secondary source for stdout when `stdout` is absent.
     let stdout_preview = str_field(attachment, "stdout")
         .or_else(|| str_field(attachment, "content"))
+        .or_else(|| str_field(attachment, "response"))
         .map(|s| bounded_redact(&s));
     let stderr_preview = str_field(attachment, "stderr").map(|s| bounded_redact(&s));
     let persisted_output_path = str_field(attachment, "persistedOutputPath")

@@ -143,9 +143,111 @@ jobs:
             .cache/cargo/aarch64-apple-darwin/release/cortex-macos-arm64.sha256
           if-no-files-found: error
 
+  live-candidate-image:
+    name: build live candidate once
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Build and record candidate digest
+        run: |
+          docker build --pull=false -f config/Dockerfile -t cortex-live-release-candidate .
+          docker image inspect cortex-live-release-candidate --format '{{.Id}}' > candidate-image.digest
+          docker save cortex-live-release-candidate | gzip -1 > candidate-image.tar.gz
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: live-candidate-image
+          path: |
+            candidate-image.tar.gz
+            candidate-image.digest
+          if-no-files-found: error
+          retention-days: 1
+
+  live-release-gate:
+    name: live release gate (${{ matrix.profile }})
+    needs: [cortex-linux, cortex-windows, live-candidate-image]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        profile: [full, auth, stateful, notifications, upgrade, security, mutation]
+    env:
+      LIVE_RUNS_ROOT: ${{ github.workspace }}/.live-runs
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: live-candidate-image
+          path: candidate-image
+      - name: Load exact shared candidate
+        run: |
+          gunzip -c candidate-image/candidate-image.tar.gz | docker load
+          test "$(docker image inspect cortex-live-release-candidate --format '{{.Id}}')" = "$(cat candidate-image/candidate-image.digest)"
+          echo "LIVE_CANDIDATE_IMAGE_REF=cortex-live-release-candidate" >> "$GITHUB_ENV"
+      - name: Require Docker infrastructure
+        run: docker info >/dev/null && docker compose version >/dev/null
+      - name: Sweep expired exact-identity leases
+        run: |
+          provider="docker-host:$(docker info --format '{{.ID}}')"
+          bash tests/live/runner.sh --janitor --runs-root "$LIVE_RUNS_ROOT" --provider "$provider"
+      - name: Run release-blocking profile
+        run: bash tests/live/run-profile.sh "${{ matrix.profile }}"
+      - name: Reconcile leases
+        if: always()
+        run: |
+          provider="docker-host:$(docker info --format '{{.ID}}')"
+          bash tests/live/runner.sh --janitor --runs-root "$LIVE_RUNS_ROOT" --provider "$provider"
+      - name: Sanitize result artifacts
+        if: always()
+        run: bash scripts/ci/prepare-live-artifacts.sh "$LIVE_RUNS_ROOT" live-upload
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: release-live-${{ matrix.profile }}-${{ github.run_id }}
+          path: live-upload
+          if-no-files-found: error
+
+  package-release-gate:
+    name: package qualification
+    needs: [cortex-linux, cortex-windows]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      LIVE_RUNS_ROOT: ${{ github.workspace }}/.live-runs
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: cortex-linux-x86_64
+          path: candidate
+      - name: Create pinned candidate manifest
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          archive="$GITHUB_WORKSPACE/candidate/cortex-linux-x86_64.tar.gz"
+          digest="$(sha256sum "$archive" | cut -d' ' -f1)"
+          jq -n --arg version "$version" --arg archive "$archive" --arg digest "$digest" \
+            '{schema:"cortex-live-artifact-manifest-v1",release:$version,artifacts:[{name:"cortex-linux-x86_64",kind:"archive",origin:("file://"+$archive),path:$archive,sha256:$digest,platform:"linux-amd64"}]}' > candidate-manifest.json
+          echo "LIVE_ARTIFACT_MANIFEST=$GITHUB_WORKSPACE/candidate-manifest.json" >> "$GITHUB_ENV"
+      - name: Qualify exact package
+        run: bash tests/live/run-profile.sh artifact
+      - name: Reconcile leases
+        if: always()
+        run: bash tests/live/runner.sh --janitor --runs-root "$LIVE_RUNS_ROOT" --provider "local:$GITHUB_WORKSPACE"
+      - name: Sanitize result artifacts
+        if: always()
+        run: bash scripts/ci/prepare-live-artifacts.sh "$LIVE_RUNS_ROOT" live-upload
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: release-package-${{ github.run_id }}
+          path: live-upload
+          if-no-files-found: error
+
   publish:
     name: publish github release
-    needs: [cortex-linux, cortex-windows, cortex-macos-arm64]
+    needs: [cortex-linux, cortex-windows, cortex-macos-arm64, live-release-gate, package-release-gate]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     # Tag pushes publish automatically. workflow_dispatch stays dry-run unless

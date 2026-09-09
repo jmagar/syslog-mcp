@@ -10,6 +10,46 @@ use crate::inventory::schema::{
     InventoryNode, ListenerFact, Provenance, StorageSummary, TrustLevel,
 };
 
+#[cfg(test)]
+use std::collections::HashMap;
+#[cfg(test)]
+use std::sync::{OnceLock, RwLock};
+
+#[cfg(test)]
+static COMMAND_FIXTURES: OnceLock<RwLock<HashMap<&'static str, Option<String>>>> = OnceLock::new();
+
+#[cfg(test)]
+struct CommandFixturesGuard(HashMap<&'static str, Option<String>>);
+
+#[cfg(test)]
+impl Drop for CommandFixturesGuard {
+    fn drop(&mut self) {
+        let Some(fixtures) = COMMAND_FIXTURES.get() else {
+            return;
+        };
+        *fixtures
+            .write()
+            .expect("device command fixture lock poisoned") = std::mem::take(&mut self.0);
+    }
+}
+
+#[cfg(test)]
+fn command_fixtures<I, S>(fixtures: I) -> CommandFixturesGuard
+where
+    I: IntoIterator<Item = (&'static str, Option<S>)>,
+    S: Into<String>,
+{
+    let next = fixtures
+        .into_iter()
+        .map(|(program, output)| (program, output.map(Into::into)))
+        .collect();
+    let mut guard = COMMAND_FIXTURES
+        .get_or_init(|| RwLock::new(HashMap::new()))
+        .write()
+        .expect("device command fixture lock poisoned");
+    CommandFixturesGuard(std::mem::replace(&mut *guard, next))
+}
+
 pub async fn collect(timeout: Duration) -> CollectorOutput {
     let mut out = CollectorOutput::new("device");
     let now = Utc::now().to_rfc3339();
@@ -53,6 +93,19 @@ fn merge_diagnostics(out: &mut CollectorOutput, mut diagnostic: CollectorOutput)
 }
 
 async fn command_stdout(program: &str, args: &[&str], timeout: Duration) -> Option<String> {
+    #[cfg(test)]
+    if let Some(fixture) = COMMAND_FIXTURES.get().and_then(|fixtures| {
+        fixtures
+            .read()
+            .expect("device command fixture lock poisoned")
+            .get(program)
+            .cloned()
+    }) {
+        return fixture
+            .map(|stdout| stdout.trim().to_string())
+            .filter(|stdout| !stdout.is_empty());
+    }
+
     run_command(program, args, timeout)
         .await
         .ok()

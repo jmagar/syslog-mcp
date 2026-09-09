@@ -4,9 +4,9 @@
 //! - Claude: `message.content[]` items with `type = "tool_use"` (call) or
 //!   `type = "tool_result"` (result, linked back to the call via
 //!   `tool_use_id`).
-//! - Codex: `response_item` rows with `payload.type = "function_call"`
-//!   (call) or `payload.type = "function_call_output"` (result, linked via
-//!   `payload.call_id`).
+//! - Codex: `response_item` rows with `payload.type = "function_call"` or
+//!   `custom_tool_call` (call), paired with the corresponding `*_output`
+//!   result through `payload.call_id`.
 //!
 //! Both extractors operate on the already-parsed raw JSON `Value` for a
 //! single transcript line (never re-parse `line_text`), and return zero or
@@ -35,6 +35,7 @@ use crate::assessment::{redact_json_value_strings, redact_secrets};
 /// `ingest_metadata::MAX_METADATA_STRING_CHARS` so a single oversized tool
 /// payload cannot bloat `ai_mcp_events` rows or leak a full secret/log dump.
 const MAX_PREVIEW_CHARS: usize = 2048;
+const MAX_RAW_OUTPUT_CHARS: usize = MAX_PREVIEW_CHARS * 4;
 const MAX_NAME_CHARS: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -260,7 +261,7 @@ pub fn extract_claude_mcp_events(value: &Value) -> Vec<ExtractedMcpEvent> {
     events
 }
 
-/// Extract Codex `function_call`/`function_call_output` events from one
+/// Extract Codex function/custom-tool call and output events from one
 /// transcript line's raw JSON value (`{"type": "response_item", "payload":
 /// {...}}`).
 pub fn extract_codex_mcp_events(value: &Value) -> Vec<ExtractedMcpEvent> {
@@ -277,7 +278,7 @@ pub fn extract_codex_mcp_events(value: &Value) -> Vec<ExtractedMcpEvent> {
         .map(|s| clamp_chars(s, MAX_NAME_CHARS));
 
     match payload_type {
-        Some("function_call") => {
+        Some("function_call" | "custom_tool_call") => {
             let Some(call_id) = payload.get("call_id").and_then(Value::as_str) else {
                 return Vec::new();
             };
@@ -287,6 +288,7 @@ pub fn extract_codex_mcp_events(value: &Value) -> Vec<ExtractedMcpEvent> {
             let (mcp_server, mcp_tool) = classify_tool_name(name);
             let arguments_json = payload
                 .get("arguments")
+                .or_else(|| payload.get("input"))
                 .and_then(Value::as_str)
                 .map(bounded_preview);
             (ExtractedMcpEvent {
@@ -296,7 +298,10 @@ pub fn extract_codex_mcp_events(value: &Value) -> Vec<ExtractedMcpEvent> {
                 mcp_tool,
                 event_kind: McpEventKind::Call,
                 turn_id,
-                status: None,
+                status: payload
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .map(|status| clamp_chars(status, MAX_NAME_CHARS)),
                 is_error: None,
                 arguments_json,
                 output_preview: None,
@@ -306,32 +311,34 @@ pub fn extract_codex_mcp_events(value: &Value) -> Vec<ExtractedMcpEvent> {
             .into_iter()
             .collect()
         }
-        Some("function_call_output") => {
+        Some("function_call_output" | "custom_tool_call_output") => {
             let Some(call_id) = payload.get("call_id").and_then(Value::as_str) else {
                 return Vec::new();
             };
-            let raw_output = payload.get("output").and_then(Value::as_str);
+            let raw_output = payload.get("output").and_then(output_text);
             // Codex wraps output as a JSON-encoded string:
             // `{"output": "...", "metadata": {"exit_code": N, ...}}"`.
             // Best-effort parse it to recover exit_code/is_error without
             // requiring it — plain string output is also accepted.
-            let (output_text, is_error, status) =
-                match raw_output.and_then(|s| serde_json::from_str::<Value>(s).ok()) {
-                    Some(parsed) => {
-                        let text = parsed
-                            .get("output")
-                            .and_then(Value::as_str)
-                            .map(str::to_string)
-                            .or_else(|| raw_output.map(str::to_string));
-                        let exit_code = parsed
-                            .pointer("/metadata/exit_code")
-                            .and_then(Value::as_i64);
-                        let is_error = exit_code.map(|code| code != 0);
-                        let status = exit_code.map(|code| code.to_string());
-                        (text, is_error, status)
-                    }
-                    None => (raw_output.map(str::to_string), None, None),
-                };
+            let (output_text, is_error, status) = match raw_output
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<Value>(s).ok())
+            {
+                Some(parsed) => {
+                    let text = parsed
+                        .get("output")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .or_else(|| raw_output.clone());
+                    let exit_code = parsed
+                        .pointer("/metadata/exit_code")
+                        .and_then(Value::as_i64);
+                    let is_error = exit_code.map(|code| code != 0);
+                    let status = exit_code.map(|code| code.to_string());
+                    (text, is_error, status)
+                }
+                None => (raw_output, None, None),
+            };
             let (output_preview, error_text) = match (is_error, &output_text) {
                 (Some(true), Some(text)) => (None, Some(bounded_preview(text))),
                 (_, Some(text)) => (Some(bounded_preview(text)), None),
@@ -355,6 +362,88 @@ pub fn extract_codex_mcp_events(value: &Value) -> Vec<ExtractedMcpEvent> {
             .collect()
         }
         _ => Vec::new(),
+    }
+}
+
+/// Extract Antigravity tool calls from its redacted transcript projection.
+/// These projections expose calls but not a stable paired-result shape, so
+/// every item is recorded as a call and no result is invented.
+pub fn extract_antigravity_mcp_events(value: &Value) -> Vec<ExtractedMcpEvent> {
+    let Some(calls) = value.get("tool_calls").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let step = value.get("step_index").and_then(Value::as_u64);
+    calls
+        .iter()
+        .enumerate()
+        .filter_map(|(index, call)| {
+            let function = call.get("function").unwrap_or(call);
+            let name = function.get("name").and_then(Value::as_str)?.trim();
+            if name.is_empty() {
+                return None;
+            }
+            let call_id = call
+                .get("id")
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+                .unwrap_or_else(|| {
+                    format!("record:{}:{index}", super::hash_text(&value.to_string()))
+                });
+            let (mcp_server, mcp_tool) = classify_tool_name(name);
+            let arguments_json = function
+                .get("args")
+                .or_else(|| function.get("arguments"))
+                .map(|arguments| bounded_preview(&arguments.to_string()));
+            ExtractedMcpEvent {
+                call_id: clamp_chars(&call_id, MAX_NAME_CHARS),
+                tool_name: clamp_chars(name, MAX_NAME_CHARS),
+                mcp_server,
+                mcp_tool,
+                event_kind: McpEventKind::Call,
+                turn_id: step.map(|value| value.to_string()),
+                status: value
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .map(|status| clamp_chars(status, MAX_NAME_CHARS)),
+                is_error: None,
+                arguments_json,
+                output_preview: None,
+                error_text: None,
+            }
+            .normalized()
+        })
+        .collect()
+}
+
+/// Codex custom-tool results may be a scalar string or an array of typed text
+/// blocks. Keep only text-bearing blocks: image/audio/resource payloads can be
+/// very large and are not useful as a bounded event preview.
+fn output_text(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => Some(text.chars().take(MAX_RAW_OUTPUT_CHARS).collect()),
+        Value::Array(items) => {
+            let mut output = String::new();
+            let mut output_chars = 0usize;
+            for text in items.iter().filter_map(|item| {
+                item.as_str()
+                    .or_else(|| item.get("text").and_then(Value::as_str))
+                    .or_else(|| item.get("content").and_then(Value::as_str))
+            }) {
+                if !output.is_empty() && output_chars < MAX_RAW_OUTPUT_CHARS {
+                    output.push(' ');
+                    output_chars += 1;
+                }
+                let remaining = MAX_RAW_OUTPUT_CHARS.saturating_sub(output_chars);
+                let bounded: String = text.chars().take(remaining).collect();
+                output_chars += bounded.chars().count();
+                output.push_str(&bounded);
+                if output_chars >= MAX_RAW_OUTPUT_CHARS {
+                    break;
+                }
+            }
+            (!output.is_empty()).then_some(output)
+        }
+        _ => None,
     }
 }
 

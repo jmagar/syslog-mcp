@@ -16,6 +16,7 @@ pub(crate) struct AiSmokeWatchReport {
 
 pub(crate) struct AiSmokeWatchTarget {
     pub(crate) tool: &'static str,
+    #[allow(dead_code)] // retained in the target evidence and unit contract
     pub(crate) project: String,
     pub(crate) transcript_path: PathBuf,
     pub(crate) body: String,
@@ -34,11 +35,18 @@ pub(crate) async fn ai_smoke_watch(service: &CortexService) -> Result<AiSmokeWat
     let canonical_transcript_path = target.transcript_path.canonicalize()?;
 
     let mut ingested = false;
-    for _ in 0..30 {
+    // notify's macOS backend can surface a newly-created transcript on its
+    // polling fallback boundary at roughly 30 seconds. Leave a second full
+    // boundary so a healthy watcher cannot lose a race with this probe.
+    for _ in 0..60 {
         let response = service
             .search_sessions(cortex::app::SearchSessionsRequest {
                 query: session_id.clone(),
-                project: Some(target.project.clone()),
+                // The scanner canonicalizes worktree projects to their shared
+                // repository root. The smoke session id is globally unique,
+                // so filtering by the pre-ingest cwd would hide a successful
+                // watcher ingest when Cortex is run from a linked worktree.
+                project: None,
                 tool: Some(target.tool.into()),
                 since: None,
                 until: None,
@@ -57,14 +65,14 @@ pub(crate) async fn ai_smoke_watch(service: &CortexService) -> Result<AiSmokeWat
     }
     if !ingested {
         let _ = std::fs::remove_file(&target.transcript_path);
-        bail!("AI watch smoke file was not ingested within 30s");
+        bail!("AI watch smoke file was not ingested within 60s");
     }
 
     std::fs::remove_file(&target.transcript_path)?;
     let canonical_transcript_path = canonical_transcript_path.to_string_lossy().to_string();
     let mut missing_checkpoint_count = i64::MAX;
     let mut pruned_missing_checkpoint = false;
-    for _ in 0..30 {
+    for _ in 0..60 {
         let result = service
             .prune_ai_checkpoints_checked(cortex::app::AiPruneCheckpointsRequest {
                 dry_run: false,

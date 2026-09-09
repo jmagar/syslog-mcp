@@ -29,49 +29,19 @@ mod ops;
 mod skill_incidents;
 mod skills;
 
-const SESSIONS_SUBCOMMANDS: &[&str] = &[
-    "search",
-    "abuse",
-    "correlate",
-    "blocks",
-    "context",
-    "tools",
-    "projects",
-    "index",
-    "add",
-    "watch",
-    "checkpoints",
-    "errors",
-    "prunecheckpoints",
-    "doctor",
-    "watchstatus",
-    "smokewatch",
-    "similar",
-    "incidentcontext",
-    "incidents",
-    "investigate",
-    "assess",
-    "llminvocations",
-    "skills",
-    "skillincidents",
-    "skillinvestigate",
-    "skillassess",
-    "mcpevents",
-    "mcpincidents",
-    "mcpinvestigate",
-    "mcpassess",
-    "hookevents",
-    "hookincidents",
-    "hookinvestigate",
-    "hooksbackfill",
-];
-
 pub(crate) fn parse_sessions_command(args: &[String]) -> Result<CliCommand> {
     let (subcommand, rest) = match args.split_first() {
         None => ("", args),
         Some((subcommand, _)) if subcommand.starts_with('-') => ("", args),
         Some((subcommand, rest)) => (subcommand.as_str(), rest),
     };
+    let catalog = cortex::surfaces::cli_children("sessions");
+    if !subcommand.is_empty() && !catalog.contains(&subcommand) {
+        bail!(
+            "{}",
+            super::suggest::unknown_command("sessions subcommand", subcommand, catalog)
+        );
+    }
     match subcommand {
         "" => parse_sessions(rest),
         "search" => parse_sessions_search(rest),
@@ -114,11 +84,7 @@ pub(crate) fn parse_sessions_command(args: &[String]) -> Result<CliCommand> {
         "hooksbackfill" => self::hooks::parse_sessions_hooks_backfill(rest),
         _ => bail!(
             "{}",
-            super::suggest::unknown_command(
-                "sessions subcommand",
-                subcommand,
-                SESSIONS_SUBCOMMANDS
-            )
+            super::suggest::unknown_command("sessions subcommand", subcommand, catalog)
         ),
     }
 }

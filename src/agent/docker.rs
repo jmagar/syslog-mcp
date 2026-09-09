@@ -75,6 +75,19 @@ async fn run_docker_log_forwarder(
     let mut tasks: JoinSet<String> = JoinSet::new(); // yields container_id on exit
 
     loop {
+        // Reap completed followers before deciding which running containers
+        // need a new follower. Doing this after the spawn pass leaves a
+        // stopped-and-quickly-restarted container's completed handle in
+        // `active` for one extra 30-second poll cycle, so its replacement
+        // follower can be delayed by nearly a minute.
+        while let Ok(Some(res)) =
+            tokio::time::timeout(Duration::from_millis(1), tasks.join_next()).await
+        {
+            if let Ok(id) = res {
+                active.remove(&id);
+            }
+        }
+
         let containers = list_containers(docker).await?;
         let live_ids: std::collections::HashSet<String> =
             containers.iter().map(|c| c.id.clone()).collect();
@@ -112,15 +125,6 @@ async fn run_docker_log_forwarder(
             active.insert(id2, handle);
         }
 
-        // Reap finished tasks.
-        while let Ok(Some(res)) =
-            tokio::time::timeout(Duration::from_millis(1), tasks.join_next()).await
-        {
-            if let Ok(id) = res {
-                active.remove(&id);
-            }
-        }
-
         sleep(Duration::from_secs(CONTAINER_POLL_SECS)).await;
     }
 }
@@ -139,7 +143,7 @@ async fn run_docker_event_forwarder(
 
     while let Some(event) = events.next().await {
         if let Some(line) = docker_event_line(hostname, &event?) {
-            sender.send(line).await?;
+            sender.send_from("docker-events", line).await?;
         }
     }
     event_stream_ended()
@@ -272,7 +276,9 @@ async fn follow_container(
             &container.id[..12],
             &msg,
         );
-        sender.try_send(line);
+        sender
+            .send_from(&format!("docker:{}", container.id), line)
+            .await?;
     }
     Ok(())
 }

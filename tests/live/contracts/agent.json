@@ -1,0 +1,29 @@
+{
+  "schema": "cortex-live-agent-contract-v1",
+  "schema_version": 1,
+  "boundary": {
+    "allowed_candidates": ["linux-dind", "desktop-proxy"],
+    "forbidden_urls": ["unix://", "npipe://"],
+    "daemon_identity_required": true,
+    "fixture_id_pattern": "^[0-9a-f]{64}$"
+  },
+  "surfaces": ["mcp", "rest", "cli"],
+  "streams": ["heartbeat", "syslog", "docker-stdout", "docker-stderr", "docker-event"],
+  "scenarios": [
+    "initial-collection", "container-die", "container-restart", "container-rename",
+    "container-unhealthy", "container-oom", "agent-restart", "server-restart",
+    "proxy-outage", "daemon-restart", "socket-permission-loss", "checkpoint-resume", "duplicate-prevention",
+    "bounded-backpressure", "allowlist", "log-rotation"
+  ],
+  "agent_cli_commands": [
+    "heartbeat agent", "setup heartbeatagent check", "setup heartbeatagent install",
+    "setup heartbeatagent remove", "setup deploy agent", "update agents"
+  ],
+  "portable_unsupported": ["container-oom", "daemon-restart", "socket-permission-loss"],
+  "limits": {
+    "wall_seconds": 600,
+    "retry_buffer": 64,
+    "max_fixture_records": 5000,
+    "poll_attempts": 180
+  }
+}

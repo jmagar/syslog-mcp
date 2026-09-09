@@ -22,13 +22,10 @@ Type=oneshot
 # Systemd user services have minimal PATH; include mise, linuxbrew, and system paths
 # so sqlite3 is found (mise installs to ~/.local/bin, linuxbrew to /home/linuxbrew/.linuxbrew/bin)
 Environment=PATH=%h/.local/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
-# Path to the cortex repo checkout containing scripts/backup.sh.
-WorkingDirectory=%h/workspace/cortex
-# Live database path (host-side bind mount of the container's /data).
-Environment=CORTEX_DB_PATH=%h/.cortex/data/cortex.db
-# Destination directory for timestamped backup files.
-Environment=BACKUP_DIR=%h/.cortex/backups
-ExecStart=/usr/bin/env bash -c 'exec bash scripts/backup.sh "$BACKUP_DIR"'
+# The default Compose stack mounts CORTEX_BACKUP_DIR at /backups and ships the
+# WAL-safe backup helper in the image. This works for both the default named
+# volume and a bind-mounted /data without guessing a host database path.
+ExecStart=/usr/bin/docker exec -e CORTEX_DB_PATH=/data/cortex.db cortex /usr/bin/env bash /usr/local/libexec/cortex-backup.sh /backups
 Nice=10
 IOSchedulingClass=idle
 

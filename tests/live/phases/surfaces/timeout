@@ -1,0 +1,26 @@
+#!/usr/bin/env python3
+"""Small GNU-timeout-compatible subset used by live-cli-sweep on macOS/Linux."""
+import os
+import signal
+import subprocess
+import sys
+
+if len(sys.argv) < 3:
+    print("usage: timeout SECONDS COMMAND [ARG ...]", file=sys.stderr)
+    raise SystemExit(2)
+try:
+    seconds = float(sys.argv[1].rstrip("s"))
+except ValueError:
+    print("timeout: invalid duration", file=sys.stderr)
+    raise SystemExit(2)
+process = subprocess.Popen(sys.argv[2:], start_new_session=True)
+try:
+    raise SystemExit(process.wait(timeout=seconds))
+except subprocess.TimeoutExpired:
+    os.killpg(process.pid, signal.SIGTERM)
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
+    raise SystemExit(124)

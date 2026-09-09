@@ -8,6 +8,9 @@ fn canonical_tool_normalizes_known_unknown_and_explicit_unknown_values() {
     assert_eq!(canonical_tool(" Claude ").unwrap(), "claude");
     assert_eq!(canonical_tool("CoDeX").unwrap(), "codex");
     assert_eq!(canonical_tool("GEMINI").unwrap(), "gemini");
+    assert_eq!(canonical_tool("claude-code").unwrap(), "claude");
+    assert_eq!(canonical_tool("openai-codex").unwrap(), "codex");
+    assert_eq!(canonical_tool("gemini-transcript").unwrap(), "gemini");
     assert_eq!(
         canonical_tool(" OpenAI DevTools ").unwrap(),
         "unknown:openai devtools"

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::io::{self, ErrorKind, Write as _};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use super::{
@@ -101,13 +101,17 @@ pub(crate) fn filesystem_phase(
     compose_dir: &Path,
 ) -> io::Result<SetupPhase> {
     let timer = PhaseTimer::start("filesystem");
+    let backup_dir = crate::env::var_os("CORTEX_BACKUP_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join("backups"));
     if mode.mutates() {
         ensure_private_dir(home)?;
         ensure_private_dir(data_dir)?;
+        ensure_private_dir(&backup_dir)?;
         std::fs::create_dir_all(compose_dir)?;
         return Ok(timer.finish(SetupStatus::Ok, format!("initialized {}", home.display())));
     }
-    if home.is_dir() && data_dir.is_dir() && compose_dir.is_dir() {
+    if home.is_dir() && data_dir.is_dir() && backup_dir.is_dir() && compose_dir.is_dir() {
         Ok(timer.finish(SetupStatus::Ok, format!("found {}", home.display())))
     } else {
         Ok(timer.finish(
@@ -468,7 +472,10 @@ pub(crate) fn run_compose_phase(compose_dir: &Path, env_path: &Path, args: &[&st
     if override_path.exists() {
         command.arg("-f").arg(override_path);
     }
-    command.args(args).current_dir(compose_dir);
+    command
+        .args(args)
+        .current_dir(compose_dir)
+        .env("PWD", compose_dir);
     match command.output() {
         Ok(output) if output.status.success() => timer.finish(
             SetupStatus::Ok,

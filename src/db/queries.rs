@@ -250,6 +250,19 @@ fn push_ai_scope_filters(
 
 /// Search logs with flexible filtering + FTS
 pub fn search_logs(pool: &DbPool, params: &SearchParams) -> Result<Vec<LogEntry>> {
+    if params
+        .source_ip_prefix
+        .as_ref()
+        .is_some_and(|prefix| prefix.is_empty())
+        || params
+            .source_ip_prefixes
+            .as_ref()
+            .is_some_and(|prefixes| prefixes.is_empty() || prefixes.iter().any(String::is_empty))
+    {
+        return Err(anyhow::Error::new(crate::app::ServiceError::InvalidInput(
+            "source prefixes must be non-empty".to_string(),
+        )));
+    }
     let conn = pool.get()?;
     let limit = params.limit.unwrap_or(100).min(1000);
 
@@ -699,12 +712,13 @@ pub fn list_ai_sessions_live(
     let conn = pool.get()?;
     let limit = params.limit.unwrap_or(100).min(1000);
     let mut sql = String::from(
-        "SELECT ai_project, ai_tool, ai_session_id,
-                MIN(ai_transcript_path) AS ai_transcript_path,
-                hostname,
-                MIN(timestamp) AS first_seen,
-                MAX(timestamp) AS last_seen,
-                COUNT(*) AS event_count
+        "WITH filtered_logs AS MATERIALIZED (
+            SELECT id, ai_project, ai_tool, ai_session_id, ai_transcript_path,
+                   hostname, timestamp,
+                   COALESCE(json_extract(metadata_json, '$.session.title'),
+                            json_extract(metadata_json, '$.source.title')) AS session_title,
+                   COALESCE(json_extract(metadata_json, '$.session.title_provenance'),
+                            json_extract(metadata_json, '$.source.title_provenance')) AS session_title_provenance
          FROM logs
          WHERE ai_project IS NOT NULL
            AND ai_project != ''
@@ -742,7 +756,38 @@ pub fn list_ai_sessions_live(
     }
 
     sql.push_str(&format!(
-        " GROUP BY ai_project, ai_tool, ai_session_id, hostname
+        "),
+         latest_titles AS MATERIALIZED (
+            SELECT ai_project, ai_tool, ai_session_id, hostname,
+                   session_title, session_title_provenance
+              FROM (
+                SELECT ai_project, ai_tool, ai_session_id, hostname,
+                       session_title, session_title_provenance,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY ai_project, ai_tool, ai_session_id, hostname
+                           ORDER BY id DESC
+                       ) AS title_rank
+                  FROM filtered_logs
+                 WHERE session_title IS NOT NULL
+              )
+             WHERE title_rank = 1
+         )
+         SELECT f.ai_project, f.ai_tool, f.ai_session_id,
+                MIN(f.ai_transcript_path) AS ai_transcript_path,
+                f.hostname,
+                MIN(f.timestamp) AS first_seen,
+                MAX(f.timestamp) AS last_seen,
+                COUNT(*) AS event_count,
+                t.session_title AS title,
+                t.session_title_provenance AS title_provenance
+           FROM filtered_logs f
+           LEFT JOIN latest_titles t
+             ON t.ai_project = f.ai_project
+            AND t.ai_tool = f.ai_tool
+            AND t.ai_session_id = f.ai_session_id
+            AND t.hostname = f.hostname
+          GROUP BY f.ai_project, f.ai_tool, f.ai_session_id, f.hostname,
+                   t.session_title, t.session_title_provenance
           ORDER BY last_seen DESC
           LIMIT {limit}"
     ));
@@ -758,6 +803,8 @@ pub fn list_ai_sessions_live(
             first_seen: row.get(5)?,
             last_seen: row.get(6)?,
             event_count: row.get(7)?,
+            title: row.get(8)?,
+            title_provenance: row.get(9)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -772,7 +819,8 @@ fn list_ai_sessions_from_rollup(
     let limit = params.limit.unwrap_or(100).min(1000);
     let mut sql = String::from(
         "SELECT ai_project, ai_tool, ai_session_id, ai_transcript_path,
-                hostname, first_seen, last_seen, event_count
+                hostname, first_seen, last_seen, event_count,
+                title, title_provenance
          FROM ai_session_rollup
          WHERE 1=1",
     );
@@ -811,6 +859,8 @@ fn list_ai_sessions_from_rollup(
             first_seen: row.get(5)?,
             last_seen: row.get(6)?,
             event_count: row.get(7)?,
+            title: row.get(8)?,
+            title_provenance: row.get(9)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -997,16 +1047,41 @@ pub fn refresh_ai_session_rollup(pool: &DbPool) -> Result<usize> {
         build.execute("DROP TABLE IF EXISTS _ai_rollup_staging", [])?;
         build.execute(
             "CREATE TEMP TABLE _ai_rollup_staging AS
-             SELECT ai_project, ai_tool, ai_session_id, hostname,
-                    MIN(ai_transcript_path) AS ai_transcript_path,
-                    MIN(timestamp) AS first_seen,
-                    MAX(timestamp) AS last_seen,
-                    COUNT(*) AS event_count
-             FROM logs
-             WHERE ai_project IS NOT NULL AND ai_project != ''
-               AND ai_tool IS NOT NULL AND ai_tool != ''
-               AND ai_session_id IS NOT NULL AND ai_session_id != ''
-             GROUP BY ai_project, ai_tool, ai_session_id, hostname",
+             WITH eligible AS MATERIALIZED (
+               SELECT id, ai_project, ai_tool, ai_session_id, hostname,
+                      ai_transcript_path, timestamp,
+                      COALESCE(json_extract(metadata_json, '$.session.title'),
+                               json_extract(metadata_json, '$.source.title')) AS title,
+                      COALESCE(json_extract(metadata_json, '$.session.title_provenance'),
+                               json_extract(metadata_json, '$.source.title_provenance')) AS title_provenance
+                 FROM logs
+                WHERE ai_project IS NOT NULL AND ai_project != ''
+                  AND ai_tool IS NOT NULL AND ai_tool != ''
+                  AND ai_session_id IS NOT NULL AND ai_session_id != ''
+             ),
+             latest_titles AS (
+               SELECT ai_project, ai_tool, ai_session_id, hostname, title, title_provenance
+                 FROM (
+                   SELECT ai_project, ai_tool, ai_session_id, hostname, title, title_provenance,
+                          ROW_NUMBER() OVER (
+                            PARTITION BY ai_project, ai_tool, ai_session_id, hostname
+                            ORDER BY id DESC
+                          ) AS title_rank
+                     FROM eligible WHERE title IS NOT NULL
+                 ) WHERE title_rank = 1
+             )
+             SELECT e.ai_project, e.ai_tool, e.ai_session_id, e.hostname,
+                    MIN(e.ai_transcript_path) AS ai_transcript_path,
+                    MIN(e.timestamp) AS first_seen,
+                    MAX(e.timestamp) AS last_seen,
+                    COUNT(*) AS event_count,
+                    t.title, t.title_provenance
+               FROM eligible e
+               LEFT JOIN latest_titles t
+                 ON t.ai_project = e.ai_project AND t.ai_tool = e.ai_tool
+                AND t.ai_session_id = e.ai_session_id AND t.hostname = e.hostname
+              GROUP BY e.ai_project, e.ai_tool, e.ai_session_id, e.hostname,
+                       t.title, t.title_provenance",
             [],
         )?;
         let staged: i64 =
@@ -1064,9 +1139,11 @@ pub fn refresh_ai_session_rollup(pool: &DbPool) -> Result<usize> {
     tx.execute(
         "INSERT INTO ai_session_rollup
              (ai_project, ai_tool, ai_session_id, hostname,
-              ai_transcript_path, first_seen, last_seen, event_count)
+              ai_transcript_path, first_seen, last_seen, event_count,
+              title, title_provenance)
          SELECT ai_project, ai_tool, ai_session_id, hostname,
-                ai_transcript_path, first_seen, last_seen, event_count
+                ai_transcript_path, first_seen, last_seen, event_count,
+                title, title_provenance
          FROM _ai_rollup_staging",
         [],
     )?;
@@ -1248,8 +1325,8 @@ pub fn search_ai_sessions(
     let mut total_candidates = 0usize;
     let mut raw_candidate_count = 0usize;
     let rows = stmt.query_map(rusqlite::params_from_iter(bindings.iter()), |row| {
-        total_candidates = row.get::<_, i64>(9)? as usize;
-        raw_candidate_count = row.get::<_, i64>(10)? as usize;
+        total_candidates = row.get::<_, i64>(11)? as usize;
+        raw_candidate_count = row.get::<_, i64>(12)? as usize;
         Ok(SearchedAiSessionEntry {
             ai_project: row.get(0)?,
             ai_tool: row.get(1)?,
@@ -1260,6 +1337,8 @@ pub fn search_ai_sessions(
             event_count: row.get(6)?,
             match_count: row.get(7)?,
             best_snippet: row.get(8)?,
+            title: row.get(9)?,
+            title_provenance: row.get(10)?,
         })
     })?;
     let sessions = rows.collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1363,6 +1442,30 @@ fn search_ai_sessions_sql(
               AND l.ai_session_id IS NOT NULL
             GROUP BY l.ai_project, l.ai_tool, l.ai_session_id, l.hostname
          ),
+         tail_titles AS MATERIALIZED (
+            SELECT ai_project, ai_tool, ai_session_id, hostname, title, title_provenance
+              FROM (
+                SELECT l.ai_project, l.ai_tool, l.ai_session_id, l.hostname,
+                       COALESCE(json_extract(l.metadata_json, '$.session.title'),
+                                json_extract(l.metadata_json, '$.source.title')) AS title,
+                       COALESCE(json_extract(l.metadata_json, '$.session.title_provenance'),
+                                json_extract(l.metadata_json, '$.source.title_provenance')) AS title_provenance,
+                       ROW_NUMBER() OVER (
+                         PARTITION BY l.ai_project, l.ai_tool, l.ai_session_id, l.hostname
+                         ORDER BY l.id DESC
+                       ) AS title_rank
+                  FROM selected g
+                  CROSS JOIN rollup_meta meta
+                  JOIN logs l INDEXED BY idx_logs_ai_session_host_time
+                    ON g.ai_project = l.ai_project
+                   AND g.ai_tool = l.ai_tool
+                   AND g.ai_session_id = l.ai_session_id
+                   AND g.hostname = l.hostname
+                   AND l.id > meta.source_max_id
+                 WHERE COALESCE(json_extract(l.metadata_json, '$.session.title'),
+                                json_extract(l.metadata_json, '$.source.title')) IS NOT NULL
+              ) WHERE title_rank = 1
+         ),
          totals AS MATERIALIZED (
             SELECT COUNT(*) AS total_candidates,
                    COALESCE(SUM(match_count), 0) AS raw_candidate_count
@@ -1399,6 +1502,8 @@ fn search_ai_sessions_sql(
                     ORDER BY c2.timestamp DESC
                     LIMIT 1
                 ) AS best_snippet,
+                COALESCE(tail_title.title, rollup.title) AS title,
+                COALESCE(tail_title.title_provenance, rollup.title_provenance) AS title_provenance,
                 totals.total_candidates,
                 totals.raw_candidate_count
          FROM selected g
@@ -1412,6 +1517,11 @@ fn search_ai_sessions_sql(
           AND tail.ai_tool = g.ai_tool
           AND tail.ai_session_id = g.ai_session_id
           AND tail.hostname = g.hostname
+         LEFT JOIN tail_titles tail_title
+           ON tail_title.ai_project = g.ai_project
+          AND tail_title.ai_tool = g.ai_tool
+          AND tail_title.ai_session_id = g.ai_session_id
+          AND tail_title.hostname = g.hostname
          CROSS JOIN totals
          -- Rank by match recency (latest matching row), not the full-session
          -- last_seen computed above: a session with an old match but newer
@@ -1551,6 +1661,7 @@ pub fn search_ai_related_logs(
         host: params.host.clone(),
         source: params.source.clone(),
         source_ip_prefix: None,
+        source_ip_prefixes: None,
         severity: None,
         severity_in: Some(params.severity_in.clone()),
         app: params.app.clone(),
@@ -3229,7 +3340,9 @@ fn append_filters(
         bindings.push(rusqlite::types::Value::Text(source_ip.clone()));
         *idx += 1;
     }
-    if let Some(ref prefix) = params.source_ip_prefix {
+    if let Some(ref prefix) = params.source_ip_prefix
+        && !prefix.is_empty()
+    {
         sql.push_str(&format!(" AND l.source_ip >= ?{}", *idx));
         bindings.push(rusqlite::types::Value::Text(prefix.clone()));
         *idx += 1;
@@ -3237,6 +3350,30 @@ fn append_filters(
             sql.push_str(&format!(" AND l.source_ip < ?{}", *idx));
             bindings.push(rusqlite::types::Value::Text(upper));
             *idx += 1;
+        }
+    }
+    if let Some(ref prefixes) = params.source_ip_prefixes {
+        let prefixes = prefixes
+            .iter()
+            .filter(|prefix| !prefix.is_empty())
+            .collect::<Vec<_>>();
+        if !prefixes.is_empty() {
+            sql.push_str(" AND (");
+            for (position, prefix) in prefixes.iter().enumerate() {
+                if position > 0 {
+                    sql.push_str(" OR ");
+                }
+                sql.push_str(&format!("(l.source_ip >= ?{}", *idx));
+                bindings.push(rusqlite::types::Value::Text((*prefix).clone()));
+                *idx += 1;
+                if let Some(upper) = prefix_upper_bound(prefix) {
+                    sql.push_str(&format!(" AND l.source_ip < ?{}", *idx));
+                    bindings.push(rusqlite::types::Value::Text(upper));
+                    *idx += 1;
+                }
+                sql.push(')');
+            }
+            sql.push(')');
         }
     }
     if let Some(ref s) = params.severity {
@@ -3968,6 +4105,8 @@ pub fn incident_context_summary(
                     first_seen: row.get(5)?,
                     last_seen: row.get(6)?,
                     event_count: row.get(7)?,
+                    title: None,
+                    title_provenance: None,
                 })
             })
             .map_err(|e| anyhow::anyhow!("incident_context ai_sessions query: {e}"))?;

@@ -14,9 +14,19 @@
 #   0 */6 * * * cd /path/to/cortex && bash scripts/backup.sh
 
 set -euo pipefail
+umask 077
 
 DB_PATH="${CORTEX_DB_PATH:-./data/cortex.db}"
 BACKUP_DIR="${1:-./backups}"
+# `realpath -m --` is GNU-specific. Create the destination with the restrictive
+# process umask, then use POSIX `pwd -P` to resolve `.`/`..` and symlinks on both
+# macOS and Linux before changing permissions or writing any artifacts.
+mkdir -p "$BACKUP_DIR"
+BACKUP_DIR="$(cd "$BACKUP_DIR" && pwd -P)"
+if [[ "$BACKUP_DIR" == "/" ]]; then
+    echo "ERROR: Refusing unsafe backup directory: filesystem root" >&2
+    exit 1
+fi
 TIMESTAMP=$(date -u +%Y-%m-%d-%H%M%S)
 BACKUP_FILE="${BACKUP_DIR}/syslog-${TIMESTAMP}.db"
 
@@ -28,8 +38,8 @@ DB_DIR="$(dirname "$DB_PATH")"
 AUTH_DB_PATH="${AUTH_DB_PATH:-${DB_DIR}/auth.db}"
 AUTH_KEY_PATH="${AUTH_KEY_PATH:-${DB_DIR}/auth-jwt.pem}"
 
-# Ensure backup directory exists
-mkdir -p "$BACKUP_DIR"
+# Ensure backup directory permissions are private
+chmod 700 "$BACKUP_DIR"
 
 if [[ ! -f "$DB_PATH" ]]; then
     echo "ERROR: Database not found at $DB_PATH"
@@ -40,6 +50,7 @@ fi
 # Escape single quotes in path to avoid breaking the .backup command syntax
 ESCAPED_BACKUP_FILE="${BACKUP_FILE//\'/\'\'}"
 sqlite3 "$DB_PATH" ".backup '${ESCAPED_BACKUP_FILE}'"
+chmod 600 "$BACKUP_FILE"
 
 SIZE=$(du -h "$BACKUP_FILE" | cut -f1)
 echo "Backup complete: ${BACKUP_FILE} (${SIZE})"
@@ -75,9 +86,16 @@ else
     echo "Auth JWT key not found at ${AUTH_KEY_PATH}; skipping"
 fi
 
-# Prune backups older than 30 days
-find "$BACKUP_DIR" -name "syslog-*.db" -mtime +30 -delete 2>/dev/null || true
-find "$BACKUP_DIR" -name "auth-*.db" -mtime +30 -delete 2>/dev/null || true
-find "$BACKUP_DIR" -name "auth-jwt-*.pem" -mtime +30 -delete 2>/dev/null || true
+# Prune backups older than 30 days. Backup creation has already succeeded at
+# this point, but retention failure is still operationally significant: warn
+# for each failed class and return nonzero so schedulers can alert on it.
+prune_failed=0
+for pattern in "syslog-*.db" "auth-*.db" "auth-jwt-*.pem"; do
+    if ! find "$BACKUP_DIR" -name "$pattern" -mtime +30 -delete; then
+        echo "WARNING: Failed to prune old ${pattern} backups in ${BACKUP_DIR}" >&2
+        prune_failed=1
+    fi
+done
 REMAINING=$(find "$BACKUP_DIR" -name "syslog-*.db" | wc -l | tr -d ' ')
 echo "Retained ${REMAINING} syslog backup(s) in ${BACKUP_DIR}"
+exit "$prune_failed"

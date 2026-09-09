@@ -1,0 +1,29 @@
+{
+  "schema": "cortex-live-storage-contract-v1",
+  "database": {
+    "maintenance": ["status", "integrity", "integrity-background", "checkpoint", "vacuum", "backup"],
+    "backup_invariants": ["wal-safe", "integrity-ok", "marker-readable"],
+    "lifecycle": ["restart", "container-replacement", "marker-consistency"]
+  },
+  "retention": {
+    "global_age": "received_at",
+    "special_caps_days": {"adguard": 7, "heartbeat": 14},
+    "error_floor": ["window-hours", "per-source-cap"],
+    "fts": "deleted base rows may remain as phantom index rows until merge or rebuild"
+  },
+  "pressure": {
+    "target": "dedicated disposable Docker volume",
+    "requires_verified_hard_quota": true,
+    "desktop_without_hard_quota": "platform-qualified",
+    "max_wall_seconds": 180,
+    "max_written_bytes": 268435456,
+    "external_watchdog": true,
+    "scenarios": ["db-size-cleanup", "free-disk-block", "hysteresis-recovery", "cleanup-failure", "maintenance-restart"]
+  },
+  "safety": {
+    "deployed_targets_forbidden": true,
+    "run_label_required": true,
+    "preflight_required": true,
+    "exact_cleanup_required": true
+  }
+}

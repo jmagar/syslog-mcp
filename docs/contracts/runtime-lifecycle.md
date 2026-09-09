@@ -61,17 +61,17 @@ Windows: only `ctrl_c` is wired; `terminate` is `pending::<()>()`.
 
 ## 4. Graceful shutdown sequence (normative)
 
-Triggered by SIGINT or SIGTERM. Order locked by `axum::serve(...).with_graceful_shutdown(...)` plus the `Drop` implementations on `MaintenanceHandles` and `RuntimeCore`.
+Triggered by SIGINT or SIGTERM. Order is explicit in `main::serve_mcp`, `MaintenanceHandles::shutdown`, `IngestTx::shutdown`, and `RuntimeCore::shutdown`.
 
 1. **Stop accepting new HTTP connections.** axum's graceful-shutdown future flips; new TCP accepts on `mcp.port` are refused. In-flight HTTP requests are allowed to finish.
 2. **Drain in-flight requests.** axum waits for outstanding handlers to return.
-3. **Drop `MaintenanceHandles`** (via `_maintenance: MaintenanceHandles` going out of scope when `serve_mcp` returns). Its `Drop` impl calls `JoinHandle::abort()` on the retention task, the storage-budget task, and each docker-ingest task. The aborted tasks finish their current `await` and return.
-4. **UDP/TCP syslog listeners** stop reading once the runtime begins teardown. There is **no explicit drain step** for in-flight syslog packets in V1 — packets already in the kernel UDP socket buffer are dropped, and partial TCP lines are abandoned. Packets that already crossed the `mpsc` into the writer are flushed by step 5.
-5. **Writer drain.** The batch writer is not explicitly `await`ed during shutdown — it lives in a `tokio::spawn` rooted in `RuntimeCore` and is dropped when the runtime exits. Items already in its `mpsc` ring are flushed only if the writer's current loop iteration completes before the Tokio runtime tears down. **Loss window**: anything in the channel since the most recent commit (≤ `[syslog].batch_size` rows, ≤ `[syslog].flush_interval` ms old) may be lost on hard shutdown.
-6. **DB pool close.** The `Arc<DbPool>` is dropped when `RuntimeCore` drops. SQLx closes connections; SQLite's WAL is left intact (no explicit `wal_checkpoint(TRUNCATE)` call in V1).
-7. **Process exit.** `tokio::main` returns `Ok(())`; the process exits 0.
+3. **Cancel and drain maintenance.** `MaintenanceHandles::shutdown` cancels its shared token and awaits every owned task for 10 seconds. If the cooperative deadline expires, it explicitly aborts and joins unfinished async tasks; it never detaches them. Already-running `spawn_blocking` work cannot be force-cancelled by Tokio and must finish before its wrapper can settle.
+4. **UDP/TCP syslog listeners stop.** Their supervisor handles are owned by the maintenance set. Packets still in kernel buffers and partial TCP lines have no receiver-side replay guarantee.
+5. **Writer drain.** `IngestTx::shutdown` closes the channel and awaits the batch writer for 5 seconds so accepted entries can flush. On timeout it aborts the writer; senders must retry TCP when end-to-end delivery guarantees are required.
+6. **WAL checkpoint.** `RuntimeCore::shutdown` attempts `wal_checkpoint(TRUNCATE)` after writer drain. Failure is logged as non-fatal because committed WAL content remains recoverable on next open.
+7. **DB pool close and process exit.** The remaining pool owners drop and `tokio::main` returns.
 
-**Shutdown deadline.** There is **no explicit shutdown timeout knob in V1** (`shutdown_timeout_secs` is **not** a `Config` field; this is an open question — see §9). The orchestrator's stop-timeout governs how long the kernel will wait before promoting SIGTERM to SIGKILL. **Operators must set Docker `stop_grace_period: 30s` (or larger) in compose** — the default 10 s is enough for healthy shutdowns at homelab volumes but provides no buffer if the writer is mid-flush of a big batch. For systemd, set `TimeoutStopSec=30s` on the unit.
+**Shutdown deadline.** The current code uses a 10-second maintenance deadline followed by a 5-second ingest deadline. These constants are not configuration fields. Operators should allow at least 30 seconds before escalating SIGTERM to SIGKILL so HTTP drain and final checkpoint also have room to complete.
 
 **WAL safety.** Because SQLite is configured with WAL mode (`storage.wal_mode = true`), abrupt SIGKILL or power loss does **not** corrupt the database. On next start SQLite replays WAL automatically. The only loss is the in-memory batch since the most recent transaction commit (≤ `batch_size` rows).
 
@@ -205,7 +205,7 @@ Operators must satisfy these before launching `cortex serve mcp`. Failing any pr
 
 ## 9. Unresolved questions
 
-- **Explicit shutdown deadline.** V1 has no `[server].shutdown_timeout_secs` knob. The Tokio runtime drops mid-flight tasks when `tokio::main` returns. If operators report tail-end batch loss on busy shutdowns, the planned fix is an explicit `await` on the writer's drain channel before pool teardown.
-- **Explicit WAL checkpoint on shutdown.** No `wal_checkpoint(TRUNCATE)` is currently issued. The next startup reads the WAL transparently, but operators copying the DB file alone (without `-wal` and `-shm`) post-stop will see a smaller-than-expected DB. Backup procedure in `docs/contracts/data-layout.md` handles this.
+- **Configurable shutdown deadline.** The 10-second maintenance and 5-second ingest deadlines are currently code constants rather than `[server]` configuration.
+- **Blocking maintenance cancellation.** Tokio cannot abort work already running inside `spawn_blocking`; admitted integrity checks are single-flight and their lifecycle is recorded, but a hard process deadline can still terminate the process before such a check finishes.
 - **Exit-code surface.** As noted in §6, the (1)/(2)/(3)/(other) split is the intended semantics but not yet implemented as distinct `ExitCode` values. Until that ships, systemd `RestartPreventExitStatus=1` will catch all startup misconfigs but cannot distinguish DB-init from bind-error from config-error.
 - **SIGHUP as reload.** Some operators ask whether SIGHUP triggers `Config::load` re-evaluation. **It does not in V1**, and there is no plan to add it before V2 — restart-only is the contract.

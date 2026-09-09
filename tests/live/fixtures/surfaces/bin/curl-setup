@@ -1,0 +1,4 @@
+#!/bin/sh
+# Run-owned readiness provider for setup orchestration qualification.
+printf '%s\n' '{"status":"ok"}'
+exit 0

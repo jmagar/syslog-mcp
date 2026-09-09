@@ -21,6 +21,7 @@ fn ci_uses_changed_path_classifier_and_stable_gate() {
         "coverage",
         "deny",
         "mcp-integration",
+        "deployment-contract",
     ] {
         let block = workflow_job_block(workflow, job);
         assert!(
@@ -59,6 +60,7 @@ fn ci_uses_changed_path_classifier_and_stable_gate() {
         "coverage",
         "deny",
         "mcp-integration",
+        "deployment-contract",
     ] {
         assert!(
             gate.contains(&format!("require_success_or_skipped {job}")),
@@ -73,6 +75,20 @@ fn ci_uses_changed_path_classifier_and_stable_gate() {
         !workflow.contains("gitleaks"),
         "the redundant gitleaks job was retired — re-adding it needs a deliberate contract update"
     );
+
+    let deployment = workflow_job_block(workflow, "deployment-contract");
+    for required in [
+        "docker build -f config/Dockerfile -t cortex:ci-release-smoke .",
+        "bash scripts/container-release-smoke.sh cortex:ci-release-smoke",
+        "bash scripts/test-backup-contract.sh cortex:ci-release-smoke",
+        "bash scripts/test-compose-provisioning.sh cortex:ci-release-smoke",
+        "bash scripts/test-agent-env-file.sh cortex:ci-release-smoke",
+    ] {
+        assert!(
+            deployment.contains(required),
+            "deployment-contract must execute {required:?}"
+        );
+    }
 }
 
 /// Workflows that legitimately need a writable `GITHUB_TOKEN` at the top level.
@@ -152,10 +168,8 @@ fn workflows_default_to_read_only_github_token_permissions() {
         "the container release workflow must support controlled recovery for an existing release tag"
     );
     assert!(
-        docker
-            .contains(r#"smoke-command: docker run --rm --entrypoint cortex "$IMAGE_REF" --help"#)
-            && !docker.contains(r#"smoke-command: docker run --rm "$IMAGE_REF" --help"#),
-        "the container smoke test must invoke the cortex binary instead of treating --help as the executable"
+        docker.contains(r#"smoke-command: bash scripts/container-release-smoke.sh "$IMAGE_REF""#),
+        "container publication must run the exact-image live smoke harness"
     );
     assert!(
         !docker.contains("mcp-publisher")

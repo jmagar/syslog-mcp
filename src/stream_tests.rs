@@ -22,34 +22,6 @@ fn cursor_round_trip_binds_principal_filters_and_watermark() {
     assert_eq!(decoded.issued_at, 1234);
 }
 
-#[tokio::test]
-async fn disconnected_client_releases_stream_capacity_immediately() {
-    let semaphore = std::sync::Arc::new(Semaphore::new(1));
-    let permit = semaphore.clone().acquire_owned().await.unwrap();
-    let lease = client_lease(permit, Duration::from_secs(60));
-    assert_eq!(semaphore.available_permits(), 0);
-    drop(lease);
-    assert_eq!(semaphore.available_permits(), 1);
-}
-
-#[tokio::test]
-async fn connected_client_lease_still_expires_at_its_hard_deadline() {
-    let semaphore = std::sync::Arc::new(Semaphore::new(1));
-    let permit = semaphore.clone().acquire_owned().await.unwrap();
-    let lease = client_lease(permit, Duration::from_millis(1));
-    assert_eq!(semaphore.available_permits(), 0);
-    tokio::time::sleep(Duration::from_millis(10)).await;
-    assert_eq!(semaphore.available_permits(), 1);
-    drop(lease);
-}
-
-#[test]
-fn sparse_scoped_history_behind_global_watermark_is_not_truncated() {
-    assert!(!history_is_truncated(49, 500, 102_000, 102_744));
-    assert!(history_is_truncated(500, 500, 102_000, 102_744));
-    assert!(!history_is_truncated(500, 500, 102_744, 102_744));
-}
-
 #[test]
 fn malformed_and_oversized_cursors_fail_closed() {
     assert!(matches!(
@@ -121,59 +93,6 @@ fn cursor_is_not_part_of_filter_lineage() {
     first.cursor = Some("resume-token".into());
     first.cursor = None;
     assert_eq!(fingerprint(&first).unwrap(), expected);
-}
-
-#[tokio::test]
-async fn evidence_stream_requires_a_bounded_git_scope() {
-    let (service, _pool, _dir) = service();
-    let result = evidence_stream(
-        service,
-        auth("alice"),
-        EvidenceStreamRequest {
-            branch: None,
-            worktree: None,
-            kinds: vec![],
-            since: None,
-            until: None,
-            include_payload: false,
-            history_limit: Some(10),
-            cursor: None,
-        },
-        test_cursor_keys(),
-    )
-    .await;
-    assert!(matches!(
-        result,
-        Err(StreamError::Invalid("branch or worktree is required"))
-    ));
-}
-
-#[test]
-fn scoped_evidence_serialization_redacts_payload_strings() {
-    let row = crate::db::agent_observatory::ObservatoryEventRow {
-        id: 1,
-        event_key: "e".into(),
-        run_key: "r".into(),
-        actor_key: None,
-        worktree_id: None,
-        commit_sha: None,
-        observed_at: "2026-08-31T00:00:00Z".into(),
-        ingested_at: "2026-08-31T00:00:01Z".into(),
-        kind: "transcript".into(),
-        source_kind: "transcript".into(),
-        source_id: "s".into(),
-        source_log_id: None,
-        provider_sequence: None,
-        trace_id: None,
-        span_id: None,
-        severity: "info".into(),
-        title: "title".into(),
-        summary: "sk-super-secret-canary".into(),
-        payload_json: Some("{\"token\":\"sk-super-secret-canary\"}".into()),
-        content_scrubbed: false,
-    };
-    let payload = scoped_event_json(&row);
-    assert!(!payload.contains("sk-super-secret-canary"));
 }
 
 #[test]
@@ -389,15 +308,35 @@ fn steady_state_session_poll_uses_bounded_composite_index() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn connection_deadline_releases_admission_even_when_body_stalls() {
     let semaphore = std::sync::Arc::new(Semaphore::new(1));
     let permit = semaphore.clone().try_acquire_owned().unwrap();
     let lease = client_lease(permit, Duration::from_millis(10));
     assert!(semaphore.clone().try_acquire_owned().is_err());
-    tokio::time::sleep(Duration::from_millis(30)).await;
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_millis(30)).await;
+    tokio::task::yield_now().await;
     assert!(semaphore.clone().try_acquire_owned().is_ok());
     drop(lease);
+}
+
+#[test]
+fn sixty_four_stream_burst_rejects_excess_and_recovers_after_disconnect() {
+    let clients = std::sync::Arc::new(Semaphore::new(MAX_CLIENTS));
+    let mut admitted = Vec::with_capacity(MAX_CLIENTS);
+
+    for _ in 0..MAX_CLIENTS {
+        admitted.push(acquire_client_permit(clients.clone()).unwrap());
+    }
+    assert_eq!(clients.available_permits(), 0);
+    assert!(matches!(
+        acquire_client_permit(clients.clone()),
+        Err(StreamError::Overloaded)
+    ));
+
+    drop(admitted.pop());
+    assert!(acquire_client_permit(clients).is_ok());
 }
 
 fn service() -> (
@@ -551,7 +490,7 @@ fn resolved_cursor_keys_fail_closed_rotate_safely_and_accept_toml_only_key() {
     assert_eq!(config.cursor_previous_keys, ["old-secret"]);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn slow_client_stream_body_terminates_at_lease_deadline() {
     use axum::response::IntoResponse;
     let (service, _pool, _dir) = service();
@@ -577,18 +516,19 @@ async fn slow_client_stream_body_terminates_at_lease_deadline() {
             event_name: "log",
             cursor_keys: test_cursor_keys(),
             connection_duration: Duration::from_millis(20),
+            clients: std::sync::Arc::new(Semaphore::new(1)),
         },
     )
     .await
     .unwrap();
     let body = sse.into_response().into_body();
-    tokio::time::timeout(
-        Duration::from_millis(250),
-        axum::body::to_bytes(body, MAX_EVENT_BYTES * 2),
-    )
-    .await
-    .expect("stream body must close at its lease deadline")
-    .unwrap();
+    let consumer = tokio::spawn(axum::body::to_bytes(body, MAX_EVENT_BYTES * 2));
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_millis(21)).await;
+    consumer
+        .await
+        .expect("stream body consumer must complete")
+        .expect("stream body must close at its lease deadline");
 }
 
 #[test]

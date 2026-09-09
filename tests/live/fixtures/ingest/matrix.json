@@ -1,0 +1,22 @@
+{
+  "schema": "cortex-live-ingest-matrix-v1",
+  "identity": "cortex-live-${run_id}-${type}-${sequence}",
+  "lanes": [
+    {"id":"syslog-udp-rfc3164","transport":"udp","durability":"lossy"},
+    {"id":"syslog-udp-rfc5424","transport":"udp","durability":"lossy"},
+    {"id":"syslog-tcp-rfc3164","transport":"tcp","durability":"durable"},
+    {"id":"syslog-tcp-rfc5424","transport":"tcp","durability":"durable"},
+    {"id":"syslog-tcp-framing","transport":"tcp","durability":"durable"},
+    {"id":"syslog-forward","transport":"http-json","durability":"receipted"},
+    {"id":"otlp-logs","transport":"http-protobuf","durability":"lossy"},
+    {"id":"otlp-metrics","transport":"http-protobuf","durability":"durable"},
+    {"id":"otlp-traces","transport":"http-protobuf","durability":"durable"},
+    {"id":"heartbeat","transport":"http-json","durability":"durable"},
+    {"id":"agent-command","transport":"http-json","durability":"durable"},
+    {"id":"shell-history","transport":"http-json","durability":"durable"},
+    {"id":"ai-transcript","transport":"http-json","durability":"durable"},
+    {"id":"managed-file-tail","transport":"file","durability":"checkpointed"},
+    {"id":"inventory-cli","transport":"cli","durability":"cache"},
+    {"id":"legacy-docker","transport":"mock-http","durability":"checkpointed"}
+  ]
+}

@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'ssh\t%s\n' "$*" >>"${LIVE_AGENT_CLI_TRANSPORT_LOG:?}"
+case "$*" in
+  *'which cortex'*'cortex --version'*) printf 'cortex 3.15.0\nactive\n';;
+  *'/etc/unraid-version'*) printf 'no\n';;
+  *'heartbeat-agent.env'*) printf 'CORTEX_HEARTBEAT_TOKEN=disposable-live-token\n';;
+esac

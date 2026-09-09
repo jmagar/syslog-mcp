@@ -57,6 +57,24 @@ pub struct RuntimeCore {
     otlp_counters: Arc<OtlpCounters>,
     auth_policy: AuthPolicy,
     observability: Arc<RuntimeObservability>,
+    fatal_shutdown: CancellationToken,
+}
+
+fn forwarding_agent_tokens(config: &Config) -> std::collections::HashMap<String, String> {
+    config
+        .mcp
+        .forwarding_agents
+        .iter()
+        .map(|(identity, secret)| {
+            (
+                secret
+                    .0
+                    .clone()
+                    .expect("forwarding credentials are validated at runtime construction"),
+                identity.clone(),
+            )
+        })
+        .collect()
 }
 
 pub struct MaintenanceHandles {
@@ -107,13 +125,8 @@ impl MaintenanceHandles {
     ///   They break at the next tick and exit cleanly.
     ///
     /// - `notification_dispatcher`, `notification_evaluator`, `notification_digest`:
-    ///   the inner loop (owned by the notifications module) does NOT observe the
-    ///   token. The wrapper spawned here selects on cancellation and calls
-    ///   `inner.abort()` — this is still abort, not cooperative drain. The
-    ///   10 s timeout window lets the dispatcher finish its current outbound
-    ///   HTTP attempt (5 s connect timeout) before the hard abort fires.
-    ///   Full cooperative drain for these tasks requires wiring the token into
-    ///   the notifications spawn functions, deferred for a follow-up bead.
+    ///   fully cooperative between cycles. The wrapper still treats an inner
+    ///   exit or panic before cancellation as a maintenance-task failure.
     ///
     /// - `docker_ingest` tasks: collected via `docker_ingest::spawn_all` which
     ///   does not yet accept a `CancellationToken`. Cancelled via `join_all`
@@ -124,7 +137,7 @@ impl MaintenanceHandles {
     /// awaited with an explicit timeout rather than being abandoned immediately
     /// on `Drop`, and the pure-Rust tasks (purge, storage, error_scan) exit
     /// without abort.
-    pub async fn shutdown(self, timeout: std::time::Duration) {
+    pub async fn shutdown(self, timeout: std::time::Duration) -> bool {
         self.token.cancel();
         let all_handles: Vec<JoinHandle<()>> = [
             self.purge,
@@ -149,25 +162,110 @@ impl MaintenanceHandles {
         .chain(self.docker_ingest)
         .collect();
 
-        let count = all_handles.len();
-        let join_all = futures_util::future::join_all(all_handles);
-        match tokio::time::timeout(timeout, join_all).await {
-            Ok(_) => {
-                tracing::info!(tasks = count, "All maintenance tasks completed cleanly");
+        await_or_abort_tasks(all_handles, timeout).await
+    }
+}
+
+async fn await_or_abort_tasks(
+    all_handles: Vec<JoinHandle<()>>,
+    timeout: std::time::Duration,
+) -> bool {
+    let count = all_handles.len();
+    let abort_handles: Vec<_> = all_handles.iter().map(JoinHandle::abort_handle).collect();
+    let mut join_all = Box::pin(futures_util::future::join_all(all_handles));
+    match tokio::time::timeout(timeout, &mut join_all).await {
+        Ok(results) => {
+            let mut clean = true;
+            for result in results {
+                if let Err(error) = result {
+                    clean = false;
+                    tracing::error!(%error, "Maintenance task failed during shutdown");
+                }
             }
-            Err(_) => {
-                tracing::warn!(
+            if clean {
+                tracing::info!(tasks = count, "All maintenance tasks completed cleanly");
+            } else {
+                tracing::error!(
                     tasks = count,
-                    timeout_secs = timeout.as_secs(),
-                    "Maintenance task shutdown timed out; some tasks were abandoned"
+                    "Maintenance task shutdown completed with failures"
                 );
             }
+            clean
+        }
+        Err(_) => {
+            tracing::warn!(
+                tasks = count,
+                timeout_secs = timeout.as_secs(),
+                "Maintenance task shutdown timed out; aborting unfinished tasks"
+            );
+            for handle in abort_handles {
+                handle.abort();
+            }
+            for result in join_all.await {
+                if let Err(error) = result
+                    && !error.is_cancelled()
+                {
+                    tracing::error!(%error, "Maintenance task failed while aborting shutdown");
+                }
+            }
+            false
         }
     }
 }
 
+fn spawn_notification_wrapper(
+    name: &'static str,
+    token: CancellationToken,
+    mut inner: JoinHandle<()>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        tokio::select! {
+            biased;
+            _ = token.cancelled() => {
+                match inner.await {
+                    Err(error) => panic!("notification {name} failed during shutdown: {error}"),
+                    Ok(()) => tracing::debug!(task = name, "notification task stopped cleanly"),
+                }
+            }
+            result = &mut inner => match result {
+                Ok(()) => panic!("notification {name} exited unexpectedly"),
+                Err(error) => panic!("notification {name} failed: {error}"),
+            }
+        }
+    })
+}
+
 pub(crate) fn background_interval(period: tokio::time::Duration) -> tokio::time::Interval {
-    tokio::time::interval_at(tokio::time::Instant::now() + period, period)
+    let mut interval = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    interval
+}
+
+/// Initial retention delay. Production remains fixed at one hour. The live E2E
+/// harness may shorten only the first tick by setting both the explicit test
+/// mode gate and a bounded delay; the recurring cadence remains hourly.
+fn retention_initial_delay() -> tokio::time::Duration {
+    retention_initial_delay_from(
+        std::env::var("CORTEX_LIVE_TEST_MODE").ok().as_deref(),
+        std::env::var("CORTEX_LIVE_RETENTION_INITIAL_DELAY_SECS")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn retention_initial_delay_from(
+    test_mode: Option<&str>,
+    raw: Option<&str>,
+) -> tokio::time::Duration {
+    const PRODUCTION: u64 = 3600;
+    let seconds = if test_mode == Some("1") {
+        raw.and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| (1..=60).contains(value))
+            .unwrap_or(PRODUCTION)
+    } else {
+        PRODUCTION
+    };
+    tokio::time::Duration::from_secs(seconds)
 }
 
 /// Tags whose retention is hard-capped at 7 days regardless of the global
@@ -317,8 +415,10 @@ impl RuntimeCore {
             CancellationToken::new(),
             config.receiver.max_message_size,
         );
+        let maintenance_permit = Arc::new(Semaphore::new(1));
         let mut service = CortexService::new(Arc::clone(&pool), config.storage.clone())
-            .with_llm_config(config.llm.clone());
+            .with_llm_config(config.llm.clone())
+            .with_maintenance_permit(Arc::clone(&maintenance_permit));
         if is_stdio {
             service = service.with_file_tail_registry(file_tail_registry);
         } else {
@@ -326,7 +426,11 @@ impl RuntimeCore {
             let status_supervisor = file_tail_supervisor.clone();
             service = service.with_file_tail_control(
                 file_tail_registry,
-                Arc::new(move || reconcile_supervisor.reconcile()),
+                Arc::new(move || {
+                    tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current().block_on(reconcile_supervisor.reconcile())
+                    })
+                }),
                 Arc::new(move || status_supervisor.statuses()),
             );
         }
@@ -338,18 +442,27 @@ impl RuntimeCore {
             pool,
             storage_state,
             service,
-            maintenance_permit: Arc::new(Semaphore::new(1)),
+            maintenance_permit,
             dispatcher_permit: Arc::new(Semaphore::new(1)),
             ingest,
             file_tail_supervisor,
             otlp_counters: Arc::new(OtlpCounters::default()),
             auth_policy,
             observability,
+            fatal_shutdown: CancellationToken::new(),
         })
     }
 
     pub fn service(&self) -> CortexService {
         self.service.clone()
+    }
+
+    pub fn maintenance_permit(&self) -> Arc<Semaphore> {
+        Arc::clone(&self.maintenance_permit)
+    }
+
+    pub fn fatal_shutdown_token(&self) -> CancellationToken {
+        self.fatal_shutdown.clone()
     }
 
     /// Shared SQLite pool — exposed for callers that need to read startup-time
@@ -399,9 +512,21 @@ impl RuntimeCore {
         let state = crate::ai_transcript_ingest::AiTranscriptIngestState::new(
             Arc::clone(&self.pool),
             self.config.mcp.api_token.0.clone(),
+            forwarding_agent_tokens(&self.config),
             self.auth_policy.clone(),
         );
         crate::ai_transcript_ingest::router(state)
+    }
+
+    /// Build the receipt-backed forwarded-syslog ingest router.
+    pub fn syslog_forward_router(&self) -> axum::Router {
+        let state = crate::syslog_forward_ingest::SyslogForwardIngestState::new(
+            Arc::clone(&self.pool),
+            self.config.mcp.api_token.0.clone(),
+            forwarding_agent_tokens(&self.config),
+            self.auth_policy.clone(),
+        );
+        crate::syslog_forward_ingest::router(state)
     }
 
     /// Build the forwarded shell-history ingest router.
@@ -412,6 +537,15 @@ impl RuntimeCore {
             self.auth_policy.clone(),
         );
         crate::shell_history_ingest::router(state)
+    }
+
+    pub fn agent_file_tail_router(&self) -> axum::Router {
+        let state = crate::agent_file_tail_ingest::AgentFileTailIngestState::new(
+            Arc::clone(&self.pool),
+            self.config.mcp.api_token.0.clone(),
+            self.auth_policy.clone(),
+        );
+        crate::agent_file_tail_ingest::router(state)
     }
 
     pub fn mcp_state(&self) -> mcp::AppState {
@@ -434,15 +568,40 @@ impl RuntimeCore {
     /// Signal the ingest pipeline to drain, wait up to `timeout` for the batch
     /// writer to flush, then checkpoint the WAL. Call this after the HTTP server
     /// has stopped accepting connections.
-    pub async fn shutdown(self, timeout: std::time::Duration) {
+    pub async fn shutdown(self, timeout: std::time::Duration) -> bool {
         let pool = Arc::clone(&self.pool);
-        self.ingest.shutdown(timeout).await;
+        // Integrity workers use independently managed OS threads so runtime
+        // teardown remains bounded. If one outlives the drain budget, skip the
+        // shutdown checkpoint rather than contend with its live SQLite read.
+        let integrity_drained = self.service.drain_integrity_tasks(timeout).await;
+        let ingest_drained = self.ingest.shutdown(timeout).await;
+        if !integrity_drained || !ingest_drained {
+            tracing::warn!(
+                integrity_drained,
+                ingest_drained,
+                "Skipping shutdown WAL checkpoint because shutdown did not drain cleanly"
+            );
+            return false;
+        }
         match db::db_wal_checkpoint(&pool, "truncate") {
             Err(e) => {
                 tracing::warn!(error = %e, "WAL checkpoint on shutdown failed (non-fatal)");
+                false
             }
-            _ => {
+            Ok((busy, log_frames, checkpointed_frames))
+                if db::wal_checkpoint_complete(busy, log_frames, checkpointed_frames) =>
+            {
                 tracing::info!("WAL checkpoint completed on clean shutdown");
+                true
+            }
+            Ok((busy, log_frames, checkpointed_frames)) => {
+                tracing::warn!(
+                    busy,
+                    log_frames,
+                    checkpointed_frames,
+                    "WAL checkpoint incomplete on shutdown"
+                );
+                false
             }
         }
     }
@@ -458,16 +617,37 @@ impl RuntimeCore {
     /// [`MaintenanceHandles::syslog_monitor`] so it participates in the
     /// cooperative shutdown drain.
     pub async fn start_syslog(&self, handles: &mut MaintenanceHandles) -> Result<()> {
-        let listener_handles = receiver::start_listeners(
+        let listener_handles = receiver::start_listeners_with_shutdown(
             self.config.receiver.clone(),
             self.ingest.clone(),
             Arc::clone(&self.observability),
+            handles.token.clone(),
         )
         .await?;
 
+        let fatal_shutdown = self.fatal_shutdown.clone();
+        let shutdown = handles.token.clone();
         let monitor = tokio::spawn(async move {
-            tokio::select! {
-                res = listener_handles.udp => {
+            let mut udp = listener_handles.udp;
+            let mut tcp = listener_handles.tcp;
+            let protocol = tokio::select! {
+                biased;
+                _ = shutdown.cancelled() => {
+                    // Both supervisors receive this token and abort their
+                    // active recv/accept task before returning. Join them so
+                    // graceful shutdown does not leave detached listeners or
+                    // misclassify their expected exit as a fatal outage.
+                    let (udp_result, tcp_result) = tokio::join!(udp, tcp);
+                    for (listener, result) in [("udp", udp_result), ("tcp", tcp_result)] {
+                        if let Err(error) = result {
+                            tracing::warn!(listener, error = %error,
+                                "syslog listener supervisor failed during shutdown");
+                        }
+                    }
+                    tracing::debug!("syslog listener monitor stopped cleanly");
+                    return;
+                }
+                res = &mut udp => {
                     match res {
                         Ok(()) => tracing::error!(
                             "syslog supervisor task (udp) exited unexpectedly — \
@@ -479,8 +659,11 @@ impl RuntimeCore {
                              listener will not restart: {}", e
                         ),
                     }
+                    tcp.abort();
+                    let _ = tcp.await;
+                    "udp"
                 }
-                res = listener_handles.tcp => {
+                res = &mut tcp => {
                     match res {
                         Ok(()) => tracing::error!(
                             "syslog supervisor task (tcp) exited unexpectedly — \
@@ -492,8 +675,16 @@ impl RuntimeCore {
                              listener will not restart: {}", e
                         ),
                     }
+                    udp.abort();
+                    let _ = udp.await;
+                    "tcp"
                 }
-            }
+            };
+            tracing::error!(
+                protocol,
+                "fatal syslog listener failure; requesting graceful shutdown"
+            );
+            fatal_shutdown.cancel();
         });
         handles.syslog_monitor = Some(monitor);
         Ok(())
@@ -564,7 +755,7 @@ impl RuntimeCore {
     fn spawn_file_tail_task(&self, token: CancellationToken) -> Option<JoinHandle<()>> {
         let supervisor = self.file_tail_supervisor.clone();
         Some(tokio::spawn(async move {
-            if let Err(err) = supervisor.reconcile() {
+            if let Err(err) = supervisor.reconcile().await {
                 tracing::warn!(error = %err, "initial file-tail reconcile failed");
             }
             let mut interval = background_interval(tokio::time::Duration::from_secs(30));
@@ -572,12 +763,13 @@ impl RuntimeCore {
                 tokio::select! {
                     biased;
                     _ = token.cancelled() => {
-                        supervisor.shutdown();
+                        let report = supervisor.shutdown(std::time::Duration::from_secs(2)).await;
+                        assert!(report.clean(), "file-tail shutdown was not clean");
                         tracing::debug!("file_tail: cooperative shutdown");
                         break;
                     }
                     _ = interval.tick() => {
-                        if let Err(err) = supervisor.reconcile() {
+                        if let Err(err) = supervisor.reconcile().await {
                             tracing::warn!(error = %err, "file-tail reconcile failed");
                         }
                     }
@@ -839,19 +1031,9 @@ impl RuntimeCore {
             Arc::clone(&self.pool),
             Arc::clone(&self.dispatcher_permit),
             self.config.notifications.clone(),
+            token.clone(),
         )?;
-        // Wrap the inner handle so the cancellation token causes the task to
-        // be aborted when cooperative cancellation is signalled. The
-        // dispatcher's inner loop will see the abort as a JoinError, which is
-        // swallowed by the wrapper.
-        Some(tokio::spawn(async move {
-            let mut inner = inner;
-            tokio::select! {
-                biased;
-                _ = token.cancelled() => { inner.abort(); let _ = inner.await; }
-                _ = &mut inner => {}
-            }
-        }))
+        Some(spawn_notification_wrapper("dispatcher", token, inner))
     }
 
     fn spawn_notification_evaluator(&self, token: CancellationToken) -> Option<JoinHandle<()>> {
@@ -859,15 +1041,9 @@ impl RuntimeCore {
             Arc::clone(&self.pool),
             Arc::clone(&self.maintenance_permit),
             self.config.notifications.clone(),
+            token.clone(),
         )?;
-        Some(tokio::spawn(async move {
-            let mut inner = inner;
-            tokio::select! {
-                biased;
-                _ = token.cancelled() => { inner.abort(); let _ = inner.await; }
-                _ = &mut inner => {}
-            }
-        }))
+        Some(spawn_notification_wrapper("evaluator", token, inner))
     }
 
     fn spawn_notification_digest(&self, token: CancellationToken) -> Option<JoinHandle<()>> {
@@ -875,15 +1051,9 @@ impl RuntimeCore {
             Arc::clone(&self.pool),
             Arc::clone(&self.maintenance_permit),
             self.config.notifications.clone(),
+            token.clone(),
         )?;
-        Some(tokio::spawn(async move {
-            let mut inner = inner;
-            tokio::select! {
-                biased;
-                _ = token.cancelled() => { inner.abort(); let _ = inner.await; }
-                _ = &mut inner => {}
-            }
-        }))
+        Some(spawn_notification_wrapper("digest", token, inner))
     }
 
     fn spawn_error_scan_task(&self, token: CancellationToken) -> Option<JoinHandle<()>> {
@@ -934,7 +1104,11 @@ impl RuntimeCore {
         let fts_merge_pages = self.config.enrichment.fts_merge_pages;
         let cleanup_chunk_size = self.config.storage.cleanup_chunk_size;
         let handle = tokio::spawn(async move {
-            let mut interval = background_interval(tokio::time::Duration::from_secs(3600));
+            let period = tokio::time::Duration::from_secs(3600);
+            let mut interval = tokio::time::interval_at(
+                tokio::time::Instant::now() + retention_initial_delay(),
+                period,
+            );
             // Orphan child rows are rare by construction: both the write path
             // and `delete_heartbeat_chunk_where` delete children and parent
             // inside a single transaction, so neither can strand a child. Any
@@ -1011,6 +1185,13 @@ impl RuntimeCore {
                     };
                     let global_deleted =
                         db::purge_old_logs(&pool, retention_days, fts_merge_pages)?;
+                    let receipt_deleted = db::purge_forward_receipts(&pool, cleanup_chunk_size)?;
+                    if receipt_deleted > 0 {
+                        tracing::info!(
+                            deleted = receipt_deleted,
+                            "Purged expired forwarding receipts"
+                        );
+                    }
                     // llm_invocations (migration 37) has no severity concept and no
                     // volume-driven need for its own hardcoded cap (unlike AdGuard
                     // tags/heartbeats above), so it rides the same global

@@ -58,6 +58,19 @@ where
         object.insert(stored_key, sanitize_value(value, Some(key)));
     }
     if omitted > 0 {
+        // The omission marker is itself a field and must stay inside the
+        // advertised object cap. Give it one slot rather than returning
+        // `max_fields + 1` entries for over-cap input.
+        if max_fields > 0
+            && object.len() == max_fields
+            && let Some(key) = object.keys().next_back().cloned()
+        {
+            object.remove(&key);
+            omitted += 1;
+        }
+        if max_fields == 0 {
+            return Value::Object(object);
+        }
         object.insert("_omitted_fields".to_string(), Value::Number(omitted.into()));
     }
     Value::Object(object)

@@ -349,21 +349,22 @@ fn run_deploy(host: &str, local_binary: &Path, config: &AgentDeployConfig) -> io
         host,
         "chmod +x ~/.local/bin/cortex.new && mv -f ~/.local/bin/cortex.new ~/.local/bin/cortex",
     )?;
-    let prefix = if env_pairs.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "{} ",
-            env_pairs
-                .iter()
-                .map(|(key, value)| format!("{key}={}", shell_quote(value)))
-                .collect::<Vec<_>>()
-                .join(" ")
-        )
-    };
+    let env_body = render_env_file(&env_pairs)?;
+    ssh_run_with_stdin(
+        host,
+        "umask 077; mkdir -p ~/.cortex; cat > ~/.cortex/heartbeat-agent.env.new && chmod 600 ~/.cortex/heartbeat-agent.env.new && mv -f ~/.cortex/heartbeat-agent.env.new ~/.cortex/heartbeat-agent.env",
+        env_body.as_bytes(),
+    )?;
+    // Install the unit only after the fully resolved environment is atomically
+    // in place. The setup command preserves an existing env file, so an
+    // interruption cannot start the agent once with generated defaults.
     ssh_run(
         host,
-        &format!("{prefix}~/.local/bin/cortex setup heartbeatagent install"),
+        "CORTEX_SETUP_PRESERVE_HEARTBEAT_ENV=1 ~/.local/bin/cortex setup heartbeatagent install",
+    )?;
+    ssh_run(
+        host,
+        "systemctl --user restart cortex-heartbeat-agent.service",
     )
 }
 
@@ -415,25 +416,14 @@ fn run_deploy_unraid(
     )?)
     .concat();
 
-    // Persist the resolved env (reference / manual restarts), then chmod 600. The
-    // -e flags below pass values verbatim to docker run (no env-file parsing).
-    let mut write_cmd = format!("rm -f {UNRAID_ENV}");
-    for (k, v) in &env_pairs {
-        write_cmd.push_str(&format!(
-            " && echo {}={} >> {UNRAID_ENV}",
-            k,
-            shell_quote(v)
-        ));
-    }
-    write_cmd.push_str(&format!(" && chmod 600 {UNRAID_ENV}"));
-    ssh_run(host, &write_cmd)?;
-
-    // Build explicit -e KEY=VALUE flags for docker run so values are passed
-    // verbatim without any env-file parsing.
-    let e_flags: String = env_pairs
-        .iter()
-        .map(|(k, v)| format!("-e {}={} ", k, shell_quote(v)))
-        .collect();
+    let env_body = render_env_file(&env_pairs)?;
+    ssh_run_with_stdin(
+        host,
+        &format!(
+            "umask 077; cat > {UNRAID_ENV}.new && chmod 600 {UNRAID_ENV}.new && mv -f {UNRAID_ENV}.new {UNRAID_ENV}"
+        ),
+        env_body.as_bytes(),
+    )?;
 
     // Remove any previous container then start fresh with docker run.
     // --restart unless-stopped is stored in Docker's state (not a file),
@@ -455,7 +445,7 @@ fn run_deploy_unraid(
                --network host \
                --user 0:0 \
                --no-healthcheck \
-               {e_flags}\
+               --env-file {UNRAID_ENV} \
                -v {UNRAID_APPDATA}:{UNRAID_APPDATA} \
                -v /var/run/docker.sock:/var/run/docker.sock \
                -v {UNRAID_HOST_SYSLOG}:{UNRAID_CONTAINER_SYSLOG}:ro \
@@ -586,7 +576,7 @@ fn require_token_if_requested(
 
     Err(io::Error::new(
         io::ErrorKind::InvalidData,
-        "client update requires existing CORTEX_HEARTBEAT_TOKEN on the remote agent; repair the client with `cortex setup deploy agent --heartbeat-token ...`",
+        "client update requires existing CORTEX_HEARTBEAT_TOKEN on the remote agent; repair the client with `cortex setup deploy agent --heartbeat-token-file PATH`",
     ))
 }
 
@@ -737,10 +727,7 @@ fn ssh_capture(host: &str, cmd: &str) -> io::Result<String> {
         ])
         .output()?;
     if !out.status.success() {
-        return Err(io::Error::other(format!(
-            "ssh {host}: '{}' exited non-zero",
-            redact_secret_envs(cmd)
-        )));
+        return Err(ssh_command_failed(host, cmd));
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
@@ -768,12 +755,89 @@ fn ssh_run(host: &str, cmd: &str) -> io::Result<()> {
         ])
         .status()?;
     if !status.success() {
-        return Err(io::Error::other(format!(
-            "ssh {host}: '{}' exited non-zero",
-            redact_secret_envs(cmd)
-        )));
+        return Err(ssh_command_failed(host, cmd));
     }
     Ok(())
+}
+
+/// The failure every remote step reports: which host, which command, redacted.
+/// A deploy runs a fixed sequence of ssh commands, so naming the command is the
+/// only way the operator learns *where* the deploy stopped.
+fn ssh_command_failed(host: &str, cmd: &str) -> io::Error {
+    io::Error::other(format!(
+        "ssh {host}: '{}' exited non-zero",
+        redact_secret_envs(cmd)
+    ))
+}
+
+fn ssh_run_with_stdin(host: &str, cmd: &str, input: &[u8]) -> io::Result<()> {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    validate_ssh_host(host)?;
+    let mut child = crate::env::command("ssh")
+        .args([
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            "-o",
+            "LogLevel=ERROR",
+            "--",
+            host,
+            cmd,
+        ])
+        .stdin(Stdio::piped())
+        .spawn()?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| io::Error::other("ssh stdin unavailable"))?;
+
+    // Write, then *always* close stdin and reap the child before deciding.
+    // A remote that dies or exits without reading breaks the pipe mid-write;
+    // returning that `BrokenPipe` straight away would both leak the unreaped
+    // child and report the symptom ("Broken pipe (os error 32)") instead of the
+    // cause. The exit status names the failing command, so it wins; the write
+    // error only surfaces when the remote claimed success without taking the
+    // input, which means the env file was never written.
+    let written = stdin.write_all(input);
+    drop(stdin);
+    let status = child.wait()?;
+    if !status.success() {
+        return Err(ssh_command_failed(host, cmd));
+    }
+    written.map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "ssh {host}: '{}' exited before accepting its piped input: {error}",
+                redact_secret_envs(cmd)
+            ),
+        )
+    })
+}
+
+fn render_env_file(env_pairs: &[(String, String)]) -> io::Result<String> {
+    let mut body = String::new();
+    for (key, value) in env_pairs {
+        if value.chars().any(char::is_control)
+            || value.contains(['\'', '"', '\\', '#'])
+            || value.trim() != value
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "agent environment value for {key} cannot be represented identically by systemd and Docker env-file parsers"
+                ),
+            ));
+        }
+        body.push_str(key);
+        body.push('=');
+        body.push_str(value);
+        body.push('\n');
+    }
+    Ok(body)
 }
 
 fn scp_file(local: &Path, host: &str, remote_path: &str) -> io::Result<()> {

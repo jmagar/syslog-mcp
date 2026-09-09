@@ -124,6 +124,29 @@ fn pages_all_projection_sources_in_cursor_order_with_hard_limits() {
             ],
         )
         .unwrap();
+        conn.execute(
+            "INSERT INTO otel_spans
+                (trace_id, span_id, span_name, span_kind, start_time_unix_nano,
+                 end_time_unix_nano, duration_nano, hostname, ai_tool, ai_project,
+                 ai_session_id, received_at)
+             VALUES (?1, ?2, ?3, 1, 1, 2, 1, 'devhost', 'claude',
+                     '/workspace/cortex', 'session-one', '2026-08-05T12:00:01.000Z')",
+            params![
+                format!("{suffix:0>32}"),
+                format!("{suffix:0>16}"),
+                format!("span-{suffix}"),
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO otel_metric_points
+                (point_key, metric_name, instrument_kind, time_unix_nano, hostname,
+                 ai_tool, ai_project, ai_session_id, value_json, received_at)
+             VALUES (?1, ?2, 'gauge', 1, 'devhost', 'claude', '/workspace/cortex',
+                     'session-one', '{\"value\": 1}', '2026-08-05T12:00:01.000Z')",
+            params![format!("metric-{suffix}"), format!("metric-{suffix}")],
+        )
+        .unwrap();
     }
     drop(conn);
 
@@ -132,6 +155,8 @@ fn pages_all_projection_sources_in_cursor_order_with_hard_limits() {
         AgentSourceKind::Hook,
         AgentSourceKind::Skill,
         AgentSourceKind::Llm,
+        AgentSourceKind::OtelSpan,
+        AgentSourceKind::OtelMetric,
     ] {
         let first = page_agent_sources(&pool, kind, "", 1).unwrap();
         assert_eq!(first.records.len(), 1);
@@ -143,6 +168,11 @@ fn pages_all_projection_sources_in_cursor_order_with_hard_limits() {
                 | (AgentSourceKind::Hook, AgentSourceRecord::Hook(_))
                 | (AgentSourceKind::Skill, AgentSourceRecord::Skill(_))
                 | (AgentSourceKind::Llm, AgentSourceRecord::Llm(_))
+                | (AgentSourceKind::OtelSpan, AgentSourceRecord::OtelSpan(_))
+                | (
+                    AgentSourceKind::OtelMetric,
+                    AgentSourceRecord::OtelMetric(_)
+                )
         ));
         if kind == AgentSourceKind::Llm {
             pool.get().unwrap().execute_batch("VACUUM").unwrap();

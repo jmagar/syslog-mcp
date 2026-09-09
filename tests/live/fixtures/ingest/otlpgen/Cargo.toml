@@ -1,0 +1,10 @@
+[package]
+name = "cortex-live-otlpgen"
+version = "0.0.0"
+edition = "2024"
+
+[workspace]
+
+[dependencies]
+opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic", "logs", "metrics", "trace"] }
+prost = "0.14"

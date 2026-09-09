@@ -57,12 +57,14 @@ docker-build:
     docker build -f config/Dockerfile -t cortex .
 
 up:
+    bash scripts/prepare-compose-dirs.sh
     docker compose up -d
 
 down:
     docker compose down
 
 restart:
+    bash scripts/prepare-compose-dirs.sh
     docker compose restart
 
 logs:
@@ -72,21 +74,46 @@ health:
     curl -sf http://localhost:3100/health | jq .
 
 test-live:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    # Load the deployed env file so tokens are current
-    deployed_env="${HOME}/.cortex/.env"
-    if [[ -f "${deployed_env}" ]]; then
-        set -a; source "${deployed_env}"; set +a
-    fi
-    # CORTEX_USE_HTTP must be unset so the local seed (ai add) uses SQLite directly
-    CORTEX_SMOKE_DB_PATH="${HOME}/.cortex/data/cortex.db" \
-        env -u CORTEX_USE_HTTP \
-        bash tests/test_live.sh --mode http --url http://localhost:3100 \
-            ${CORTEX_TOKEN:+--token "${CORTEX_TOKEN}"}
+    bash tests/live/run-profile.sh smoke
+
+# Canonical live qualification entry points. These never read the operator's
+# deployed ~/.cortex state; fleet/provider runs require explicit target grants.
+live profile="smoke":
+    bash tests/live/run-profile.sh "{{ profile }}"
+
+live-smoke: (live "smoke")
+live-full: (live "full")
+live-auth: (live "auth")
+live-stateful: (live "stateful")
+live-resilience: (live "resilience")
+live-storage: (live "storage")
+live-artifact: (live "artifact")
+live-upgrade: (live "upgrade")
+live-security: (live "security")
+live-mutation: (live "mutation")
+live-soak: (live "soak")
+live-agent: (live "agent")
+live-mcp: (live "mcp")
+live-notifications: (live "notifications")
+live-compose: (live "compose-isolated")
+live-fleet: (live "fleet")
+live-provider: (live "provider")
+live-boundary-reduced: (live "docker-boundary-reduced")
+live-boundary-full: (live "docker-boundary-full")
+
+live-selftest:
+    bash tests/live/selftest/run.sh
+    bash tests/live/selftest/ci-docs.sh
+
+live-docs:
+    python3 tests/live/generate-docs.py
+
+live-docs-check:
+    python3 tests/live/generate-docs.py --check
 
 setup:
     cp -n .env.example .env || true
+    bash scripts/prepare-compose-dirs.sh
 
 gen-token:
     openssl rand -hex 32
@@ -288,11 +315,11 @@ publish bump="patch":
     [ "$(git branch --show-current)" = "main" ] || { echo "Switch to main first"; exit 1; }
     [ -z "$(git status --porcelain)" ] || { echo "Commit or stash changes first"; exit 1; }
     git pull origin main
-    case "{{bump}}" in
+    case "{{ bump }}" in
       major|minor|patch) ;;
       *) echo "Usage: just publish [major|minor|patch]"; exit 1 ;;
     esac
-    cargo xtask bump-version "{{bump}}"
+    cargo xtask bump-version "{{ bump }}"
     NEW=$(grep -m1 "^version" Cargo.toml | sed "s/.*\"\(.*\)\".*/\1/")
     cargo xtask check-release-versions
     # Reuse the canonical gates (bead ok8c) so the release gate can't drift from

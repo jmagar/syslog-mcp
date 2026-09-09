@@ -55,6 +55,7 @@ impl CortexService {
             host: req.host,
             source: req.source,
             source_ip_prefix: None,
+            source_ip_prefixes: None,
             severity: None,
             severity_in: Some(severity_levels),
             app: None,

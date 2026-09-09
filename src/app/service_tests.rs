@@ -73,6 +73,120 @@ fn test_service() -> (CortexService, Arc<DbPool>, tempfile::TempDir) {
     (CortexService::new(Arc::clone(&pool), storage), pool, dir)
 }
 
+async fn wait_for_integrity_job(service: &CortexService, job_id: i64) -> MaintenanceJobStatus {
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let status = service.db_integrity_job_status(job_id).await.unwrap();
+            if status.status != "running" {
+                break status;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("integrity job should become terminal")
+}
+
+#[tokio::test]
+async fn background_integrity_worker_panic_marks_job_failed() {
+    let (service, _pool, _dir) = test_service();
+    let service = service.with_integrity_test_hook(Arc::new(|| {
+        panic!("injected integrity panic");
+    }));
+
+    let started = service.db_integrity_start_background(true).await.unwrap();
+    let status = wait_for_integrity_job(&service, started.job_id).await;
+
+    assert_eq!(status.status, "failed");
+    assert!(
+        status.error.as_deref().is_some_and(
+            |error| error.contains("integrity worker panicked: injected integrity panic")
+        ),
+        "unexpected terminal error: {:?}",
+        status.error
+    );
+    assert!(service.drain_integrity_tasks(Duration::from_secs(1)).await);
+}
+
+#[tokio::test]
+async fn background_integrity_spawn_failure_marks_inserted_job_failed() {
+    let (service, pool, _dir) = test_service();
+    let service = service.with_integrity_spawn_failure();
+
+    let error = service
+        .db_integrity_start_background(true)
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("injected integrity worker spawn failure")
+    );
+
+    let job_id = {
+        let conn = pool.get().unwrap();
+        conn.query_row(
+            "SELECT id FROM maintenance_jobs ORDER BY id DESC LIMIT 1",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap()
+    };
+    let status = service.db_integrity_job_status(job_id).await.unwrap();
+    assert_eq!(status.status, "failed");
+    assert!(status.finished_at.is_some());
+    assert!(status.error.unwrap().contains("spawn failure"));
+}
+
+#[tokio::test]
+async fn background_integrity_blocking_worker_holds_permit_and_drain_is_bounded() {
+    let (service, _pool, _dir) = test_service();
+    let gate = Arc::new(std::sync::Barrier::new(2));
+    let worker_gate = Arc::clone(&gate);
+    let service = service.with_integrity_test_hook(Arc::new(move || {
+        worker_gate.wait();
+        Ok(vec!["ok".to_string()])
+    }));
+
+    let started = service.db_integrity_start_background(true).await.unwrap();
+    let error = service.db_integrity(true).await.unwrap_err();
+    assert!(matches!(error, ServiceError::Busy(_)));
+    assert!(
+        !service
+            .drain_integrity_tasks(Duration::from_millis(5))
+            .await,
+        "blocked integrity worker must exceed the bounded drain"
+    );
+    assert_eq!(
+        service
+            .db_integrity_job_status(started.job_id)
+            .await
+            .unwrap()
+            .status,
+        "running"
+    );
+
+    gate.wait();
+    let status = wait_for_integrity_job(&service, started.job_id).await;
+    assert_eq!(status.status, "done");
+}
+
+#[tokio::test]
+async fn completed_integrity_waiter_failure_is_retained_across_later_jobs() {
+    let (service, _pool, _dir) = test_service();
+    let failed = tokio::spawn(async { panic!("injected completion waiter failure") });
+    tokio::task::yield_now().await;
+    service.integrity_tasks.lock().unwrap().push(failed);
+
+    let started = service.db_integrity_start_background(true).await.unwrap();
+    let status = wait_for_integrity_job(&service, started.job_id).await;
+    assert_eq!(status.status, "done");
+    assert!(
+        !service.drain_integrity_tasks(Duration::from_secs(1)).await,
+        "a later successful job must not erase an earlier waiter failure"
+    );
+}
+
 fn refresh_graph_projection_for_test(pool: &DbPool) {
     let _guard = crate::db::graph::GRAPH_TEST_LOCK.lock();
     crate::db::graph::refresh_graph_projection(pool).unwrap();
@@ -1727,6 +1841,57 @@ async fn filter_logs_file_tail_source_kind_uses_source_prefix() {
 
     assert_eq!(response.count, 1);
     assert_eq!(response.logs[0].message, "file-tail row");
+}
+
+#[tokio::test]
+async fn filter_logs_shell_history_alias_covers_direct_and_forwarded_rows() {
+    let (service, pool, _dir) = test_service();
+    insert_logs_batch(
+        &pool,
+        &[
+            entry(
+                "2026-01-01T00:00:00Z",
+                "devhost",
+                "info",
+                "direct command",
+                "shell-history://devhost/user/zsh",
+            ),
+            entry(
+                "2026-01-01T00:00:01Z",
+                "devhost",
+                "info",
+                "forwarded command",
+                "agent-shell-history://devhost/user/bash",
+            ),
+            entry(
+                "2026-01-01T00:00:02Z",
+                "devhost",
+                "info",
+                "unrelated",
+                "file-tail://devhost/messages",
+            ),
+        ],
+    )
+    .unwrap();
+
+    let response = service
+        .filter_logs(FilterLogsRequest {
+            host: Some("devhost".into()),
+            source_kind: Some("shell-history".into()),
+            limit: Some(200),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(response.count, 2);
+    let messages: Vec<_> = response
+        .logs
+        .iter()
+        .map(|row| row.message.as_str())
+        .collect();
+    assert!(messages.contains(&"direct command"));
+    assert!(messages.contains(&"forwarded command"));
 }
 
 #[tokio::test]

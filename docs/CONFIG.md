@@ -341,6 +341,7 @@ its own table.
 | `CORTEX_PORT` | no | `3100` | no | Host-side MCP port mapping |
 | `CORTEX_MCP_BIND` | no | `127.0.0.1` | no | Host interface the MCP port is published on (loopback by default; set `0.0.0.0` only with `CORTEX_TOKEN`) |
 | `CORTEX_DATA_VOLUME` | no | `cortex-data` | no | Named Docker volume for `/data` |
+| `CORTEX_BACKUP_DIR` | no | `${HOME}/.cortex/backups` | no | Off-volume host directory mounted at `/backups` for scheduled recovery artifacts |
 | `CORTEX_HOME_VOLUME` | no | `~/.cortex` | no | Shared cortex home (inventory cache, setup env) mounted at `/cortex-home` |
 | `CORTEX_SSH_VOLUME` | no | `~/.cortex/ssh` | no | Dedicated SSH key dir mounted read-only at `/home/cortex/.ssh` for inventory collection. Never point at `~/.ssh` — see `docs/SECURITY.md` |
 | `CORTEX_VERSION` | no | current release | no | Image tag pulled by `docker-compose.prod.yml` (kept in version canon) |

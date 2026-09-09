@@ -102,6 +102,7 @@ pub(super) enum ActionHandler {
     NotificationsTest,
     LlmInvocations,
     SimilarIncidents,
+    RecurringErrorComparison,
     IncidentContext,
     Graph,
     ArtifactEvidence,
@@ -577,6 +578,17 @@ pub(super) const ACTION_SPECS: &[ActionSpec] = &[
         "Find similar past incidents",
         Moderate,
         SimilarIncidents
+    ),
+    action_spec!(
+        "recurring_error_comparison",
+        Read,
+        "Compare recurring error signatures with redacted, deterministic evidence bundles",
+        Moderate,
+        RecurringErrorComparison,
+        exact: {
+            allowed: &["signature_hash", "since", "until", "window_minutes", "limit", "include_acknowledged"],
+            required: &[]
+        }
     ),
     action_spec!(
         "incident_context",

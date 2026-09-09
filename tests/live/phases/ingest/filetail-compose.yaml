@@ -1,0 +1,16 @@
+services:
+  candidate:
+    volumes:
+      - ${LIVE_FILETAIL_ROOT:?}:/file-tail-root
+  socket-maker:
+    image: ${LIVE_ORACLE_IMAGE:?}
+    entrypoint: [python, /ingest/socket_maker.py]
+    volumes:
+      - ${LIVE_PROJECT_ROOT:?}/tests/live/phases/ingest:/ingest:ro
+      - ${LIVE_FILETAIL_ROOT:?}:/file-tail-root
+    networks: [isolated]
+    labels: {cortex.live.run_id: "${LIVE_RUN_ID:?}"}
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs: [/tmp]

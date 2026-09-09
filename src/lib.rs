@@ -8,6 +8,7 @@
 pub mod agent;
 pub mod agent_command_ingest;
 pub mod agent_deploy;
+pub mod agent_file_tail_ingest;
 pub mod agent_observatory;
 pub(crate) mod ai_project;
 pub mod ai_transcript_ingest;
@@ -50,6 +51,7 @@ pub mod setup;
 pub mod shell_history_ingest;
 pub mod stream;
 pub mod surfaces;
+pub mod syslog_forward_ingest;
 pub mod update;
 pub mod web_app;
 
@@ -193,6 +195,7 @@ pub mod testing {
                 public_url: public_url.map(|u| u.to_string()),
                 ..Default::default()
             },
+            forwarding_agents: Default::default(),
             static_token_is_admin: false,
         }
     }

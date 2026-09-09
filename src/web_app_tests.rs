@@ -34,6 +34,14 @@ async fn app_route_serves_workspace_shell_with_no_store_and_csp() {
             .unwrap()
             .contains("script-src 'self'")
     );
+    let csp = response
+        .headers()
+        .get(header::CONTENT_SECURITY_POLICY)
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(csp.contains("style-src 'self' 'unsafe-inline'"));
+    assert!(!csp.contains("script-src 'self' 'unsafe-inline'"));
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Cortex investigation workspace"));

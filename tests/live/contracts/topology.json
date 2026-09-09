@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "name": "cortex-live-isolated",
+  "services": ["candidate", "oracle", "toxiproxy", "udp-redirector", "workload-producer"],
+  "network": {"workload_internal": true, "workload_external_egress": false, "redirectors_on_ingress": true, "redirector_egress_certification":"platform-qualified-by-executable-denial-probe"},
+  "ports": {
+    "http": {"service": "toxiproxy", "container": 13100, "upstream": "candidate:3100", "protocol": "tcp", "host": "provider-assigned-loopback"},
+    "syslog_tcp": {"service": "toxiproxy", "container": 11514, "upstream": "candidate:1514", "protocol": "tcp", "host": "provider-assigned-loopback"},
+    "syslog_udp": {"service": "udp-redirector", "container": 11514, "upstream": "candidate:1514", "protocol": "udp", "host": "provider-assigned-loopback"},
+    "oracle_http": {"service": "toxiproxy", "container": 18080, "upstream": "oracle:8080", "protocol": "tcp", "host": "provider-assigned-loopback"},
+    "toxiproxy": {"service": "toxiproxy", "container": 8474, "protocol": "tcp", "host": "provider-assigned-loopback"}
+  },
+  "volumes": {
+    "state": {"mount": "/data", "purpose": "persistent SQLite state"},
+    "pressure": {"mount": "/pressure", "purpose": "independently bounded storage pressure"},
+    "oracle": {"mount": "/capture", "purpose": "deterministic outbound capture"}
+  },
+  "doubles": {
+    "apprise": {"endpoint":"oracle:8080/notify","capture":"oracle:8080/capture","control":"oracle:8080/control","claim":"provider-available-only-no-cortex-notification-semantics"},
+    "oauth": {"authorize":"oracle:8080/oauth/authorize","token":"oracle:8080/oauth/token","jwks":"oracle:8080/oauth/jwks","claim":"provider-double-only-no-cortex-oauth-flow"},
+    "workload": {"service":"workload-producer","transport":"syslog-udp","controlled":true}
+  },
+  "docker_agent_boundary": {"contract":"docker-platforms.json","executable":"tests/live/spikes/docker-boundary/scenario.sh","result":"mandatory-explicit-platform-disposition"},
+  "pressure_quota": {"required":true,"unsupported_disposition":"platform-qualified","green_without_verified_quota":false},
+  "advanced_readiness": {"projection_watermark":"non-green-until-wave-data","evaluator_cycle":"non-green-until-wave-notifications","agent_checkpoint":"non-green-until-wave-agent"},
+  "secrets": ["CORTEX_TOKEN", "CORTEX_API_TOKEN", "CORTEX_API_ADMIN_TOKEN"],
+  "forbidden_inheritance": ["*_TOKEN", "*_SECRET", "*_PASSWORD", "*_WEBHOOK*", "*_NOTIFICATION*", "DOCKER_HOST"],
+  "readiness": ["compose-running", "health-http", "mcp-initialize", "ingest-roundtrip"],
+  "cleanup": "exact-compose-project-id-and-provider-id"
+}

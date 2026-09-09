@@ -1,0 +1,21 @@
+{
+  "schema": "cortex-live-upgrade-compatibility-v1",
+  "candidate": "3.15.0",
+  "supported": {
+    "n_minus_1": {
+      "version": "3.14.0",
+      "platform": "linux-amd64",
+      "origin": "ghcr.io/dinglebear-ai/cortex:v3.14.0",
+      "image": "ghcr.io/dinglebear-ai/cortex@sha256:e8aa985abff46ea610e0cf80f0f58e85bd60cde796334ef483cc18c39d5751ab"
+    },
+    "oldest_scheduled": {
+      "version": "3.13.0",
+      "platform": "linux-amd64",
+      "origin": "ghcr.io/dinglebear-ai/cortex:v3.13.0",
+      "image": "ghcr.io/dinglebear-ai/cortex@sha256:67f33ec31e5aa1f225b5b656a01f4fd67798aed65e69b7cf07eaf875482dd9bf"
+    }
+  },
+  "snapshot": {"format":"tar", "immutable":true, "digest":"sha256"},
+  "rollback": "backup-restore-only",
+  "unsupported_downgrade": "must-refuse"
+}

@@ -1,32 +1,31 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use parking_lot::Mutex;
-#[cfg(test)]
-use tokio::io::AsyncBufReadExt;
-use tokio::io::BufReader;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::db::LogBatchEntry;
-use crate::enrich::{SourceKind, stamp_source_kind};
 use crate::ingest::IngestTx;
-use crate::ingest_metadata::bounded_metadata_json;
 
 use super::models::{FileTailSource, FileTailStatus};
 use super::platform::metadata_identity;
 use super::registry::FileTailRegistry;
 
 mod io;
+mod line_entry;
+mod tail_loop;
+
+use self::tail_loop::tail_file_loop;
 
 pub(crate) use self::io::{
     FileIdentity, open_tail_file, open_validated_tail_file_sync, path_identity_changed,
     read_bounded_line, reopen_if_rotated_or_truncated,
 };
-
-const FILE_TAIL_ROTATION_GRACE: Duration = Duration::from_millis(1000);
+pub(crate) use self::line_entry::file_tail_line_to_entry;
+#[cfg(test)]
+pub(crate) use self::line_entry::tail_file_once_for_test;
 
 #[derive(Clone)]
 pub(crate) struct FileTailSupervisor {
@@ -34,13 +33,53 @@ pub(crate) struct FileTailSupervisor {
     ingest: IngestTx,
     token: CancellationToken,
     tasks: Arc<Mutex<HashMap<String, TailTask>>>,
+    reconcile_error: Arc<Mutex<Option<String>>>,
     max_line_bytes: usize,
 }
 
 struct TailTask {
     handle: JoinHandle<()>,
+    token: CancellationToken,
     status: Arc<Mutex<FileTailStatus>>,
+    shutdown_error: Arc<Mutex<ActiveFailures>>,
     source: FileTailSource,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum FailureKind {
+    Registry,
+    Open,
+    Io,
+    Durability,
+}
+
+#[derive(Clone, Default)]
+pub(super) struct ActiveFailures {
+    pub(super) registry: Option<String>,
+    pub(super) open: Option<String>,
+    pub(super) io: Option<String>,
+    pub(super) durability: Option<String>,
+}
+
+impl ActiveFailures {
+    pub(super) fn messages(&self) -> Vec<String> {
+        [&self.registry, &self.open, &self.io, &self.durability]
+            .into_iter()
+            .filter_map(Clone::clone)
+            .collect()
+    }
+}
+
+pub(crate) struct FileTailShutdown {
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) statuses: Vec<FileTailStatus>,
+    failures: Vec<String>,
+}
+
+impl FileTailShutdown {
+    pub(crate) fn clean(&self) -> bool {
+        self.failures.is_empty()
+    }
 }
 
 impl FileTailSupervisor {
@@ -55,6 +94,7 @@ impl FileTailSupervisor {
             ingest,
             token,
             tasks: Arc::new(Mutex::new(HashMap::new())),
+            reconcile_error: Arc::new(Mutex::new(None)),
             max_line_bytes,
         }
     }
@@ -66,20 +106,89 @@ impl FileTailSupervisor {
             .values()
             .map(|task| task.status.lock().clone())
             .collect();
+        if let Some(error) = self.reconcile_error.lock().clone() {
+            out.push(FileTailStatus {
+                id: "__supervisor__".to_string(),
+                running: false,
+                last_line_at: None,
+                last_read_at: None,
+                last_checkpoint_at: None,
+                blocked_on_writer_since: None,
+                last_error: Some(error),
+            });
+        }
         out.sort_by(|a, b| a.id.cmp(&b.id));
         out
     }
 
-    pub(crate) fn shutdown(&self) {
+    pub(crate) async fn shutdown(&self, timeout: Duration) -> FileTailShutdown {
         self.token.cancel();
-        let mut tasks = self.tasks.lock();
-        for (_, task) in tasks.drain() {
-            task.status.lock().running = false;
-            task.handle.abort();
+        let tasks: Vec<_> = self.tasks.lock().drain().map(|(_, task)| task).collect();
+        self.stop_tasks(tasks, timeout).await
+    }
+
+    async fn stop_tasks(&self, tasks: Vec<TailTask>, timeout: Duration) -> FileTailShutdown {
+        for task in &tasks {
+            task.token.cancel();
+        }
+        let deadline = tokio::time::Instant::now() + timeout;
+        let mut stopped = Vec::new();
+        let mut failures = Vec::new();
+        for mut task in tasks {
+            let source_id = task.source.id.clone();
+            let abort_handle = task.handle.abort_handle();
+            let outcome = tokio::time::timeout_at(deadline, &mut task.handle).await;
+            let failure = match outcome {
+                Ok(Ok(())) => None,
+                Ok(Err(err)) if err.is_panic() => {
+                    Some(format!("file-tail task panicked during shutdown: {err}"))
+                }
+                Ok(Err(err)) if err.is_cancelled() => Some(format!(
+                    "file-tail task was unexpectedly cancelled during shutdown: {err}"
+                )),
+                Ok(Err(err)) => Some(format!("file-tail task join failed during shutdown: {err}")),
+                Err(_) => {
+                    abort_handle.abort();
+                    let _ = task.handle.await;
+                    Some(format!(
+                        "file-tail task shutdown timed out after {timeout:?}"
+                    ))
+                }
+            }
+            .or_else(|| {
+                let messages = task.shutdown_error.lock().messages();
+                (!messages.is_empty()).then(|| messages.join("; "))
+            });
+            let mut status = task.status.lock();
+            status.running = false;
+            if let Some(failure) = failure {
+                tracing::error!(source_id = %source_id, error = %failure, "file-tail shutdown failed");
+                failures.push(format!("{source_id}: {failure}"));
+                append_status_error(&mut status, failure);
+            }
+            stopped.push(status.clone());
+        }
+        stopped.sort_by(|a, b| a.id.cmp(&b.id));
+        FileTailShutdown {
+            statuses: stopped,
+            failures,
         }
     }
 
-    pub(crate) fn reconcile(&self) -> Result<()> {
+    pub(crate) async fn reconcile(&self) -> Result<()> {
+        match self.reconcile_inner().await {
+            Ok(()) => {
+                *self.reconcile_error.lock() = None;
+                Ok(())
+            }
+            Err(error) => {
+                *self.reconcile_error.lock() = Some(error.to_string());
+                Err(error)
+            }
+        }
+    }
+
+    async fn reconcile_inner(&self) -> Result<()> {
         let sources = self.registry.list()?;
         let enabled: HashMap<String, FileTailSource> = sources
             .iter()
@@ -87,17 +196,29 @@ impl FileTailSupervisor {
             .map(|source| (source.id.clone(), source.clone()))
             .collect();
 
+        let retiring = {
+            let mut tasks = self.tasks.lock();
+            let retiring_ids: Vec<_> = tasks
+                .iter()
+                .filter_map(|(id, task)| {
+                    let keep_running = enabled
+                        .get(id)
+                        .is_some_and(|source| source.same_definition(&task.source));
+                    (!keep_running).then(|| id.clone())
+                })
+                .collect();
+            retiring_ids
+                .into_iter()
+                .filter_map(|id| tasks.remove(&id))
+                .collect::<Vec<_>>()
+        };
+        let retired = self.stop_tasks(retiring, Duration::from_secs(2)).await;
+        if !retired.clean() {
+            let failures = retired.failures.join("; ");
+            anyhow::bail!("file-tail task drain failed during reconcile: {failures}");
+        }
+
         let mut tasks = self.tasks.lock();
-        tasks.retain(|id, task| {
-            let keep_running = enabled
-                .get(id)
-                .is_some_and(|source| source.same_definition(&task.source));
-            if !keep_running {
-                task.status.lock().running = false;
-                task.handle.abort();
-            }
-            keep_running
-        });
         for source in sources {
             if source.enabled && !tasks.contains_key(&source.id) {
                 let source = self.ensure_initial_checkpoint(source)?;
@@ -146,8 +267,11 @@ impl FileTailSupervisor {
             last_error: None,
         }));
         let task_status = Arc::clone(&status);
+        let shutdown_error = Arc::new(Mutex::new(ActiveFailures::default()));
+        let task_shutdown_error = Arc::clone(&shutdown_error);
         let ingest = self.ingest.clone();
-        let token = self.token.clone();
+        let token = self.token.child_token();
+        let task_token = token.clone();
         let registry = Arc::clone(&self.registry);
         let max_line_bytes = self.max_line_bytes;
         let handle = tokio::spawn(async move {
@@ -157,6 +281,7 @@ impl FileTailSupervisor {
                 ingest,
                 token,
                 task_status,
+                task_shutdown_error,
                 max_line_bytes,
             )
             .await;
@@ -165,7 +290,9 @@ impl FileTailSupervisor {
             id,
             TailTask {
                 handle,
+                token: task_token,
                 status,
+                shutdown_error,
                 source: task_source,
             },
         )
@@ -175,313 +302,20 @@ impl FileTailSupervisor {
     pub(crate) fn running_source_for_test(&self, id: &str) -> Option<FileTailSource> {
         self.tasks.lock().get(id).map(|task| task.source.clone())
     }
-}
 
-async fn tail_file_loop(
-    initial_source: FileTailSource,
-    registry: Arc<FileTailRegistry>,
-    ingest: IngestTx,
-    token: CancellationToken,
-    status: Arc<Mutex<FileTailStatus>>,
-    max_line_bytes: usize,
-) {
-    let source_id = initial_source.id.clone();
-    let mut initial_source = Some(initial_source);
-    loop {
-        if token.is_cancelled() {
-            status.lock().running = false;
-            return;
-        }
-        let live_source = match registry.get(&source_id) {
-            Ok(Some(source)) if source.enabled => source,
-            Ok(_) => {
-                status.lock().running = false;
-                return;
-            }
-            Err(err) => {
-                tracing::error!(
-                    source_id = %source_id,
-                    error = %err,
-                    "file-tail source reload failed; retrying"
-                );
-                status.lock().last_error = Some(err.to_string());
-                tokio::select! {
-                    _ = token.cancelled() => {
-                        status.lock().running = false;
-                        return;
-                    }
-                    _ = tokio::time::sleep(Duration::from_secs(5)) => {}
-                }
-                continue;
-            }
-        };
-        let source = match initial_source.take() {
-            Some(source) if source.same_definition(&live_source) => source,
-            _ => live_source,
-        };
-        match tail_file_until_cancelled(
-            &source,
-            Arc::clone(&registry),
-            ingest.clone(),
-            token.clone(),
-            Arc::clone(&status),
-            max_line_bytes,
-        )
-        .await
-        {
-            Ok(()) => {
-                status.lock().running = false;
-                return;
-            }
-            Err(err) => {
-                tracing::error!(
-                    source_id = %source.id,
-                    path = %source.path,
-                    error = %err,
-                    "file-tail source failed; retrying"
-                );
-                status.lock().last_error = Some(err.to_string());
-                tokio::select! {
-                    _ = token.cancelled() => {
-                        status.lock().running = false;
-                        return;
-                    }
-                    _ = tokio::time::sleep(Duration::from_secs(5)) => {}
-                }
-            }
-        }
+    #[cfg(test)]
+    pub(crate) fn fail_checkpoint_writes_for_test(&self, fail: bool) {
+        self.registry.set_fail_checkpoint_writes(fail);
     }
 }
 
-async fn tail_file_until_cancelled(
-    source: &FileTailSource,
-    registry: Arc<FileTailRegistry>,
-    ingest: IngestTx,
-    token: CancellationToken,
-    status: Arc<Mutex<FileTailStatus>>,
-    max_line_bytes: usize,
-) -> Result<()> {
-    let opened = open_tail_file(source, true)
-        .await
-        .with_context(|| format!("open {}", source.path))?;
-    let mut reader = BufReader::new(opened.file);
-    let mut position = opened.position;
-    let mut identity = opened.identity;
-    let mut fingerprint = opened.fingerprint;
-    let mut line = Vec::new();
-    let mut pending_rotation_since: Option<Instant> = None;
-    loop {
-        tokio::select! {
-            _ = token.cancelled() => return Ok(()),
-            read = read_bounded_line(&mut reader, &mut line, max_line_bytes) => {
-                let read = read?;
-                if read.bytes_read == 0 {
-                    if path_identity_changed(source, identity).await? {
-                        let since = pending_rotation_since.get_or_insert_with(Instant::now);
-                        if since.elapsed() < FILE_TAIL_ROTATION_GRACE {
-                            tokio::time::sleep(Duration::from_millis(200)).await;
-                            continue;
-                        }
-                    } else {
-                        pending_rotation_since = None;
-                    }
-                    if let Some(next) = reopen_if_rotated_or_truncated(source, identity, position, &fingerprint).await? {
-                        if !line.is_empty() {
-                            let now = now_iso();
-                            let partial = PartialLineBeforeReopen {
-                                source,
-                                registry: &registry,
-                                ingest: &ingest,
-                                status: &status,
-                                line: &line,
-                                identity,
-                                position,
-                                now: &now,
-                            };
-                            ingest_partial_line_before_reopen(partial).await?;
-                        }
-                        reader = BufReader::new(next.file);
-                        position = next.position;
-                        identity = next.identity;
-                        fingerprint = next.fingerprint;
-                        pending_rotation_since = None;
-                        line.clear();
-                    } else {
-                        tokio::time::sleep(Duration::from_millis(500)).await;
-                    }
-                    continue;
-                }
-                position = position.saturating_add(read.bytes_read as u64);
-                pending_rotation_since = None;
-                if !read.complete {
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                    continue;
-                }
-                let msg = String::from_utf8_lossy(&line);
-                let msg = msg.trim_end_matches(['\r', '\n']);
-                if msg.is_empty() {
-                    line.clear();
-                    continue;
-                }
-                let now = now_iso();
-                let entry = file_tail_line_to_entry(source, msg, &now);
-                {
-                    let mut status = status.lock();
-                    status.last_read_at = Some(now.clone());
-                    status.blocked_on_writer_since = Some(now.clone());
-                }
-                ingest.send_durable(entry).await?;
-                registry.update_checkpoint(&source.id, identity.dev, identity.ino, position, &now)?;
-                line.clear();
-                let mut status = status.lock();
-                status.last_line_at = Some(now);
-                status.last_checkpoint_at = status.last_line_at.clone();
-                status.blocked_on_writer_since = None;
-                status.last_error = if read.truncated {
-                    Some(format!(
-                        "truncated oversized line from {} to {max_line_bytes} bytes",
-                        source.path
-                    ))
-                } else {
-                    None
-                };
-            }
-        }
-    }
+fn append_status_error(status: &mut FileTailStatus, error: String) {
+    status.last_error = Some(match status.last_error.take() {
+        Some(previous) => format!("{previous}; {error}"),
+        None => error,
+    });
 }
 
-struct PartialLineBeforeReopen<'a> {
-    source: &'a FileTailSource,
-    registry: &'a FileTailRegistry,
-    ingest: &'a IngestTx,
-    status: &'a Mutex<FileTailStatus>,
-    line: &'a [u8],
-    identity: FileIdentity,
-    position: u64,
-    now: &'a str,
-}
-
-async fn ingest_partial_line_before_reopen(partial: PartialLineBeforeReopen<'_>) -> Result<()> {
-    let msg = String::from_utf8_lossy(partial.line);
-    let msg = msg.trim_end_matches(['\r', '\n']);
-    if msg.is_empty() {
-        return Ok(());
-    }
-    partial
-        .ingest
-        .send_durable(file_tail_line_to_entry(partial.source, msg, partial.now))
-        .await?;
-    partial.registry.update_checkpoint(
-        &partial.source.id,
-        partial.identity.dev,
-        partial.identity.ino,
-        partial.position,
-        partial.now,
-    )?;
-    let mut status = partial.status.lock();
-    status.last_line_at = Some(partial.now.to_string());
-    status.last_error = Some(format!(
-        "ingested unterminated partial line before rotation/truncation for {}",
-        partial.source.path
-    ));
-    Ok(())
-}
-pub(crate) fn file_tail_line_to_entry(
-    source: &FileTailSource,
-    line: &str,
-    now: &str,
-) -> LogBatchEntry {
-    let hostname = source
-        .hostname
-        .clone()
-        .unwrap_or_else(|| super::models::derived_source_hostname(&source.id));
-    let source_hostname = source_identity_component(&hostname);
-    let path_basename = std::path::Path::new(&source.path)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("unknown");
-    let metadata_json = bounded_metadata_json(serde_json::json!({
-        "source_type": "file_tail",
-        "source_kind": SourceKind::FileTail.as_str(),
-        "file_tail_id": source.id,
-        "tag": source.tag,
-        "path_basename": path_basename,
-    }));
-    let mut entry = LogBatchEntry {
-        timestamp: now.to_string(),
-        hostname: hostname.clone(),
-        facility: source.facility.clone(),
-        severity: source.severity.clone(),
-        app_name: Some(source.tag.clone()),
-        process_id: None,
-        message: line.to_string(),
-        raw: line.to_string(),
-        source_ip: format!("file-tail://{source_hostname}/{}", source.id),
-        docker_checkpoint: None,
-        ai_tool: None,
-        ai_project: None,
-        ai_session_id: None,
-        ai_transcript_path: None,
-        metadata_json: Some(metadata_json),
-        http_status: None,
-        auth_outcome: None,
-        dns_blocked: None,
-        event_action: None,
-        parse_error: None,
-    };
-    stamp_source_kind(&mut entry, SourceKind::FileTail);
-    entry
-}
-
-#[cfg(test)]
-pub(crate) async fn tail_file_once_for_test(
-    source: FileTailSource,
-    ingest: IngestTx,
-) -> Result<()> {
-    let file = tokio::fs::File::open(&source.path).await?;
-    let mut reader = BufReader::new(file);
-    let mut line = String::new();
-    while reader.read_line(&mut line).await? > 0 {
-        let msg = line.trim_end_matches(['\r', '\n']);
-        if !msg.is_empty() {
-            ingest
-                .send(file_tail_line_to_entry(
-                    &source,
-                    msg,
-                    "2026-06-11T20:01:00Z",
-                ))
-                .await?;
-        }
-        line.clear();
-    }
-    Ok(())
-}
-
-fn now_iso() -> String {
+pub(super) fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-}
-
-fn source_identity_component(hostname: &str) -> String {
-    let normalized = hostname
-        .trim()
-        .to_ascii_lowercase()
-        .bytes()
-        .map(|byte| {
-            if byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_') {
-                byte as char
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>()
-        .trim_matches(['.', '-', '_'])
-        .to_string()
-        .chars()
-        .take(255)
-        .collect::<String>();
-    if normalized.is_empty() {
-        "localhost".to_string()
-    } else {
-        normalized
-    }
 }

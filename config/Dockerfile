@@ -31,6 +31,7 @@ COPY plugins/cortex/skills/skill-improvement-assessment/ plugins/cortex/skills/s
 COPY plugins/cortex/skills/mcp-friction-assessment/ plugins/cortex/skills/mcp-friction-assessment/
 COPY docker-compose.yml docker-compose.prod.yml ./
 COPY config/Dockerfile config/Dockerfile
+COPY scripts/backup.sh scripts/backup.sh
 RUN --mount=type=cache,id=cortex-cargo-registry-v2,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=cortex-cargo-git-v2,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,id=cortex-cargo-target-v2,target=/app/target,sharing=locked \
@@ -45,10 +46,11 @@ RUN --mount=type=cache,id=cortex-cargo-registry-v2,target=/usr/local/cargo/regis
 # Runtime
 FROM debian:bookworm-slim
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates curl git iproute2 openssh-client && \
+    apt-get install -y --no-install-recommends ca-certificates curl git iproute2 openssh-client sqlite3 && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /usr/local/bin/cortex /usr/local/bin/cortex
+COPY --from=builder /app/scripts/backup.sh /usr/local/libexec/cortex-backup.sh
 
 RUN groupadd --gid 1000 cortex && useradd --uid 1000 --gid cortex --no-create-home --shell /sbin/nologin cortex && mkdir -p /data && chown cortex:cortex /data
 

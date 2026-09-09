@@ -390,6 +390,51 @@ fn outbox_state(conn: &rusqlite::Connection, dedup_key: &str) -> (String, i64) {
 }
 
 #[tokio::test]
+async fn corrupt_persisted_routing_fails_closed_without_global_fallback() {
+    for (key, routing) in [
+        ("malformed", "not-json"),
+        ("wrong-type", r#"{"url":"json://unexpected"}"#),
+        ("invalid-element", r#"[42]"#),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = Arc::new(
+            init_pool(&StorageConfig::for_test(
+                dir.path().join("notifications.db"),
+            ))
+            .unwrap(),
+        );
+        let conn = pool.get().unwrap();
+        insert_due_row(&conn, key, routing);
+        drop(conn);
+
+        let cfg = NotificationsConfig {
+            apprise_urls: vec!["json://global-destination.invalid".to_string()],
+            ..NotificationsConfig::default()
+        };
+        let dispatched = run_dispatch_cycle(
+            Arc::clone(&pool),
+            Arc::new(Semaphore::new(1)),
+            &AppriseClient::new("http://127.0.0.1:1"),
+            &cfg,
+        )
+        .await
+        .unwrap();
+        assert_eq!(dispatched, 0);
+
+        let conn = pool.get().unwrap();
+        let (status, reason): (String, Option<String>) = conn
+            .query_row(
+                "SELECT status, last_error FROM notifications_outbox WHERE dedup_key = ?1",
+                [key],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "dropped");
+        assert_eq!(reason.as_deref(), Some("invalid_apprise_urls_json"));
+    }
+}
+
+#[tokio::test]
 async fn dispatch_cycle_isolates_a_failing_row_instead_of_abandoning_the_batch() {
     let dir = tempfile::tempdir().unwrap();
     let pool = Arc::new(

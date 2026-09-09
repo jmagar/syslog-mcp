@@ -14,32 +14,7 @@ mod sessions;
 use self::assess::parse_assess;
 use self::sessions::parse_sessions_command;
 
-pub(crate) const TOP_LEVEL_COMMANDS: &[&str] = &[
-    "search",
-    "filter",
-    "tail",
-    "hosts",
-    "sessions",
-    "assess",
-    "analysis",
-    "state",
-    "status",
-    "ingest",
-    "alerts",
-    "entity",
-    "graph",
-    "heartbeat",
-    "correlate",
-    "stats",
-    "compose",
-    "setup",
-    "db",
-    "config",
-    "timeline",
-    "apps",
-    "artifactevents",
-    "completions",
-];
+pub(crate) const TOP_LEVEL_COMMANDS: &[&str] = cortex::surfaces::CLI_ROOTS;
 
 pub(crate) fn parse_command(args: Vec<String>) -> Result<CliCommand> {
     let (command, rest) = args
@@ -84,20 +59,22 @@ pub(crate) fn parse_command(args: Vec<String>) -> Result<CliCommand> {
 fn parse_required_subcommand<'a>(
     domain: &str,
     args: &'a [String],
-    expected: &[&str],
 ) -> Result<(&'a str, &'a [String])> {
+    let expected = cortex::surfaces::cli_children(domain);
     let (subcommand, rest) = args
         .split_first()
         .ok_or_else(|| anyhow!("{domain} requires a subcommand: {}", expected.join(", ")))?;
+    if !expected.contains(&subcommand.as_str()) {
+        bail!(
+            "{}",
+            suggest::unknown_command(&format!("{domain} subcommand"), subcommand, expected)
+        );
+    }
     Ok((subcommand.as_str(), rest))
 }
 
 fn parse_analysis(args: &[String]) -> Result<CliCommand> {
-    let (subcommand, rest) = parse_required_subcommand(
-        "analysis",
-        args,
-        &["errors", "incident", "patterns", "anomalies", "compare"],
-    )?;
+    let (subcommand, rest) = parse_required_subcommand("analysis", args)?;
     match subcommand {
         "errors" => parse_errors(rest),
         "incident" => parse_incident(rest),
@@ -147,8 +124,7 @@ fn parse_alerts(args: &[String]) -> Result<CliCommand> {
 }
 
 fn parse_correlate_domain(args: &[String]) -> Result<CliCommand> {
-    let (subcommand, rest) =
-        parse_required_subcommand("correlate", args, &["events", "state", "topic"])?;
+    let (subcommand, rest) = parse_required_subcommand("correlate", args)?;
     match subcommand {
         "events" => parse_correlate(rest),
         "state" => commands::correlate_state::parse_correlate_state(rest),
@@ -165,6 +141,15 @@ fn parse_correlate_domain(args: &[String]) -> Result<CliCommand> {
 }
 
 fn parse_stats_domain(args: &[String]) -> Result<CliCommand> {
+    if let Some(child) = args.first().filter(|value| !value.starts_with('-')) {
+        let expected = cortex::surfaces::cli_children("stats");
+        if !expected.contains(&child.as_str()) {
+            bail!(
+                "{}",
+                suggest::unknown_command("stats subcommand", child, expected)
+            );
+        }
+    }
     match args.first().map(String::as_str) {
         Some("ingestrate") => Ok(CliCommand::Stats(StatsCommand::IngestRate(
             parse_ingest_rate_args(&args[1..])?,
@@ -190,6 +175,13 @@ fn parse_heartbeat(args: &[String]) -> Result<CliCommand> {
     let (command, rest) = args
         .split_first()
         .ok_or_else(|| anyhow!("heartbeat subcommand is required"))?;
+    let expected = cortex::surfaces::cli_children("heartbeat");
+    if !expected.contains(&command.as_str()) {
+        bail!(
+            "{}",
+            suggest::unknown_command("heartbeat subcommand", command, expected)
+        );
+    }
     match command.as_str() {
         "agent" => parse_heartbeat_agent(rest),
         _ => bail!(

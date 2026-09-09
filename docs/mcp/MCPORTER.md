@@ -10,25 +10,24 @@ End-to-end verification against a running cortex server. Complements unit tests 
 
 ## Purpose
 
-`scripts/smoke-test.sh` exercises the full MCP server stack: auth, tool dispatch, and response validation against a live cortex instance.
+The canonical live suite exercises mcporter generation and execution as one
+part of the registry-derived MCP/CLI surface profile.
 
 ## Location
 
 ```
-scripts/smoke-test.sh       # Full smoke test
-tests/test_live.sh          # Extended live integration tests
+tests/live/run-profile.sh   # Canonical fail-closed profile entry point
+scripts/smoke-test.sh       # Compatibility wrapper
+tests/test_live.sh          # Compatibility wrapper
 tests/mcporter/test-tools.sh  # mcporter-based tool tests
 ```
 
 ## Running
 
 ```bash
-# Ensure server is running
-just up
-
-# Run smoke tests
+# Build a disposable topology and run smoke qualification
 just test-live
-# or: bash scripts/smoke-test.sh
+# or: bash tests/live/run-profile.sh smoke
 ```
 
 ## mcporter configuration

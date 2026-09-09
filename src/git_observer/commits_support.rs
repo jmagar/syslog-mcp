@@ -1,6 +1,6 @@
 //! Bounded parser for exact Git commit metadata and numstat summaries.
 
-use chrono::DateTime;
+use chrono::{DateTime, SecondsFormat};
 use sha2::{Digest, Sha256};
 use std::fmt;
 
@@ -224,14 +224,15 @@ pub(super) fn timestamp(
     token_index: usize,
 ) -> Result<String, CommitParseError> {
     let value = utf8(field, name, commit_index, token_index)?;
-    DateTime::parse_from_rfc3339(&value).map_err(|_| {
-        CommitParseError::new(
-            commit_index,
-            token_index,
-            CommitParseErrorKind::InvalidTimestamp(name),
-        )
-    })?;
-    Ok(value)
+    DateTime::parse_from_rfc3339(&value)
+        .map(|timestamp| timestamp.to_rfc3339_opts(SecondsFormat::Secs, true))
+        .map_err(|_| {
+            CommitParseError::new(
+                commit_index,
+                token_index,
+                CommitParseErrorKind::InvalidTimestamp(name),
+            )
+        })
 }
 
 fn trim_ascii(value: &[u8]) -> &[u8] {

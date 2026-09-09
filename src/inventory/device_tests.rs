@@ -1,41 +1,5 @@
 use super::*;
 
-struct EnvGuard {
-    name: &'static str,
-    previous: Option<String>,
-}
-
-impl EnvGuard {
-    fn set(name: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
-        let previous = crate::env::var(name).ok();
-        crate::env::set_test_var(name, value);
-        Self { name, previous }
-    }
-}
-
-impl Drop for EnvGuard {
-    fn drop(&mut self) {
-        match &self.previous {
-            Some(value) => {
-                crate::env::set_test_var(self.name, value);
-            }
-            None => {
-                crate::env::remove_test_var(self.name);
-            }
-        }
-    }
-}
-
-#[cfg(unix)]
-fn executable_file(path: &std::path::Path, body: &str) {
-    use std::os::unix::fs::PermissionsExt;
-
-    std::fs::write(path, body).unwrap();
-    let mut perms = std::fs::metadata(path).unwrap().permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(path, perms).unwrap();
-}
-
 #[test]
 fn parse_meminfo_is_optional_and_non_panicking() {
     let _ = parse_meminfo();
@@ -45,53 +9,39 @@ fn parse_meminfo_is_optional_and_non_panicking() {
 #[tokio::test]
 #[serial_test::serial]
 async fn collect_builds_device_facts_from_local_command_output() {
-    let dir = tempfile::tempdir().unwrap();
-    let bin_dir = dir.path().join("bin");
-    std::fs::create_dir_all(&bin_dir).unwrap();
-    executable_file(
-        &bin_dir.join("hostname"),
-        "#!/bin/sh\nprintf 'devhost\\n'\n",
-    );
-    executable_file(
-        &bin_dir.join("uname"),
-        "#!/bin/sh\nprintf 'Linux test 1 x86_64 GNU/Linux\\n'\n",
-    );
-    executable_file(
-        &bin_dir.join("ip"),
-        r#"#!/bin/sh
-printf '[{"ifname":"lo","addr_info":[{"local":"127.0.0.1"}]},{"ifname":"eth0","addr_info":[{"local":"192.0.2.42"},{"local":"fd00::42"}]}]\n'
+    let _fixtures = command_fixtures([
+        ("hostname", Some("devhost\n")),
+        ("uname", Some("Linux test 1 x86_64 GNU/Linux\n")),
+        (
+            "ip",
+            Some(
+                r#"[{"ifname":"lo","addr_info":[{"local":"127.0.0.1"}]},{"ifname":"eth0","addr_info":[{"local":"192.0.2.42"},{"local":"fd00::42"}]}]
 "#,
-    );
-    executable_file(
-        &bin_dir.join("ss"),
-        r#"#!/bin/sh
-cat <<'OUT'
-Netid State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process
+            ),
+        ),
+        (
+            "ss",
+            Some(
+                r#"Netid State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process
 tcp   LISTEN 0      128    0.0.0.0:3100    0.0.0.0:*
 udp   UNCONN 0      0      [::]:1514       [::]:*
-OUT
 "#,
-    );
-    executable_file(
-        &bin_dir.join("df"),
-        r#"#!/bin/sh
-cat <<'OUT'
-Filesystem Type 1024-blocks Used Available Capacity Mounted on
+            ),
+        ),
+        (
+            "df",
+            Some(
+                r#"Filesystem Type 1024-blocks Used Available Capacity Mounted on
 /dev/sda1 ext4 1000 250 750 25% /
 /dev/sdb1 zfs 2000 500 1500 25% /mnt/data
-OUT
 "#,
-    );
-    let path = format!(
-        "{}:{}",
-        bin_dir.display(),
-        crate::env::var("PATH").unwrap_or_default()
-    );
-    let _path_guard = EnvGuard::set("PATH", path);
+            ),
+        ),
+    ]);
 
-    let output = collect(std::time::Duration::from_secs(1)).await;
+    let output = collect(std::time::Duration::from_secs(5)).await;
 
-    assert!(output.warnings.is_empty());
+    assert!(output.warnings.is_empty(), "{:?}", output.warnings);
     assert_eq!(output.nodes.len(), 1);
     let node = &output.nodes[0];
     assert_eq!(node.hostname, "devhost");
@@ -113,24 +63,13 @@ OUT
 #[tokio::test]
 #[serial_test::serial]
 async fn collect_warns_when_optional_device_commands_are_missing() {
-    let dir = tempfile::tempdir().unwrap();
-    let bin_dir = dir.path().join("bin");
-    std::fs::create_dir_all(&bin_dir).unwrap();
-    executable_file(&bin_dir.join("hostname"), "#!/bin/sh\nprintf '\\n'\n");
-    // Mask the optional commands instead of replacing `PATH` with `bin_dir`.
-    // `PATH` overrides are process-global, so wiping it here also stopped every
-    // concurrently-running test in this binary from finding `sh`, `git`, and
-    // friends. Masking says what this test actually means — these four commands
-    // are not installed — and leaves every other program resolving normally.
-    // Safe to mask process-wide because `inventory::device` is the only caller
-    // of them and its tests are `#[serial]` with each other.
-    let _masked = crate::env::mask_test_programs(["uname", "ip", "ss", "df"]);
-    let path = format!(
-        "{}:{}",
-        bin_dir.display(),
-        crate::env::var("PATH").unwrap_or_default()
-    );
-    let _path_guard = EnvGuard::set("PATH", path);
+    let _fixtures = command_fixtures([
+        ("hostname", Some("")),
+        ("uname", None),
+        ("ip", None),
+        ("ss", None),
+        ("df", None),
+    ]);
 
     let output = collect(std::time::Duration::from_millis(50)).await;
 

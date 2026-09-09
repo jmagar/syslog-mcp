@@ -10,6 +10,10 @@ pub(crate) struct FileTailRegistry {
     path: PathBuf,
     state_lock: Mutex<()>,
     mutation_lock: Mutex<()>,
+    #[cfg(test)]
+    write_count: std::sync::atomic::AtomicUsize,
+    #[cfg(test)]
+    fail_checkpoint_writes: std::sync::atomic::AtomicBool,
 }
 
 impl FileTailRegistry {
@@ -18,6 +22,10 @@ impl FileTailRegistry {
             path,
             state_lock: Mutex::new(()),
             mutation_lock: Mutex::new(()),
+            #[cfg(test)]
+            write_count: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            fail_checkpoint_writes: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -120,6 +128,13 @@ impl FileTailRegistry {
         offset: u64,
         now: &str,
     ) -> Result<()> {
+        #[cfg(test)]
+        if self
+            .fail_checkpoint_writes
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            anyhow::bail!("injected file-tail checkpoint persistence failure");
+        }
         let _guard = self.state_lock.lock();
         let mut sources = self.read_locked()?;
         let source = sources
@@ -143,6 +158,9 @@ impl FileTailRegistry {
     }
 
     fn write_locked(&self, sources: &[FileTailSource]) -> Result<()> {
+        #[cfg(test)]
+        self.write_count
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("create {}", parent.display()))?;
@@ -150,9 +168,20 @@ impl FileTailRegistry {
         let tmp = self.path.with_extension("json.tmp");
         let body = serde_json::to_string_pretty(sources)?;
         std::fs::write(&tmp, body).with_context(|| format!("write {}", tmp.display()))?;
-        std::fs::rename(&tmp, &self.path)
+        atomic_replace(&tmp, &self.path)
             .with_context(|| format!("replace {}", self.path.display()))?;
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn write_count(&self) -> usize {
+        self.write_count.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_fail_checkpoint_writes(&self, fail: bool) {
+        self.fail_checkpoint_writes
+            .store(fail, std::sync::atomic::Ordering::SeqCst);
     }
 
     fn restore_locked(&self, mut before: Vec<FileTailSource>) -> Result<()> {
@@ -178,5 +207,40 @@ impl FileTailRegistry {
             }
         }
         self.write_locked(&before)
+    }
+}
+
+#[cfg(not(windows))]
+fn atomic_replace(source: &Path, destination: &Path) -> std::io::Result<()> {
+    std::fs::rename(source, destination)
+}
+
+#[cfg(windows)]
+fn atomic_replace(source: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+    };
+
+    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    // SAFETY: both pointers reference NUL-terminated UTF-16 buffers that live
+    // through the call. Flags request same-volume atomic replacement and a
+    // durable metadata flush.
+    let moved = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if moved == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
     }
 }

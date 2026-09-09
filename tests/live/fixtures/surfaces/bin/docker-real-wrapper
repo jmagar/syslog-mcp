@@ -1,0 +1,22 @@
+#!/bin/sh
+# Delegate only to the explicitly captured host Docker client. Cortex compose
+# invocations from older builds may omit the `compose` plugin token; normalize
+# that spelling while preserving inspect/ps as ordinary Docker commands.
+if [ -n "${LIVE_DOCKER_TRACE:-}" ]; then
+  printf 'argv=' >>"$LIVE_DOCKER_TRACE"
+  printf ' <%s>' "$@" >>"$LIVE_DOCKER_TRACE"
+  printf '\npath=%s\n' "$PATH" >>"$LIVE_DOCKER_TRACE"
+  env | cut -d= -f1 | grep '^DOCKER_CLI_PLUGIN_' | sort | sed 's/^/plugin_env=/' >>"$LIVE_DOCKER_TRACE"
+fi
+case "${1:-}" in
+  inspect|ps|version|info|exec|image|network) exec "$LIVE_DOCKER_BIN" "$@" ;;
+  compose)
+    shift
+    unset DOCKER_CLI_PLUGIN_ORIGINAL_CLI_COMMAND DOCKER_CLI_PLUGIN_METADATA
+    exec "$LIVE_DOCKER_COMPOSE_BIN" "$@"
+    ;;
+  *)
+    unset DOCKER_CLI_PLUGIN_ORIGINAL_CLI_COMMAND DOCKER_CLI_PLUGIN_METADATA
+    exec "$LIVE_DOCKER_COMPOSE_BIN" "$@"
+    ;;
+esac

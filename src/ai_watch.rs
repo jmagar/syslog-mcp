@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -7,22 +8,30 @@ use std::sync::{
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Result;
-use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{Config, Event, RecommendedWatcher, Watcher};
 use tokio::sync::mpsc;
 
 use crate::app::CortexService;
 use crate::scanner::{self, IndexResult};
 
+mod discovery;
 mod pending;
 mod target;
+#[cfg(test)]
+use discovery::collect_watch_dirs;
+use discovery::{
+    event_path_allowed, event_path_allowed_missing_ok, watch_directory_tree, watch_targets,
+};
 use pending::{PendingFiles, PendingState};
 use target::WatchTarget;
 
 const WATCH_EVENT_BUFFER: usize = 1024;
-const MAX_WATCH_DIRS: usize = 8192;
 const MAX_PENDING_FILES: usize = 4096;
 const OVERFLOW_RESCAN_LOOKBACK: Duration = Duration::from_secs(5 * 60);
 const OVERFLOW_RESCAN_MIN_INTERVAL: Duration = Duration::from_secs(60);
+const RESCAN_PER_SOURCE_MAX_BYTES: u64 = 16 * 1024 * 1024;
+const RESCAN_MAX_BYTES: u64 = 128 * 1024 * 1024;
+const RESCAN_PER_SOURCE_DEADLINE: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone)]
 pub struct WatchOptions {
@@ -64,10 +73,14 @@ pub async fn run(service: CortexService, options: WatchOptions) -> Result<()> {
     }
 
     tracing::info!(targets = ?targets, watched_dirs = watched_dirs.len(), "AI transcript watcher started");
+    let mut rescan_cursor = RescanCursor::default();
+    let mut next_overflow_rescan_at = Instant::now();
     if options.initial_scan
-        && run_rescan(&service, &options, "initial", None).await == RescanStatus::Retry
+        && run_rescan(&service, &options, "initial", None, &mut rescan_cursor).await
+            == RescanStatus::Retry
     {
         overflow_rescan.store(true, Ordering::Relaxed);
+        next_overflow_rescan_at = Instant::now() + OVERFLOW_RESCAN_MIN_INTERVAL;
     }
 
     let tick_duration = options
@@ -76,8 +89,6 @@ pub async fn run(service: CortexService, options: WatchOptions) -> Result<()> {
         .max(Duration::from_millis(50));
     let mut tick = tokio::time::interval(tick_duration);
     let mut pending = PendingFiles::default();
-    let mut next_overflow_rescan_at = Instant::now();
-
     loop {
         tokio::select! {
             Some(event) = rx.recv() => {
@@ -101,7 +112,7 @@ pub async fn run(service: CortexService, options: WatchOptions) -> Result<()> {
                         min_interval_ms = OVERFLOW_RESCAN_MIN_INTERVAL.as_millis(),
                         "AI transcript watcher running bounded overflow rescan"
                     );
-                    if run_rescan(&service, &options, "rescan", Some(since)).await == RescanStatus::Retry {
+                    if run_rescan(&service, &options, "rescan", Some(since), &mut rescan_cursor).await == RescanStatus::Retry {
                         overflow_rescan.store(true, Ordering::Relaxed);
                     }
                     next_overflow_rescan_at = Instant::now() + OVERFLOW_RESCAN_MIN_INTERVAL;
@@ -114,131 +125,6 @@ pub async fn run(service: CortexService, options: WatchOptions) -> Result<()> {
             }
         }
     }
-}
-
-fn watch_targets(options: &WatchOptions) -> Result<Vec<WatchTarget>> {
-    if let Some(path) = &options.path {
-        let canonical = scanner::validate_transcript_scan_path(path)?;
-        if canonical.is_file() {
-            let parent = canonical.parent().map(Path::to_path_buf).ok_or_else(|| {
-                anyhow::anyhow!("transcript file has no parent: {}", canonical.display())
-            })?;
-            return Ok(vec![WatchTarget::File {
-                path: canonical,
-                parent,
-            }]);
-        }
-        return Ok(vec![WatchTarget::Directory(canonical)]);
-    }
-
-    scanner::default_transcript_roots()
-        .into_iter()
-        .filter(|path| path.exists())
-        .map(|path| scanner::validate_transcript_scan_path(&path).map(WatchTarget::Directory))
-        .collect()
-}
-
-fn watch_directory_tree(
-    watcher: &mut RecommendedWatcher,
-    root: &Path,
-    watched_dirs: &mut BTreeSet<PathBuf>,
-) -> Result<()> {
-    let dirs = collect_watch_dirs(root)?;
-    for dir in dirs {
-        if watched_dirs.contains(&dir) {
-            continue;
-        }
-        if watched_dirs.len() >= MAX_WATCH_DIRS {
-            anyhow::bail!(
-                "AI transcript watcher directory budget exceeded ({MAX_WATCH_DIRS}); use a narrower --path or raise system inotify limits"
-            );
-        }
-        match watcher.watch(&dir, RecursiveMode::NonRecursive) {
-            Ok(()) => {
-                watched_dirs.insert(dir);
-            }
-            Err(error) => anyhow::bail!(
-                "failed to watch AI transcript directory {}: {error}",
-                dir.display()
-            ),
-        }
-    }
-    Ok(())
-}
-
-fn collect_watch_dirs(root: &Path) -> Result<Vec<PathBuf>> {
-    let mut dirs = Vec::new();
-    if root.is_file() {
-        if let Some(parent) = root.parent() {
-            collect_watch_dirs_inner(parent, &mut dirs, true)?;
-        }
-    } else {
-        collect_watch_dirs_inner(root, &mut dirs, true)?;
-    }
-    Ok(dirs)
-}
-
-fn collect_watch_dirs_inner(path: &Path, dirs: &mut Vec<PathBuf>, is_root: bool) -> Result<()> {
-    if dirs.len() >= MAX_WATCH_DIRS {
-        anyhow::bail!(
-            "AI transcript watcher directory budget exceeded ({MAX_WATCH_DIRS}) while scanning {}",
-            path.display()
-        );
-    }
-    let metadata = match std::fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) => {
-            if is_root && !is_transient_watch_error(&error) {
-                anyhow::bail!(
-                    "failed to inspect AI transcript watch path {}: {error}",
-                    path.display()
-                );
-            }
-            tracing::warn!(path = %path.display(), error = %error, "skipping unreadable AI transcript watch path");
-            return Ok(());
-        }
-    };
-    if metadata.file_type().is_symlink() {
-        return Ok(());
-    }
-    if metadata.is_file() {
-        return Ok(());
-    }
-    if !metadata.is_dir() {
-        return Ok(());
-    }
-    if !scanner::should_descend_transcript_dir(path) {
-        return Ok(());
-    }
-
-    let read_dir = match std::fs::read_dir(path) {
-        Ok(read_dir) => read_dir,
-        Err(error) => {
-            if is_root && !is_transient_watch_error(&error) {
-                anyhow::bail!(
-                    "failed to read AI transcript watch directory {}: {error}",
-                    path.display()
-                );
-            }
-            tracing::warn!(path = %path.display(), error = %error, "skipping unreadable AI transcript watch directory");
-            return Ok(());
-        }
-    };
-    dirs.push(path.to_path_buf());
-    let mut entries = Vec::new();
-    for entry in read_dir {
-        match entry {
-            Ok(entry) => entries.push(entry.path()),
-            Err(error) => {
-                tracing::warn!(path = %path.display(), error = %error, "skipping unreadable AI transcript watch directory entry");
-            }
-        }
-    }
-    entries.sort();
-    for entry in entries {
-        collect_watch_dirs_inner(&entry, dirs, false)?;
-    }
-    Ok(())
 }
 
 fn handle_event(
@@ -294,15 +180,6 @@ fn handle_event(
     new_dirs
 }
 
-fn is_transient_watch_error(error: &std::io::Error) -> bool {
-    matches!(
-        error.kind(),
-        std::io::ErrorKind::NotFound
-            | std::io::ErrorKind::PermissionDenied
-            | std::io::ErrorKind::Other
-    )
-}
-
 async fn prune_missing_checkpoints(service: &CortexService, json: bool) -> bool {
     const PRUNE_LIMIT: u32 = 500;
     match service
@@ -337,39 +214,16 @@ async fn prune_missing_checkpoints(service: &CortexService, json: bool) -> bool 
     }
 }
 
-fn event_path_allowed(path: &Path, targets: &[WatchTarget]) -> bool {
-    let canonical = path.canonicalize().unwrap_or_else(|error| {
-        tracing::warn!(
-            path = %path.display(),
-            error = %error,
-            "AI transcript event path canonicalization failed; using original path"
-        );
-        path.to_path_buf()
-    });
-    canonical_path_allowed(&canonical, targets)
-}
-
-fn event_path_allowed_missing_ok(path: &Path, targets: &[WatchTarget]) -> bool {
-    let canonical = path.canonicalize().unwrap_or_else(|_| {
-        path.parent()
-            .and_then(|parent| parent.canonicalize().ok())
-            .and_then(|parent| path.file_name().map(|name| parent.join(name)))
-            .unwrap_or_else(|| path.to_path_buf())
-    });
-    canonical_path_allowed(&canonical, targets)
-}
-
-fn canonical_path_allowed(canonical: &Path, targets: &[WatchTarget]) -> bool {
-    targets.iter().any(|target| match target {
-        WatchTarget::Directory(root) => canonical.starts_with(root),
-        WatchTarget::File { path, .. } => canonical == path,
-    })
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RescanStatus {
     Completed,
     Retry,
+}
+
+#[derive(Debug, Default)]
+struct RescanCursor {
+    start_after: Option<PathBuf>,
+    discovery_start_after: BTreeMap<PathBuf, PathBuf>,
 }
 
 async fn run_rescan(
@@ -377,18 +231,70 @@ async fn run_rescan(
     options: &WatchOptions,
     stage: &str,
     since: Option<SystemTime>,
+    cursor: &mut RescanCursor,
 ) -> RescanStatus {
     let path = options.path.as_ref().map(|path| path.display().to_string());
-    let since = since.map(system_time_to_rfc3339);
-    match service.index_ai_roots(path, false, since).await {
+    // A cursor means we are continuing an incomplete bounded backlog. Applying
+    // a fresh overflow lookback here would skip older deferred files and make
+    // the backlog look complete; retain the original scan filter only until
+    // the first attempted source establishes the continuation cursor.
+    let since = rescan_since_for_cursor(since, cursor).map(system_time_to_rfc3339);
+    match service
+        .index_ai_roots_with_scan_budget(
+            path,
+            false,
+            since,
+            Some(scanner::ScanBudget {
+                per_source_max_bytes: RESCAN_PER_SOURCE_MAX_BYTES,
+                scan_max_bytes: RESCAN_MAX_BYTES,
+                per_source_deadline: RESCAN_PER_SOURCE_DEADLINE,
+            }),
+            cursor.start_after.clone(),
+            cursor.discovery_start_after.clone(),
+        )
+        .await
+    {
         Ok(result) => {
             emit_index_result(stage, &result, options.json);
-            RescanStatus::Completed
+            if let Some(next) = result.next_scan_cursor.clone() {
+                cursor.start_after = Some(next);
+            }
+            cursor.discovery_start_after = result.next_discovery_cursors.clone();
+            let status = rescan_status_for_result(&result);
+            if status == RescanStatus::Completed {
+                cursor.start_after = None;
+                cursor.discovery_start_after.clear();
+            }
+            status
         }
         Err(error) => {
             tracing::warn!(error = %error, "AI transcript rescan failed");
             RescanStatus::Retry
         }
+    }
+}
+
+fn rescan_since_for_cursor(since: Option<SystemTime>, cursor: &RescanCursor) -> Option<SystemTime> {
+    if cursor.start_after.is_some() || !cursor.discovery_start_after.is_empty() {
+        None
+    } else {
+        since
+    }
+}
+
+fn rescan_status_for_result(result: &IndexResult) -> RescanStatus {
+    if result.source_budget_cap_hits > 0
+        || result.source_deadline_exceeded > 0
+        || result.scan_budget_cap_hit
+        || result.discovery_cap_hits > 0
+        || result.discovery_deferred_roots > 0
+        || result.deferred_sources > 0
+        || result.discovery_cap_hits > 0
+        || result.discovery_deferred_roots > 0
+    {
+        RescanStatus::Retry
+    } else {
+        RescanStatus::Completed
     }
 }
 
@@ -497,16 +403,25 @@ fn emit_index_result(stage: &str, result: &IndexResult, json: bool) {
         || result.parse_errors > 0
         || result.storage_blocked_chunks > 0
         || result.dropped_metadata_fields > 0
+        || result.source_budget_cap_hits > 0
+        || result.source_deadline_exceeded > 0
+        || result.scan_budget_cap_hit
         || !result.file_errors.is_empty()
     {
         println!(
-            "{stage}: files={} ingested={} duplicates={} parse_errors={} storage_blocked={} dropped_metadata_fields={} file_errors={}",
+            "{stage}: files={} ingested={} duplicates={} parse_errors={} storage_blocked={} dropped_metadata_fields={} source_budget_cap_hits={} source_deadline_exceeded={} discovery_cap_hits={} discovery_deferred_roots={} scan_budget_cap_hit={} deferred_sources={} file_errors={}",
             result.discovered_files,
             result.ingested,
             result.skipped_dupes,
             result.parse_errors,
             result.storage_blocked_chunks,
             result.dropped_metadata_fields,
+            result.source_budget_cap_hits,
+            result.source_deadline_exceeded,
+            result.discovery_cap_hits,
+            result.discovery_deferred_roots,
+            result.scan_budget_cap_hit,
+            result.deferred_sources,
             result.file_errors.len()
         );
     }

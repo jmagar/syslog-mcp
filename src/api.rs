@@ -13,14 +13,13 @@
 //! second line of defence behind the service-layer clamps.
 
 use std::net::SocketAddr;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use axum::{
     Router,
     extract::{ConnectInfo, Extension, Path, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Json},
-    routing::{get, post},
 };
 use lab_auth::AuthContext;
 use serde::{Deserialize, Serialize};
@@ -41,14 +40,17 @@ use crate::app::{
     IncidentContextRequest, IngestRateRequest, ListAiProjectsRequest, ListAiToolsRequest,
     ListAppsRequest, ListArtifactEvidenceRequest, ListHookEventsRequest, ListMcpEventsRequest,
     ListSessionsRequest, ListSkillEventsRequest, ListSourceIpsRequest, LlmInvocationsRequest,
-    NotificationsRecentRequest, PatternsRequest, ProjectContextRequest, RenderedSessionPageRequest,
-    RequestActor, SearchLogsRequest, SearchSessionsRequest, ServiceError, SilentHostsRequest,
-    SimilarIncidentsRequest, TailLogsRequest, TimelineRequest, TopicCorrelateRequest,
-    UnackErrorRequest, UnaddressedErrorsRequest, UsageBlocksRequest,
+    NotificationsRecentRequest, PatternsRequest, ProjectContextRequest,
+    RecurringErrorComparisonRequest, RenderedSessionPageRequest, RequestActor, SearchLogsRequest,
+    SearchSessionsRequest, ServiceError, SilentHostsRequest, SimilarIncidentsRequest,
+    TailLogsRequest, TimelineRequest, TopicCorrelateRequest, UnackErrorRequest,
+    UnaddressedErrorsRequest, UsageBlocksRequest,
 };
 use crate::artifact_evidence::{ArtifactEvidenceInput, MAX_EVIDENCE_WIRE_BYTES};
 use crate::config::{ApiConfig, NotificationsConfig};
+use crate::db::agent_observatory as observatory;
 use crate::mcp::{AuthPolicy, build_auth_layer};
+use crate::surfaces::{get, post};
 
 mod investigation;
 
@@ -67,10 +69,11 @@ const GIT_SHA: Option<&str> = option_env!("GIT_SHA");
 /// design (eng-review C2/C3).
 pub const FULL_VACUUM_SIZE_GUARD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
-/// Process-wide single-flight gate for the maintenance routes
+/// Process-wide single-flight gate for the maintenance routes.
 /// (`POST /api/db/vacuum`, `POST /api/db/checkpoint`,
 /// `POST /api/sessions/prune-checkpoints`). Held via `ApiState::maintenance_permit`,
-/// which clones the `Arc<Semaphore>` populated here at first call.
+/// The gate is created by `RuntimeCore`, stored by `CortexService`, and cloned
+/// into `ApiState`, so REST and background maintenance share one coordinator.
 ///
 /// **Dual-permit pattern (eng-review C2)**: this gate is SEPARATE from
 /// `CortexService::db_permits` (the read-worker pool). Handlers
@@ -81,19 +84,6 @@ pub const FULL_VACUUM_SIZE_GUARD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 /// whole handler call including response IO — see `ApiState::maintenance_permit`
 /// for the intentional "whole-op gate" rationale (bead 0p8r.19).
 ///
-/// **Process-wide invariant (bead 0p8r.18)**: a single `OnceLock` semaphore
-/// is shared across every `ApiState` constructed in this process. The
-/// invariant that vacuum/checkpoint cannot run concurrently relies on
-/// production wiring one ApiState per process (the standard `main::run_server`
-/// path satisfies this). Multiple ApiStates in one process would all see the
-/// same gate — safe. Tests opt out of the global via
-/// `ApiState::with_isolated_maintenance_permit`; see its doc for details.
-static SHARED_MAINTENANCE_PERMIT: OnceLock<Arc<Semaphore>> = OnceLock::new();
-
-fn shared_maintenance_permit() -> Arc<Semaphore> {
-    Arc::clone(SHARED_MAINTENANCE_PERMIT.get_or_init(|| Arc::new(Semaphore::new(1))))
-}
-
 /// Static snapshot of the server identity returned by `GET /api/version`.
 /// Built once at `ApiState` construction; `/api/version` is a hot read path
 /// for CLI health checks and must not touch SQLite per request (eng-review #A3).
@@ -103,16 +93,44 @@ pub struct VersionInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git_sha: Option<String>,
     pub schema_version: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deployment_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub database_fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compose_project: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compose_service: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compose_container: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fleet_allowlist: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<String>,
+}
+
+fn csv_env(name: &str) -> Vec<String> {
+    crate::env::var(name)
+        .ok()
+        .into_iter()
+        .flat_map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 /// Shared mutable state for the /api/* router.
 ///
 /// **One-pool-per-process invariant (bead 0p8r.18)**: `ApiState::new` clones
-/// `maintenance_permit` from the process-wide [`SHARED_MAINTENANCE_PERMIT`]
-/// `OnceLock`, so every router/listener in the process serializes against
-/// the same single-flight gate. Constructing more than one `ApiState` in
-/// production is supported but they all share the same maintenance gate by
-/// design — vacuum cannot run twice concurrently per process.
+/// `maintenance_permit` from its `CortexService`, which production wires to
+/// the same gate used by runtime maintenance tasks.
 ///
 /// **Maintenance-permit lifetime (bead 0p8r.19)**: `db_vacuum`,
 /// `db_checkpoint`, and `prune_ai_checkpoints` hold the permit across the
@@ -167,6 +185,7 @@ pub struct ApiState {
     /// as the `notifications_test` MCP action.
     pub notifications_config: NotificationsConfig,
     pub cursor_keys: crate::stream::CursorKeys,
+    pub stream_client_permits: Arc<Semaphore>,
     pub integration_profile: Arc<serde_json::Value>,
 }
 
@@ -191,7 +210,16 @@ impl ApiState {
             version: CRATE_VERSION,
             git_sha: GIT_SHA.map(str::to_string),
             schema_version,
+            instance_id: crate::env::var("CORTEX_INSTANCE_ID").ok(),
+            deployment_id: crate::env::var("CORTEX_DEPLOYMENT_ID").ok(),
+            database_fingerprint: crate::env::var("CORTEX_DATABASE_FINGERPRINT").ok(),
+            compose_project: crate::env::var("CORTEX_COMPOSE_PROJECT").ok(),
+            compose_service: crate::env::var("CORTEX_COMPOSE_SERVICE").ok(),
+            compose_container: crate::env::var("CORTEX_COMPOSE_CONTAINER").ok(),
+            fleet_allowlist: csv_env("CORTEX_FLEET_ALLOWLIST"),
+            capabilities: csv_env("CORTEX_CAPABILITIES"),
         });
+        let maintenance_permit = service.maintenance_permit();
         Ok(Self {
             service,
             config,
@@ -201,10 +229,11 @@ impl ApiState {
             auth_policy,
             version_info,
             full_vacuum_size_guard_bytes: FULL_VACUUM_SIZE_GUARD_BYTES,
-            maintenance_permit: shared_maintenance_permit(),
+            maintenance_permit,
             static_token_is_admin,
             notifications_config,
             cursor_keys,
+            stream_client_permits: crate::stream::shared_client_permits(),
             integration_profile: Arc::new(integration_profile),
         })
     }
@@ -220,6 +249,12 @@ impl ApiState {
         self
     }
 
+    #[cfg(test)]
+    pub fn with_stream_client_limit(mut self, limit: usize) -> Self {
+        self.stream_client_permits = Arc::new(Semaphore::new(limit));
+        self
+    }
+
     /// Test-only knob: lowers the full-vacuum pre-flight threshold so tests
     /// can drive the 409 path without seeding a multi-GB DB. Production code
     /// MUST NOT call this — the constant guards against multi-minute VACUUMs
@@ -232,6 +267,7 @@ impl ApiState {
 }
 
 pub fn router(state: ApiState) -> anyhow::Result<Router> {
+    use crate::surfaces::ContractRouterExt as _;
     if state.config.api_token.is_none() {
         anyhow::bail!(
             "CORTEX_API_TOKEN required for the REST API — run 'cortex setup repair' to generate one"
@@ -240,97 +276,138 @@ pub fn router(state: ApiState) -> anyhow::Result<Router> {
 
     let routes = Router::new()
         // --- syslog queries ---
-        .route("/api/search", get(search))
-        .route("/api/filter", get(filter))
-        .route("/api/feed", get(feed))
-        .route("/api/tail", get(tail))
-        .route("/api/errors", get(errors))
-        .route("/api/hosts", get(hosts))
-        .route("/api/correlate", get(correlate))
-        .route("/api/stats", get(stats))
-        .route("/api/version", get(version))
-        .route("/api/integration-profile", get(integration_profile))
-        .route("/v1/integration/identity", get(integration_profile))
-        .route("/api/capabilities", get(capabilities))
-        .route("/api/streams/logs", get(log_stream))
-        .route("/api/streams/sessions", get(session_stream))
-        .route("/api/streams/evidence", get(evidence_stream))
+        .contract_route("GET /api/search", get(search))
+        .contract_route("GET /api/filter", get(filter))
+        .contract_route("GET /api/feed", get(feed))
+        .contract_route("GET /api/tail", get(tail))
+        .contract_route("GET /api/errors", get(errors))
+        .contract_route("GET /api/hosts", get(hosts))
+        .contract_route("GET /api/correlate", get(correlate))
+        .contract_route("GET /api/stats", get(stats))
+        .contract_route("GET /api/version", get(version))
+        .contract_route("GET /api/integration-profile", get(integration_profile))
+        .contract_route("GET /v1/integration/identity", get(integration_profile))
+        .contract_route("GET /api/capabilities", get(capabilities))
+        // --- Agent Observatory (authenticated, read-only) ---
+        .contract_route(
+            "GET /api/agent-observatory/repositories",
+            get(observatory_repositories),
+        )
+        .contract_route("GET /api/repositories", get(observatory_repositories))
+        .contract_route(
+            "GET /api/agent-observatory/worktrees",
+            get(observatory_worktrees),
+        )
+        .contract_route(
+            "GET /api/repositories/{repository_id}/worktrees",
+            get(observatory_repository_worktrees),
+        )
+        .contract_route("GET /api/agent-observatory/runs", get(observatory_runs))
+        .contract_route("GET /api/agent-runs", get(observatory_runs))
+        .contract_route(
+            "GET /api/agent-observatory/runs/{run_key}/events",
+            get(observatory_events),
+        )
+        .contract_route(
+            "GET /api/agent-runs/{run_key}/events",
+            get(observatory_events),
+        )
+        .contract_route(
+            "GET /api/agent-observatory/runs/{run_key}/telemetry",
+            get(observatory_telemetry),
+        )
+        .contract_route(
+            "GET /api/agent-runs/{run_key}/telemetry",
+            get(observatory_telemetry),
+        )
+        .contract_route("GET /api/streams/logs", get(log_stream))
+        .contract_route("GET /api/streams/sessions", get(session_stream))
         .merge(investigation::routes())
         // --- surface parity routes ---
-        .route("/api/source-ips", get(source_ips))
-        .route("/api/timeline", get(timeline))
-        .route("/api/patterns", get(patterns))
-        .route("/api/ingest-rate", get(ingest_rate))
-        .route("/api/get", get(get_log))
-        .route("/api/host-state", get(host_state))
-        .route("/api/context", get(context))
-        .route("/api/fleet-state", get(fleet_state))
-        .route("/api/correlate-state", get(correlate_state))
-        .route("/api/topic-correlate", post(topic_correlate))
-        .route("/api/errors/unaddressed", get(unaddressed_errors))
-        .route("/api/errors/ack", post(ack_error))
-        .route("/api/errors/unack", post(unack_error))
-        .route("/api/notifications/recent", get(notifications_recent))
-        .route("/api/notifications/test", post(notifications_test))
-        .route("/api/file-tails", post(file_tails))
+        .contract_route("GET /api/source-ips", get(source_ips))
+        .contract_route("GET /api/timeline", get(timeline))
+        .contract_route("GET /api/patterns", get(patterns))
+        .contract_route("GET /api/ingest-rate", get(ingest_rate))
+        .contract_route("GET /api/get", get(get_log))
+        .contract_route("GET /api/host-state", get(host_state))
+        .contract_route("GET /api/context", get(context))
+        .contract_route("GET /api/fleet-state", get(fleet_state))
+        .contract_route("GET /api/correlate-state", get(correlate_state))
+        .contract_route("POST /api/topic-correlate", post(topic_correlate))
+        .contract_route("GET /api/errors/unaddressed", get(unaddressed_errors))
+        .contract_route("POST /api/errors/ack", post(ack_error))
+        .contract_route("POST /api/errors/unack", post(unack_error))
+        .contract_route("GET /api/notifications/recent", get(notifications_recent))
+        .contract_route("POST /api/notifications/test", post(notifications_test))
+        .contract_route("POST /api/file-tails", post(file_tails))
         // --- surface parity routes ---
-        .route("/api/silent-hosts", get(silent_hosts))
-        .route("/api/clock-skew", get(clock_skew))
-        .route("/api/anomalies", get(anomalies))
-        .route("/api/compare", get(compare))
-        .route("/api/apps", get(apps))
-        .route("/api/similar-incidents", get(similar_incidents))
-        .route("/api/incident-context", get(incident_context))
-        .route("/api/graph/entity", get(graph_entity))
-        .route("/api/graph/around", get(graph_around))
-        .route("/api/graph/explain", get(graph_explain))
-        .route("/api/graph/evidence", get(graph_evidence))
-        .route(
-            "/api/artifact-evidence",
+        .contract_route("GET /api/silent-hosts", get(silent_hosts))
+        .contract_route("GET /api/clock-skew", get(clock_skew))
+        .contract_route("GET /api/anomalies", get(anomalies))
+        .contract_route("GET /api/compare", get(compare))
+        .contract_route("GET /api/apps", get(apps))
+        .contract_route("GET /api/similar-incidents", get(similar_incidents))
+        .contract_route(
+            "GET /api/recurring-error-comparison",
+            get(recurring_error_comparison),
+        )
+        .contract_route("GET /api/incident-context", get(incident_context))
+        .contract_route("GET /api/graph/entity", get(graph_entity))
+        .contract_route("GET /api/graph/around", get(graph_around))
+        .contract_route("GET /api/graph/explain", get(graph_explain))
+        .contract_route("GET /api/graph/evidence", get(graph_evidence))
+        .contract_routes(
+            &["GET /api/artifact-evidence", "POST /api/artifact-evidence"],
             get(artifact_evidence).post(record_artifact_evidence),
         )
-        .route("/api/sessions/incidents", get(ai_incidents))
-        .route("/api/sessions/investigate", get(ai_investigate))
-        .route("/api/sessions/llm-invocations", get(ai_llm_invocations))
-        .route("/api/sessions/skills", get(ai_skills))
-        .route("/api/sessions/skill-incidents", get(ai_skill_incidents))
-        .route("/api/sessions/skill-investigate", get(ai_skill_investigate))
-        .route("/api/sessions/mcp-events", get(ai_mcp_events))
-        .route("/api/sessions/mcp-incidents", get(ai_mcp_incidents))
-        .route("/api/sessions/mcp-investigate", get(ai_mcp_investigate))
-        .route("/api/sessions/hooks", get(ai_hooks))
-        .route("/api/sessions/hook-incidents", get(ai_hook_incidents))
-        .route("/api/sessions/hook-investigate", get(ai_hook_investigate))
-        .route("/api/compose/status", get(compose_status))
-        .route("/api/compose/doctor", get(compose_doctor))
+        .contract_route("GET /api/sessions/incidents", get(ai_incidents))
+        .contract_route("GET /api/sessions/investigate", get(ai_investigate))
+        .contract_route("GET /api/sessions/llm-invocations", get(ai_llm_invocations))
+        .contract_route("GET /api/sessions/skills", get(ai_skills))
+        .contract_route("GET /api/sessions/skill-incidents", get(ai_skill_incidents))
+        .contract_route(
+            "GET /api/sessions/skill-investigate",
+            get(ai_skill_investigate),
+        )
+        .contract_route("GET /api/sessions/mcp-events", get(ai_mcp_events))
+        .contract_route("GET /api/sessions/mcp-incidents", get(ai_mcp_incidents))
+        .contract_route("GET /api/sessions/mcp-investigate", get(ai_mcp_investigate))
+        .contract_route("GET /api/sessions/hooks", get(ai_hooks))
+        .contract_route("GET /api/sessions/hook-incidents", get(ai_hook_incidents))
+        .contract_route(
+            "GET /api/sessions/hook-investigate",
+            get(ai_hook_investigate),
+        )
+        .contract_route("GET /api/compose/status", get(compose_status))
+        .contract_route("GET /api/compose/doctor", get(compose_doctor))
         // --- ai session queries ---
-        .route("/api/sessions", get(sessions))
-        .route("/api/sessions/rendered", get(rendered_session_page))
-        .route("/api/sessions/search", get(ai_search))
-        .route("/api/sessions/abuse", get(ai_abuse))
-        .route("/api/sessions/correlate", get(ai_correlate))
-        .route("/api/sessions/blocks", get(ai_blocks))
-        .route("/api/sessions/context", get(ai_context))
-        .route("/api/sessions/tools", get(ai_tools))
-        .route("/api/sessions/projects", get(ai_projects))
+        .contract_route("GET /api/sessions", get(sessions))
+        .contract_route("GET /api/sessions/rendered", get(rendered_session_page))
+        .contract_route("GET /api/sessions/search", get(ai_search))
+        .contract_route("GET /api/sessions/abuse", get(ai_abuse))
+        .contract_route("GET /api/sessions/correlate", get(ai_correlate))
+        .contract_route("GET /api/sessions/blocks", get(ai_blocks))
+        .contract_route("GET /api/sessions/context", get(ai_context))
+        .contract_route("GET /api/sessions/tools", get(ai_tools))
+        .contract_route("GET /api/sessions/projects", get(ai_projects))
         // --- ai diagnostic + admin (bead 0p8r.3) ---
-        .route("/api/sessions/checkpoints", get(ai_checkpoints))
-        .route("/api/sessions/errors", get(ai_parse_errors))
-        .route(
-            "/api/sessions/prune-checkpoints",
+        .contract_route("GET /api/sessions/checkpoints", get(ai_checkpoints))
+        .contract_route("GET /api/sessions/errors", get(ai_parse_errors))
+        .contract_route(
+            "POST /api/sessions/prune-checkpoints",
             post(ai_prune_checkpoints),
         )
         // --- db ops (bead 0p8r.4) ---
-        .route("/api/db/status", get(db_status))
-        .route("/api/db/integrity", get(db_integrity))
-        .route(
-            "/api/db/integrity/background",
+        .contract_route("GET /api/db/status", get(db_status))
+        .contract_route("GET /api/db/integrity", get(db_integrity))
+        .contract_route(
+            "POST /api/db/integrity/background",
             post(db_integrity_background),
         )
-        .route("/api/db/integrity/jobs/{id}", get(db_integrity_job))
-        .route("/api/db/checkpoint", post(db_checkpoint))
-        .route("/api/db/vacuum", post(db_vacuum))
-        .route("/api/db/backup", post(db_backup));
+        .contract_route("GET /api/db/integrity/jobs/{id}", get(db_integrity_job))
+        .contract_route("POST /api/db/checkpoint", post(db_checkpoint))
+        .contract_route("POST /api/db/vacuum", post(db_vacuum))
+        .contract_route("POST /api/db/backup", post(db_backup));
 
     // Force `AuthPolicy::Mounted` on /api/* regardless of the listener bind.
     // Loopback callers (CLI on the same host) MUST still present a bearer
@@ -459,6 +536,324 @@ fn require_api_admin_token(
                 .into_response(),
         )
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ObservatoryRepositoriesQuery {
+    host: Option<String>,
+    query: Option<String>,
+    active_runs_only: Option<bool>,
+    include_removed: Option<bool>,
+    since: Option<String>,
+    until: Option<String>,
+    cursor: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct ObservatoryPage<T> {
+    #[serde(flatten)]
+    resources: T,
+    pagination: crate::app::agent_observatory::Pagination,
+    as_of: String,
+    stream_cursor: String,
+}
+
+#[derive(Serialize)]
+struct RepositoryResources<T> {
+    repositories: Vec<T>,
+}
+#[derive(Serialize)]
+struct WorktreeResources<T> {
+    worktrees: Vec<T>,
+}
+#[derive(Serialize)]
+struct RunResources<T> {
+    runs: Vec<T>,
+}
+#[derive(Serialize)]
+struct EventResources<T> {
+    run_key: String,
+    events: Vec<T>,
+}
+
+fn observatory_page<T, R>(
+    page: crate::app::agent_observatory::Page<T>,
+    resources: impl FnOnce(Vec<T>) -> R,
+) -> ObservatoryPage<R> {
+    let crate::app::agent_observatory::Page {
+        items,
+        pagination,
+        as_of,
+        stream_cursor,
+    } = page;
+
+    ObservatoryPage {
+        resources: resources(items),
+        pagination,
+        as_of,
+        stream_cursor,
+    }
+}
+
+async fn observatory_repositories(
+    State(state): State<ApiState>,
+    Query(query): Query<ObservatoryRepositoriesQuery>,
+) -> impl IntoResponse {
+    match state
+        .service
+        .observatory_repositories(
+            observatory::RepositoryQuery {
+                host: query.host,
+                query: query.query,
+                active_runs_only: query.active_runs_only.unwrap_or(false),
+                include_removed: query.include_removed.unwrap_or(false),
+                since: query.since,
+                until: query.until,
+            },
+            query.cursor,
+            query.limit.unwrap_or(50),
+        )
+        .await
+    {
+        Ok(page) => Json(observatory_page(page, |repositories| RepositoryResources {
+            repositories,
+        }))
+        .into_response(),
+        Err(error) => respond::<()>(Err(error)),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ObservatoryWorktreesQuery {
+    repository_id: i64,
+    branch: Option<String>,
+    dirty: Option<bool>,
+    include_removed: Option<bool>,
+    cursor: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ObservatoryRepositoryWorktreesQuery {
+    branch: Option<String>,
+    dirty: Option<bool>,
+    include_removed: Option<bool>,
+    cursor: Option<String>,
+    limit: Option<usize>,
+}
+
+async fn observatory_worktrees(
+    State(state): State<ApiState>,
+    Query(query): Query<ObservatoryWorktreesQuery>,
+) -> impl IntoResponse {
+    match state
+        .service
+        .observatory_worktrees(
+            query.repository_id,
+            query.branch,
+            query.dirty,
+            query.include_removed.unwrap_or(false),
+            query.cursor,
+            query.limit.unwrap_or(50),
+        )
+        .await
+    {
+        Ok(page) => Json(observatory_page(page, |worktrees| WorktreeResources {
+            worktrees,
+        }))
+        .into_response(),
+        Err(error) => respond::<()>(Err(error)),
+    }
+}
+
+async fn observatory_repository_worktrees(
+    State(state): State<ApiState>,
+    Path(repository_id): Path<i64>,
+    serde_qs::axum::QsQuery(query): serde_qs::axum::QsQuery<ObservatoryRepositoryWorktreesQuery>,
+) -> impl IntoResponse {
+    match state
+        .service
+        .observatory_worktrees(
+            repository_id,
+            query.branch,
+            query.dirty,
+            query.include_removed.unwrap_or(false),
+            query.cursor,
+            query.limit.unwrap_or(50),
+        )
+        .await
+    {
+        Ok(page) => Json(observatory_page(page, |worktrees| WorktreeResources {
+            worktrees,
+        }))
+        .into_response(),
+        Err(error) => respond::<()>(Err(error)),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ObservatoryRunsQuery {
+    repository_id: Option<i64>,
+    worktree_id: Option<i64>,
+    branch: Option<String>,
+    #[serde(default)]
+    status: Vec<String>,
+    #[serde(default)]
+    tool: Vec<String>,
+    host: Option<String>,
+    query: Option<String>,
+    since: Option<String>,
+    until: Option<String>,
+    active_only: Option<bool>,
+    cursor: Option<String>,
+    limit: Option<usize>,
+}
+
+async fn observatory_runs(
+    State(state): State<ApiState>,
+    serde_qs::axum::QsQuery(query): serde_qs::axum::QsQuery<ObservatoryRunsQuery>,
+) -> impl IntoResponse {
+    match state
+        .service
+        .observatory_runs(
+            observatory::AgentRunQuery {
+                repository_id: query.repository_id,
+                worktree_id: query.worktree_id,
+                branch: query.branch,
+                statuses: query.status,
+                tools: query.tool,
+                host: query.host,
+                query: query.query,
+                since: query.since,
+                until: query.until,
+                active_only: query.active_only.unwrap_or(false),
+            },
+            query.cursor,
+            query.limit.unwrap_or(50),
+        )
+        .await
+    {
+        Ok(page) => Json(observatory_page(page, |runs| RunResources { runs })).into_response(),
+        Err(error) => respond::<()>(Err(error)),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ObservatoryEventsQuery {
+    #[serde(default)]
+    kind: Vec<String>,
+    severity_min: Option<i64>,
+    actor_key: Option<String>,
+    trace_id: Option<String>,
+    query: Option<String>,
+    since: Option<String>,
+    until: Option<String>,
+    include: Option<String>,
+    order: Option<String>,
+    cursor: Option<String>,
+    limit: Option<usize>,
+}
+
+async fn observatory_events(
+    State(state): State<ApiState>,
+    Path(run_key): Path<String>,
+    serde_qs::axum::QsQuery(query): serde_qs::axum::QsQuery<ObservatoryEventsQuery>,
+) -> impl IntoResponse {
+    let asc = query.order.as_deref().is_some_and(|order| order == "asc");
+    if query
+        .order
+        .as_deref()
+        .is_some_and(|order| order != "asc" && order != "desc")
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"invalid_order"})),
+        )
+            .into_response();
+    }
+    let include_payload = match query.include.as_deref() {
+        None => false,
+        Some("payload") => true,
+        Some(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error":"invalid_include"})),
+            )
+                .into_response();
+        }
+    };
+    let response_run_key = run_key.clone();
+    match state
+        .service
+        .observatory_events(
+            run_key,
+            observatory::AgentEventQuery {
+                kinds: query.kind,
+                severity_min: query.severity_min,
+                actor_key: query.actor_key,
+                trace_id: query.trace_id,
+                query: query.query,
+                since: query.since,
+                until: query.until,
+                include_payload,
+            },
+            query.cursor,
+            query.limit.unwrap_or(100),
+            asc,
+        )
+        .await
+    {
+        Ok(page) => Json(observatory_page(page, |events| EventResources {
+            run_key: response_run_key,
+            events,
+        }))
+        .into_response(),
+        Err(error) => respond::<()>(Err(error)),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ObservatoryTelemetryQuery {
+    trace_id: Option<String>,
+    metric_name: Option<String>,
+    since_nano: Option<i64>,
+    until_nano: Option<i64>,
+    span_cursor: Option<String>,
+    metric_cursor: Option<String>,
+    span_limit: Option<usize>,
+    metric_limit: Option<usize>,
+}
+
+async fn observatory_telemetry(
+    State(state): State<ApiState>,
+    Path(run_key): Path<String>,
+    Query(query): Query<ObservatoryTelemetryQuery>,
+) -> impl IntoResponse {
+    respond(
+        state
+            .service
+            .observatory_telemetry(
+                run_key,
+                observatory::TelemetryQuery {
+                    trace_id: query.trace_id,
+                    metric_name: query.metric_name,
+                    since_nano: query.since_nano,
+                    until_nano: query.until_nano,
+                },
+                query.span_cursor,
+                query.metric_cursor,
+                query.span_limit.unwrap_or(100),
+                query.metric_limit.unwrap_or(100),
+            )
+            .await,
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -655,9 +1050,15 @@ async fn log_stream(
     if request.cursor.is_none() {
         request.cursor = last_event_id(&headers);
     }
-    crate::stream::log_stream(state.service, auth, request, state.cursor_keys)
-        .await
-        .into_response()
+    crate::stream::log_stream_with_clients(
+        state.service,
+        auth,
+        request,
+        state.cursor_keys,
+        state.stream_client_permits,
+    )
+    .await
+    .into_response()
 }
 
 async fn session_stream(
@@ -670,20 +1071,6 @@ async fn session_stream(
         request.cursor = last_event_id(&headers);
     }
     crate::stream::session_stream(state.service, auth, request, state.cursor_keys)
-        .await
-        .into_response()
-}
-
-async fn evidence_stream(
-    State(state): State<ApiState>,
-    Extension(auth): Extension<AuthContext>,
-    headers: HeaderMap,
-    Query(mut request): Query<crate::stream::EvidenceStreamRequest>,
-) -> impl IntoResponse {
-    if request.cursor.is_none() {
-        request.cursor = last_event_id(&headers);
-    }
-    crate::stream::evidence_stream(state.service, auth, request, state.cursor_keys)
         .await
         .into_response()
 }
@@ -1299,6 +1686,36 @@ async fn similar_incidents(
                 until: q.until,
                 window_minutes: q.window_minutes,
                 limit: q.limit,
+            })
+            .await,
+    )
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecurringErrorComparisonQuery {
+    signature_hash: Option<String>,
+    since: Option<String>,
+    until: Option<String>,
+    window_minutes: Option<u32>,
+    limit: Option<u32>,
+    include_acknowledged: Option<bool>,
+}
+
+async fn recurring_error_comparison(
+    State(state): State<ApiState>,
+    Query(q): Query<RecurringErrorComparisonQuery>,
+) -> impl IntoResponse {
+    respond(
+        state
+            .service
+            .compare_recurring_errors(RecurringErrorComparisonRequest {
+                signature_hash: q.signature_hash,
+                since: q.since,
+                until: q.until,
+                window_minutes: q.window_minutes,
+                limit: q.limit,
+                include_acknowledged: q.include_acknowledged,
             })
             .await,
     )

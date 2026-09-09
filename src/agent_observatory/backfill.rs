@@ -6,8 +6,7 @@ use crate::db::agent_observatory::{
     AgentSourceKind, GitCommitRow, list_git_commits, page_agent_sources,
 };
 use crate::db::{
-    DbPool, finish_maintenance_job, get_maintenance_job, insert_maintenance_job_with_result,
-    page_agent_projection_logs, update_maintenance_job_progress,
+    DbPool, get_maintenance_job, insert_maintenance_job_with_result, page_agent_projection_logs,
 };
 use anyhow::{Context, Result, bail};
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
@@ -15,10 +14,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
+#[path = "backfill/persistence.rs"]
+mod persistence;
+use persistence::persist;
+
 const JOB_KIND: &str = "agent_observatory_backfill";
 const STATE_VERSION: u32 = 1;
 const MAX_CHUNK_ROWS: usize = 500;
-const SOURCE_COUNT: u8 = 5;
+const SOURCE_COUNT: u8 = 7;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct AgentBackfillHighWater {
@@ -27,6 +30,10 @@ pub struct AgentBackfillHighWater {
     pub hook_events: i64,
     pub skill_events: i64,
     pub llm_invocations: String,
+    #[serde(default)]
+    pub otel_spans: i64,
+    #[serde(default)]
+    pub otel_metric_points: i64,
     pub repository_observations: i64,
 }
 
@@ -37,6 +44,14 @@ pub struct AgentBackfillCursors {
     pub hook_events: String,
     pub skill_events: String,
     pub llm_invocations: String,
+    #[serde(default)]
+    pub otel_spans: String,
+    #[serde(default)]
+    pub otel_metric_points: String,
+    /// Separate from the Git-attribution repair cursor below.  Repository
+    /// observations are a projected source as well as a HEAD-repair input.
+    #[serde(default)]
+    pub repository_observation_events: String,
     pub repository_observations: i64,
 }
 
@@ -111,6 +126,8 @@ fn capture_high_water(pool: &DbPool) -> Result<AgentBackfillHighWater> {
         hook_events: max_id(&tx, "ai_hook_events")?,
         skill_events: max_id(&tx, "ai_skill_events")?,
         llm_invocations: llm_high_water(&tx)?,
+        otel_spans: max_id(&tx, "otel_spans")?,
+        otel_metric_points: max_id(&tx, "otel_metric_points")?,
         repository_observations: max_id(&tx, "repository_observations")?,
     };
     tx.commit()?;
@@ -224,6 +241,11 @@ fn source_cursor_mut(progress: &mut AgentBackfillProgress, kind: AgentSourceKind
         AgentSourceKind::Hook => &mut progress.cursors.hook_events,
         AgentSourceKind::Skill => &mut progress.cursors.skill_events,
         AgentSourceKind::Llm => &mut progress.cursors.llm_invocations,
+        AgentSourceKind::OtelSpan => &mut progress.cursors.otel_spans,
+        AgentSourceKind::OtelMetric => &mut progress.cursors.otel_metric_points,
+        AgentSourceKind::RepositoryObservation => {
+            &mut progress.cursors.repository_observation_events
+        }
     }
 }
 
@@ -233,6 +255,11 @@ fn source_high_water(progress: &AgentBackfillProgress, kind: AgentSourceKind) ->
         AgentSourceKind::Hook => progress.high_water.hook_events.to_string(),
         AgentSourceKind::Skill => progress.high_water.skill_events.to_string(),
         AgentSourceKind::Llm => progress.high_water.llm_invocations.clone(),
+        AgentSourceKind::OtelSpan => progress.high_water.otel_spans.to_string(),
+        AgentSourceKind::OtelMetric => progress.high_water.otel_metric_points.to_string(),
+        AgentSourceKind::RepositoryObservation => {
+            progress.high_water.repository_observations.to_string()
+        }
     }
 }
 
@@ -437,15 +464,6 @@ fn process_observations(
     Ok((consumed, done))
 }
 
-fn persist(pool: &DbPool, job_id: i64, progress: &AgentBackfillProgress) -> Result<()> {
-    let encoded = encode(progress)?;
-    if progress.done {
-        finish_maintenance_job(pool, job_id, "done", &encoded)
-    } else {
-        update_maintenance_job_progress(pool, job_id, &encoded)
-    }
-}
-
 /// Process at most `row_budget` durable source/HEAD rows and persist progress.
 /// Calling this repeatedly resumes from the last durable job checkpoint.
 pub fn run_agent_backfill_chunk(
@@ -471,6 +489,18 @@ pub fn run_agent_backfill_chunk(
             2 => process_source(pool, &mut job.progress, AgentSourceKind::Hook, remaining)?,
             3 => process_source(pool, &mut job.progress, AgentSourceKind::Skill, remaining)?,
             4 => process_source(pool, &mut job.progress, AgentSourceKind::Llm, remaining)?,
+            5 => process_source(
+                pool,
+                &mut job.progress,
+                AgentSourceKind::OtelSpan,
+                remaining,
+            )?,
+            6 => process_source(
+                pool,
+                &mut job.progress,
+                AgentSourceKind::OtelMetric,
+                remaining,
+            )?,
             _ => unreachable!(),
         };
         remaining = remaining.saturating_sub(used);

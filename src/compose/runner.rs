@@ -99,8 +99,8 @@ impl CommandRunner for ProcessRunner {
         };
 
         if timeout_cleanup.as_ref().map(|c| c.reaped).unwrap_or(true) {
-            let _ = out_handle.join();
-            let _ = err_handle.join();
+            join_pipe(out_handle, "stdout")?;
+            join_pipe(err_handle, "stderr")?;
         }
 
         let (stdout, stdout_truncated) = take_buffer(stdout_buf)?;
@@ -139,7 +139,7 @@ fn drain_pipe<R: std::io::Read + Send + 'static>(
     mut reader: R,
     target: std::sync::Arc<std::sync::Mutex<(Vec<u8>, bool)>>,
     limit: usize,
-) -> std::thread::JoinHandle<()> {
+) -> std::thread::JoinHandle<std::io::Result<()>> {
     std::thread::spawn(move || {
         let mut chunk = [0u8; 8192];
         loop {
@@ -150,10 +150,27 @@ fn drain_pipe<R: std::io::Read + Send + 'static>(
                     append_pipe_chunk(&mut guard, &chunk, n, limit);
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(_) => break,
+                Err(error) => return Err(error),
             }
         }
+        Ok(())
     })
+}
+
+#[cfg(test)]
+pub(super) fn drain_pipe_for_test<R: std::io::Read + Send + 'static>(
+    reader: R,
+    target: std::sync::Arc<std::sync::Mutex<(Vec<u8>, bool)>>,
+    limit: usize,
+) -> std::thread::JoinHandle<std::io::Result<()>> {
+    drain_pipe(reader, target, limit)
+}
+
+fn join_pipe(handle: std::thread::JoinHandle<std::io::Result<()>>, stream: &str) -> Result<()> {
+    handle
+        .join()
+        .map_err(|_| anyhow!("{stream} pipe reader panicked"))?
+        .map_err(|error| anyhow!("failed to read {stream} pipe: {error}"))
 }
 
 fn append_pipe_chunk(target: &mut (Vec<u8>, bool), chunk: &[u8], n: usize, limit: usize) {

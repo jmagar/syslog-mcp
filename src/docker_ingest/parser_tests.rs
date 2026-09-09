@@ -293,3 +293,12 @@ fn event(action: &str) -> EventMessage {
         ..Default::default()
     }
 }
+
+#[test]
+fn ordinary_log_word_is_not_a_postgres_severity_marker() {
+    assert_eq!(infer_docker_severity("cannot open log file"), None);
+    assert_eq!(
+        infer_docker_severity("log writer ERROR database unavailable"),
+        Some("err")
+    );
+}

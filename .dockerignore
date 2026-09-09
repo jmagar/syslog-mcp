@@ -25,6 +25,7 @@ logs
 backups
 docs
 scripts
+!scripts/backup.sh
 specs
 *.md
 !README.md

@@ -157,6 +157,24 @@ Cortex writes relevant evidence through many paths: transcript scanner, batch in
 
 The projector fetches a bounded ordered page, projects it inside one SQLite transaction, and advances that source cursor in the same transaction.
 
+### Source completion matrix
+
+The projector reads only durable canonical tables.  A source row never creates
+an agent identity merely to satisfy a projection: records without a safe run
+association are diagnosed and their source cursor is advanced without a run
+event.  This keeps canonical collection independent from the optional AO view.
+
+| Source | Durable order/cursor | Run identity / association | Provenance carried into event | Bounded query evidence |
+| --- | --- | --- | --- | --- |
+| Logs | `logs.id` | classified provider transcript or command identity | source log ID, scrub state, classifier variant | `page_agent_projection_logs`, row and byte cap |
+| MCP | `ai_mcp_events.id` | asserted tool/session/host | call/result log IDs, provider sequence | `id > cursor ORDER BY id LIMIT` |
+| Hooks | `ai_hook_events.id` | asserted tool/session/host | source log ID, trusted hash/evidence kind | `id > cursor ORDER BY id LIMIT` |
+| Skills | `ai_skill_events.id` | asserted tool/session/host | source log ID and extracted evidence kind | `id > cursor ORDER BY id LIMIT` |
+| LLM | `(finished_at,id)` | asserted tool/session where present | terminal-state cursor and bounded metadata | `idx_llm_invocations_finished_id` |
+| OTLP spans | `otel_spans.id` | exact provider identity only | trace/span IDs and explicit match/no-match relation | `id > cursor ORDER BY id LIMIT` |
+| OTLP metrics | `otel_metric_points.id` | asserted tool/session where present | point key, service, bounded attributes | `id > cursor ORDER BY id LIMIT` |
+| Repository observations | `repository_observations.id` | pre-existing current run plus durable worktree evidence; ambiguity/no-match never creates a run | observation key, worktree/repository source, evidence kind/source/trust/confidence, correlated ceiling | primary-key `id > cursor ORDER BY id LIMIT` with bounded join by repository/worktree key |
+
 ### Idempotency
 
 Every projected event has an `event_key`:

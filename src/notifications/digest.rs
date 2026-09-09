@@ -11,6 +11,7 @@ use std::time::Instant;
 
 use anyhow::Result;
 use tokio::sync::Semaphore;
+use tokio_util::sync::CancellationToken;
 
 // Digest runs two aggregate queries over a 24h window — allow 5s before warning.
 const SLOW_DB_MS: u128 = 5_000;
@@ -273,6 +274,7 @@ pub(crate) fn spawn_digest(
     pool: Arc<DbPool>,
     permit_sem: Arc<Semaphore>,
     cfg: NotificationsConfig,
+    token: CancellationToken,
 ) -> Option<tokio::task::JoinHandle<()>> {
     if !cfg.enabled {
         return None;
@@ -296,7 +298,11 @@ pub(crate) fn spawn_digest(
             } else {
                 (60 - seconds_into_minute) * 1000 - millis_into_second
             };
-            tokio::time::sleep(tokio::time::Duration::from_millis(sleep_ms.max(100))).await;
+            tokio::select! {
+                biased;
+                _ = token.cancelled() => break,
+                _ = tokio::time::sleep(tokio::time::Duration::from_millis(sleep_ms.max(100))) => {}
+            }
 
             let now = chrono::Local::now();
             let today = now.date_naive();

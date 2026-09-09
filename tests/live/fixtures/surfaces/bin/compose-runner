@@ -1,0 +1,6 @@
+#!/bin/sh
+# Non-recursive Compose launcher for Docker Desktop. Running the Docker CLI
+# through a program named `docker` causes Desktop's plugin dispatch to consume
+# the compose token twice; this boundary has a distinct executable identity.
+if [ "${1:-}" = compose ]; then shift; fi
+exec "$LIVE_DOCKER_COMPOSE_BIN" "$@"

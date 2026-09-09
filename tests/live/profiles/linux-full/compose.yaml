@@ -1,0 +1,17 @@
+networks:
+  ingress:
+    # Docker suppresses published host ports when every attached network is
+    # internal. Keep the redirector bridge publishable while disabling NAT so
+    # the redirectors still cannot reach external networks on Linux.
+    internal: false
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: "false"
+services:
+  udp-redirector:
+    # The bridge masquerade option is not sufficient on every native daemon.
+    # Remove the namespace's default route, then discard root and NET_ADMIN
+    # before starting the redirector so the executable egress probe is stable.
+    user: "0:0"
+    cap_add: [NET_ADMIN, SETGID, SETUID]
+    environment:
+      REDIRECT_DISABLE_EGRESS: "true"

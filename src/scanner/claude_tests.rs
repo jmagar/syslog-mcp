@@ -75,6 +75,82 @@ fn parse_line_ignores_records_without_message_content() {
 }
 
 #[test]
+fn parse_line_preserves_custom_title_as_metadata_without_treating_it_as_content() {
+    let line = r#"{"type":"custom-title","sessionId":"claude-1","customTitle":"Parser fidelity"}"#;
+    let parsed = parse_line(line, Path::new("/tmp/session.jsonl"), 4)
+        .unwrap()
+        .expect("custom title is a session metadata observation");
+
+    assert!(parsed.message.is_empty());
+    assert_eq!(
+        parsed.session_metadata.title.as_deref(),
+        Some("Parser fidelity")
+    );
+    assert_eq!(
+        parsed.session_metadata.title_provenance.as_deref(),
+        Some("claude.custom-title")
+    );
+    assert_eq!(
+        parsed.session_metadata.source_format.as_deref(),
+        Some("claude_project_jsonl")
+    );
+}
+
+#[test]
+fn parse_line_keeps_agent_name_distinct_from_title() {
+    let line = r#"{"type":"agent-name","sessionId":"claude-1","agentName":"Curie"}"#;
+    let parsed = parse_line(line, Path::new("/tmp/session.jsonl"), 5)
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(parsed.session_metadata.agent_name.as_deref(), Some("Curie"));
+    assert!(parsed.session_metadata.title.is_none());
+}
+
+#[test]
+fn parse_line_extracts_bounded_stable_claude_metadata() {
+    let line = r#"{"type":"assistant","sessionId":"claude-1","cwd":"/work","gitBranch":"feature/x","entrypoint":"cli","effort":"high","version":"2.1.0","message":{"role":"assistant","model":"claude-opus","content":"done"}}"#;
+    let parsed = parse_line(line, Path::new("/tmp/session.jsonl"), 6)
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        parsed.session_metadata.model.as_deref(),
+        Some("claude-opus")
+    );
+    assert_eq!(
+        parsed.session_metadata.git_branch.as_deref(),
+        Some("feature/x")
+    );
+    assert_eq!(parsed.session_metadata.entrypoint.as_deref(), Some("cli"));
+    assert_eq!(parsed.session_metadata.effort.as_deref(), Some("high"));
+    assert_eq!(
+        parsed.session_metadata.client_version.as_deref(),
+        Some("2.1.0")
+    );
+}
+
+#[test]
+fn session_metadata_rejects_control_characters_and_clamps_length() {
+    let long_title = "x".repeat(MAX_SESSION_METADATA_CHARS + 20);
+    let value = serde_json::json!({
+        "type": "custom-title",
+        "sessionId": "claude-1",
+        "customTitle": long_title,
+        "gitBranch": "bad\nbranch"
+    });
+    let parsed = parse_line(&value.to_string(), Path::new("/tmp/session.jsonl"), 7)
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        parsed.session_metadata.title.unwrap().chars().count(),
+        MAX_SESSION_METADATA_CHARS
+    );
+    assert!(parsed.session_metadata.git_branch.is_none());
+}
+
+#[test]
 fn parse_line_carries_the_raw_parsed_value() {
     let line = r#"{"sessionId":"sess-1","content":"hi","attributionSkill":"cortex-troubleshoot"}"#;
     let parsed = parse_line(line, Path::new("/tmp/x.jsonl"), 0)

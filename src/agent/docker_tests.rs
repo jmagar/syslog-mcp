@@ -286,3 +286,21 @@ fn clean_event_stream_eof_is_a_restartable_error() {
     let error = event_stream_ended().unwrap_err();
     assert!(error.to_string().contains("ended unexpectedly"));
 }
+
+#[test]
+fn forwarded_log_severity_preserves_structured_levels_and_fallbacks() {
+    for (stderr, message, expected) in [
+        (
+            false,
+            r#"{"level":"error","message":"database unavailable"}"#,
+            local0_pri(3),
+        ),
+        (true, "\u{1b}[32mINFO\u{1b}[0m listening", PRI_LOCAL0_INFO),
+        (true, "cannot open log file", PRI_LOCAL0_WARN),
+        (true, "log writer ERROR database unavailable", local0_pri(3)),
+        (false, "connection accepted", PRI_LOCAL0_INFO),
+        (true, "level=debug cache lookup", local0_pri(7)),
+    ] {
+        assert_eq!(docker_log_pri(stderr, message), expected, "{message}");
+    }
+}

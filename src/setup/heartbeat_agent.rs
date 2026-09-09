@@ -15,6 +15,7 @@ use super::{
 };
 
 const UNIT_NAME: &str = "cortex-heartbeat-agent.service";
+const PRESERVE_ENV: &str = "CORTEX_SETUP_PRESERVE_HEARTBEAT_ENV";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ServiceBackend {
@@ -296,6 +297,12 @@ fn write_heartbeat_agent_env(env_path: &Path) -> io::Result<SetupPhase> {
     let timer = PhaseTimer::start("heartbeat-agent-env");
     if let Some(parent) = env_path.parent() {
         std::fs::create_dir_all(parent)?;
+    }
+    if crate::env::var(PRESERVE_ENV).as_deref() == Ok("1") && env_path.is_file() {
+        return Ok(timer.finish(
+            SetupStatus::Ok,
+            format!("preserved existing {}", env_path.display()),
+        ));
     }
     let existing = if env_path.exists() {
         load_private_agent_env(env_path)?

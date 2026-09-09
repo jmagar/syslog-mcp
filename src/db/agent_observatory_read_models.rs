@@ -1,4 +1,21 @@
 use serde::{Deserialize, Serialize};
+
+fn serialize_id<S>(value: &i64, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(&value.to_string())
+}
+
+fn serialize_optional_id<S>(value: &Option<i64>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match value {
+        Some(value) => serializer.serialize_some(&value.to_string()),
+        None => serializer.serialize_none(),
+    }
+}
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct RepositoryQuery {
     pub host: Option<String>,
@@ -65,6 +82,7 @@ pub struct RunTelemetryIdentity {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ObservatoryRepositoryRow {
+    #[serde(serialize_with = "serialize_id")]
     pub id: i64,
     pub key: String,
     pub hostname: String,
@@ -78,8 +96,10 @@ pub struct ObservatoryRepositoryRow {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ObservatoryWorktreeRow {
+    #[serde(serialize_with = "serialize_id")]
     pub id: i64,
     pub key: String,
+    #[serde(serialize_with = "serialize_id")]
     pub repository_id: i64,
     pub hostname: String,
     pub path: String,
@@ -105,6 +125,7 @@ pub struct ObservatoryWorktreeRow {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ObservatoryRunRow {
+    #[serde(serialize_with = "serialize_id")]
     pub id: i64,
     pub run_key: String,
     pub native_session_id: String,
@@ -118,6 +139,7 @@ pub struct ObservatoryRunRow {
     pub last_activity_at: String,
     pub ended_at: Option<String>,
     pub transcript_path: Option<String>,
+    #[serde(serialize_with = "serialize_optional_id")]
     pub primary_worktree_id: Option<i64>,
     pub primary_branch: Option<String>,
     pub start_head_sha: Option<String>,
@@ -128,10 +150,12 @@ pub struct ObservatoryRunRow {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ObservatoryEventRow {
+    #[serde(serialize_with = "serialize_id")]
     pub id: i64,
     pub event_key: String,
     pub run_key: String,
     pub actor_key: Option<String>,
+    #[serde(serialize_with = "serialize_optional_id")]
     pub worktree_id: Option<i64>,
     pub commit_sha: Option<String>,
     pub observed_at: String,
@@ -139,6 +163,7 @@ pub struct ObservatoryEventRow {
     pub kind: String,
     pub source_kind: String,
     pub source_id: String,
+    #[serde(serialize_with = "serialize_optional_id")]
     pub source_log_id: Option<i64>,
     pub provider_sequence: Option<i64>,
     pub trace_id: Option<String>,
@@ -151,6 +176,7 @@ pub struct ObservatoryEventRow {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ObservatorySpanRow {
+    #[serde(serialize_with = "serialize_id")]
     pub id: i64,
     pub trace_id: String,
     pub span_id: String,
@@ -164,9 +190,15 @@ pub struct ObservatorySpanRow {
     pub status_message: Option<String>,
     pub service_name: Option<String>,
     pub attributes_json: String,
+    pub relation_namespace: String,
+    pub relation_evidence_kind: String,
+    pub relation_confidence: f64,
+    pub relation_reason: String,
+    pub relation_candidate_count: i64,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ObservatoryMetricRow {
+    #[serde(serialize_with = "serialize_id")]
     pub id: i64,
     pub point_key: String,
     pub metric_name: String,

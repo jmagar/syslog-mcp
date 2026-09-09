@@ -1,0 +1,1 @@
+{"schema":"cortex-live-legacy-central-pull-v1","schema_version":1,"profile":"legacy-central-pull","compatibility_only":true,"mandatory_case":"legacy-docker.live","transport":"controlled-remote-docker-http-mock","surfaces":["mcp","rest","cli"],"cleanup":"canonical-resource-manifest"}

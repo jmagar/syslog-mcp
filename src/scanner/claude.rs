@@ -3,7 +3,9 @@ use std::path::Path;
 use anyhow::Result;
 use serde_json::Value;
 
-use super::{ParsedTranscriptRecord, record_key_from_line};
+use super::{ParsedTranscriptRecord, TranscriptSessionMetadata, record_key_from_line};
+
+const MAX_SESSION_METADATA_CHARS: usize = 512;
 
 pub fn parse_line(
     line: &str,
@@ -12,9 +14,16 @@ pub fn parse_line(
 ) -> Result<Option<ParsedTranscriptRecord>> {
     let value: Value = serde_json::from_str(line)?;
     let message = extract_message(&value);
-    if message.is_empty() {
+    let mut session_metadata = extract_session_metadata(&value);
+    let has_structured_evidence = line.contains("attributionSkill") || line.contains("hook_");
+    if message.is_empty()
+        && session_metadata == TranscriptSessionMetadata::default()
+        && !has_structured_evidence
+    {
         return Ok(None);
     }
+    session_metadata.model_provider = Some("anthropic".to_string());
+    session_metadata.source_format = Some("claude_project_jsonl".to_string());
     let session_id = value
         .get("sessionId")
         .or_else(|| value.get("session_id"))
@@ -32,8 +41,41 @@ pub fn parse_line(
         session_id,
         ai_project: extract_project(&value),
         event_kind: super::transcript_event_kind(&value),
+        session_metadata,
         raw_value: Some(value),
     }))
+}
+
+fn extract_session_metadata(value: &Value) -> TranscriptSessionMetadata {
+    let title = (value.get("type").and_then(Value::as_str) == Some("custom-title"))
+        .then(|| metadata_string(value.get("customTitle")))
+        .flatten();
+    let agent_name = (value.get("type").and_then(Value::as_str) == Some("agent-name"))
+        .then(|| metadata_string(value.get("agentName")))
+        .flatten();
+
+    TranscriptSessionMetadata {
+        title_provenance: title.as_ref().map(|_| "claude.custom-title".to_string()),
+        title,
+        agent_name,
+        model: metadata_string(value.pointer("/message/model")),
+        model_provider: None,
+        client_version: metadata_string(value.get("version")),
+        git_branch: metadata_string(value.get("gitBranch")),
+        entrypoint: metadata_string(value.get("entrypoint")),
+        effort: metadata_string(value.get("effort")),
+        source: metadata_string(value.get("origin")),
+        thread_source: metadata_string(value.get("promptSource")),
+        source_format: None,
+    }
+}
+
+fn metadata_string(value: Option<&Value>) -> Option<String> {
+    let value = value?.as_str()?.trim();
+    if value.is_empty() || value.chars().any(char::is_control) {
+        return None;
+    }
+    Some(value.chars().take(MAX_SESSION_METADATA_CHARS).collect())
 }
 
 fn extract_project(value: &Value) -> Option<String> {

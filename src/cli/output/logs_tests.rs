@@ -11,6 +11,22 @@ fn search_json_output_accepts_empty_response() {
 }
 
 #[test]
+fn session_title_display_escapes_terminal_controls_from_legacy_rows() {
+    let displayed = safe_session_title(Some("safe\u{1b}[31m title\nspoofed"), 80);
+
+    assert!(!displayed.chars().any(char::is_control));
+    assert_eq!(displayed, "safe\\u{1b}[31m title\\nspoofed");
+}
+
+#[test]
+fn session_fields_redact_credentials_before_terminal_output() {
+    assert_eq!(
+        safe_session_field("project token=do-not-print"),
+        "project [REDACTED]"
+    );
+}
+
+#[test]
 fn human_log_summary_outputs_accept_representative_payloads() {
     print_search_response(
         &cortex::app::SearchLogsResponse {
@@ -82,6 +98,8 @@ fn human_ai_inventory_outputs_accept_truncated_and_context_payloads() {
                 first_seen: "2026-06-12T00:00:00Z".to_string(),
                 last_seen: "2026-06-13T00:00:00Z".to_string(),
                 event_count: 4,
+                title: Some("Investigate storage latency".to_string()),
+                title_provenance: Some("user".to_string()),
             }],
             rollup_as_of: Some("2026-06-13T00:00:00Z".to_string()),
         },
@@ -180,6 +198,8 @@ fn human_correlate_and_ai_search_outputs_accept_contextual_payloads() {
                 event_count: 4,
                 match_count: 2,
                 best_snippet: Some("snippet".to_string()),
+                title: Some("Investigate storage latency".to_string()),
+                title_provenance: Some("user".to_string()),
             }],
             limit_clamped_to: Some(100),
         },

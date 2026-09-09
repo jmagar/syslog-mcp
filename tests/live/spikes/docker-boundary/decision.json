@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "issue_record": "decision.json substitutes for the bead decision comment because local tracker routing was unavailable",
+  "selected_full_candidate": "linux-dind",
+  "selected_portable_candidate": "desktop-proxy",
+  "linux_dind": {
+    "disposition": "full-certification",
+    "privilege": "explicit-opt-in-privileged-inner-daemon",
+    "authority_gate": "CORTEX_LIVE_DIND_AUTHORIZED=1",
+    "host_socket": false,
+    "host_mounts": false,
+    "external_egress": false,
+    "budget_seconds": 600,
+    "cleanup_proof": "exact inner IDs before daemon death; exact outer run-owned compose IDs after daemon death"
+  },
+  "desktop_proxy": {
+    "disposition": "platform-qualified",
+    "privilege": "none",
+    "authority_gate": "explicit loopback CORTEX_LIVE_DOCKER_PROXY_URL",
+    "host_socket": false,
+    "budget_seconds": 120,
+    "unsupported": ["daemon-restart", "daemon-death-cleanup", "controlled-oom"]
+  },
+  "fail_closed": ["missing-authority", "identity-change", "partial-provision", "forged-label", "proxy-outage", "cleanup-unverified"]
+}

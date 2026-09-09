@@ -155,7 +155,7 @@ pub(super) fn extract_cef_fields(text: &str) -> CefFields {
 ///
 /// `source_ip` is the actual network sender address (e.g. "192.168.1.10:514"),
 /// recorded separately from the hostname claimed in the message body.
-pub(super) fn parse_syslog(raw: &str, source_ip: String) -> db::LogBatchEntry {
+pub(crate) fn parse_syslog(raw: &str, source_ip: String) -> db::LogBatchEntry {
     let msg = syslog_loose::parse_message(raw, syslog_loose::Variant::Either);
 
     let severity_num = msg.severity.map(|s| s as u8).unwrap_or(6);

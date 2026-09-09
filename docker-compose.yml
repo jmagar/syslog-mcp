@@ -23,7 +23,7 @@ services:
       # Accept the Host header used by the Labby gateway when it proxies this
       # service over the docker network (http://cortex:3100/mcp). Without this,
       # RMCP Host validation rejects gateway calls with "Host header is not allowed".
-      CORTEX_ALLOWED_HOSTS: "cortex,cortex:3100"
+      CORTEX_ALLOWED_HOSTS: "cortex,cortex:3100,${CORTEX_ALLOWED_HOSTS:-}"
     ports:
       # Syslog ingestion must be reachable by remote forwarders — published wide.
       # Restrict senders with CORTEX_ALLOWED_SOURCE_CIDRS if needed.
@@ -45,6 +45,13 @@ services:
       - ${CORTEX_SSH_VOLUME:-${HOME}/.cortex/ssh}:/home/cortex/.ssh:ro
       - ${CORTEX_WORKSPACE_VOLUME:-${HOME}/workspace}:/home/cortex/workspace:ro
       - ${CORTEX_DATA_VOLUME:-cortex-data}:/data
+      # Backups must live outside the data volume so volume loss does not take
+      # both the database and its recovery copy.
+      - type: bind
+        source: ${CORTEX_BACKUP_DIR:-${HOME}/.cortex/backups}
+        target: /backups
+        bind:
+          create_host_path: false
       # Managed file-tail ingest can only read paths mounted under this root.
       # Point CORTEX_FILE_TAIL_LOG_VOLUME at /var/log, /mnt/user/appdata, or a
       # narrower log directory. Keep it read-only.

@@ -1,0 +1,41 @@
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
+const { chromium } = require(process.env.LIVE_PLAYWRIGHT_CORE);
+
+const base = process.env.LIVE_CORTEX_URL;
+const browser = await chromium.launch({executablePath: process.env.LIVE_BROWSER_EXECUTABLE, headless: true});
+const page = await browser.newPage();
+const consoleErrors = [];
+const responseFailures = [];
+const requestFailures = [];
+page.on("console", message => { if (message.type() === "error") consoleErrors.push(message.text()); });
+page.on("pageerror", error => consoleErrors.push(error.message));
+page.on("response", response => {
+  if (response.status() >= 400) responseFailures.push({status: response.status(), url: response.url()});
+});
+page.on("requestfailed", request => requestFailures.push({url: request.url(), error: request.failure()?.errorText || "unknown"}));
+await page.goto(base + "/app", {waitUntil: "networkidle"});
+await page.locator("#api-token").fill(process.env.LIVE_API_TOKEN);
+await page.locator("[data-token-form]").evaluate(form => form.requestSubmit());
+await page.waitForFunction(() => document.querySelector("[data-log-count]")?.textContent !== "--");
+const connected = await page.locator("[data-server-version]").textContent();
+await page.locator("#ask-input").fill(`What emitted logs for ${process.env.MCP_LIVE_HOST}?`);
+await page.locator("[data-ask-form]").evaluate(form => form.requestSubmit());
+await page.waitForFunction(() => !document.querySelector("[data-answer-stack]")?.textContent.includes("Enter a token"));
+const rendered = await page.locator("[data-answer-stack]").textContent();
+await page.locator("[data-clear-token]").click();
+await page.locator("#api-token").fill("intentionally-wrong-token");
+await page.locator("[data-token-form]").evaluate(form => form.requestSubmit());
+await page.waitForFunction(() => /unauthorized|failed|token/i.test(document.querySelector("[data-answer-stack]")?.textContent || ""));
+const authFailure = await page.locator("[data-answer-stack]").textContent();
+await page.route("**/api/v1/investigations/ask", route => route.abort("failed"));
+await page.locator("#api-token").fill(process.env.LIVE_API_TOKEN);
+await page.locator("[data-token-form]").evaluate(form => form.requestSubmit());
+await page.locator("#ask-input").fill("force api failure");
+await page.locator("[data-ask-form]").evaluate(form => form.requestSubmit());
+await page.waitForFunction(() => /failed|error|unable/i.test(document.querySelector("[data-answer-stack]")?.textContent || ""));
+const apiFailure = await page.locator("[data-answer-stack]").textContent();
+const storage = await page.evaluate(() => ({local: {...localStorage}, session: {...sessionStorage}}));
+process.stdout.write(JSON.stringify({connected, rendered, successfulQuery: !/ask failed|not found|error/i.test(rendered || ""), authFailure, apiFailure, consoleErrors, responseFailures, requestFailures, storage}));
+await browser.close();

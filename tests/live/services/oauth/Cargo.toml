@@ -1,0 +1,16 @@
+[package]
+name = "cortex-live-oauth"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+axum = "0.8"
+base64 = "0.22"
+cortex = { path = "../../../..", features = ["test-support"] }
+lab-auth = { git = "https://github.com/dinglebear-ai/labby.git", rev = "87cec3241f9baef22335de9cc8629ebbcd8ba047", package = "lab-auth" }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }

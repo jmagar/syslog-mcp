@@ -80,6 +80,7 @@ fn request_parts_to_params(req: FilterRequestParts) -> ServiceResult<SearchParam
         host: req.hostname.clone(),
         source: req.source_ip.clone(),
         source_ip_prefix: None,
+        source_ip_prefixes: None,
         severity,
         severity_in: None,
         app: req.app_name.clone(),
@@ -139,10 +140,16 @@ fn apply_log_filter_aliases(
             params.source_ip_prefix = Some("agent-command://".to_string());
         }
         Some("shell-history") => {
-            params.source_ip_prefix = Some("shell-history://".to_string());
+            params.source_ip_prefixes = Some(vec![
+                "shell-history://".to_string(),
+                "agent-shell-history://".to_string(),
+            ]);
         }
         Some("file-tail") => {
             params.source_ip_prefix = Some("file-tail://".to_string());
+        }
+        Some("agent-file-tail") => {
+            params.source_ip_prefix = Some("agent-file-tail://".to_string());
         }
         Some("claude") | Some("claude-transcript") => {
             apply_source_kind_tool_alias(params, "claude")?;
@@ -164,7 +171,7 @@ fn apply_log_filter_aliases(
         }
         Some(other) => {
             return Err(ServiceError::InvalidInput(format!(
-                "unsupported source_kind '{other}'. Supported: docker-stream, docker-event, agent-command, shell-history, file-tail, transcript, claude, codex, gemini"
+                "unsupported source_kind '{other}'. Supported: docker-stream, docker-event, agent-command, shell-history, file-tail, agent-file-tail, transcript, claude, codex, gemini"
             )));
         }
     }

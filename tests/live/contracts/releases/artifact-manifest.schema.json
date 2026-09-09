@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cortex.invalid/live/artifact-manifest.schema.json",
+  "type": "object",
+  "required": ["schema", "release", "artifacts"],
+  "properties": {
+    "schema": {"const": "cortex-live-artifact-manifest-v1"},
+    "release": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "artifacts": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "kind", "origin", "path", "sha256", "platform"],
+        "properties": {
+          "name": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$"},
+          "kind": {"enum": ["binary", "archive", "container", "plugin", "mcpb", "generated-cli"]},
+          "origin": {"type": "string", "pattern": "^(https://github.com/dinglebear-ai/cortex/releases/|https://ghcr.io/v2/dinglebear-ai/cortex/|file://)"},
+          "path": {"type": "string"},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "platform": {"enum": ["linux-amd64", "linux-arm64", "darwin-arm64", "windows-amd64", "any"]},
+          "signature": {"type": ["object", "null"]}
+        },
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {"properties": {"origin": {"pattern": "^https://"}}, "required": ["origin"]},
+            "then": {
+              "required": ["signature"],
+              "properties": {
+                "signature": {
+                  "type": "object",
+                  "required": ["type", "identity", "issuer", "bundle"],
+                  "properties": {
+                    "type": {"enum": ["cosign-blob", "cosign-image"]},
+                    "identity": {"type": "string", "minLength": 1},
+                    "issuer": {"type": "string", "format": "uri"},
+                    "bundle": {"type": "string", "minLength": 1}
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          {
+            "if": {"properties": {"origin": {"pattern": "^file://"}}, "required": ["origin"]},
+            "then": {"properties": {"signature": {"type": ["null"]}}}
+          }
+        ]
+      }
+    }
+  },
+  "additionalProperties": false
+}

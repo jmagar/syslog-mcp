@@ -158,10 +158,10 @@ fn field_limit_is_deterministic_and_reports_omitted_count() {
         .collect::<Vec<_>>();
     let out = private_attributes(&attrs, 3, &AgentObservatoryPrivacyConfig::default());
     let object = out.as_object().unwrap();
-    assert_eq!(object["_omitted_fields"], 5);
+    assert_eq!(object["_omitted_fields"], 6);
     assert!(object.contains_key("custom.0"));
     assert!(object.contains_key("custom.1"));
-    assert!(object.contains_key("custom.2"));
+    assert!(!object.contains_key("custom.2"));
 }
 
 #[test]

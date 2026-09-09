@@ -24,13 +24,14 @@ updated: 2026-07-30
 
 ## Endpoint matrix
 
-66 routes total. Scope is `read` (mounted via `axum::routing::get`,
-hits read-side `db_permits`) or `admin` (POST + `MAINTENANCE_PERMIT`
-single-flight, audited via `tracing::warn!` before the service call).
+93 method/path bindings total. Scope is `read` (mounted via `axum::routing::get`,
+hits read-side `db_permits`) or `admin`. Database maintenance and integrity
+checks share one process-wide maintenance gate; concurrent attempts receive a
+busy response. Admin mutations are audited before the service call.
 All responses are JSON; error bodies are `{"error": "<message>"}`
 unless a route documents a structured diagnostic body.
 
-### Core queries and discovery (9)
+### Core queries, discovery, and streams (13)
 
 These existed before the epic; bead `.1` only added `/api/version`.
 They are documented here for completeness because the CLI now routes
@@ -51,7 +52,27 @@ to them by default.
 | GET | `/api/integration-profile` | read | (none) | `CortexIntegrationProfileV1` | 200, 401 | Y | Runtime identity conforming to `contracts/integration-profile.schema.json`; stable server ID, mounted auth modes/generation, route support, and SSE resume support are reported together. |
 | GET | `/api/streams/logs` | read | query: `cursor?`, `host?`, `app?`, `severity?`; or `Last-Event-ID` | SSE snapshot, log events, typed control events | 200, 400, 401, 403, 410, 429, 503 | Y | Durable ascending `logs.id` replay. Cursors bind principal and filter lineage. Batches are capped at 100 items/128 KiB and individual messages at 64 KiB. |
 | GET | `/api/streams/sessions` | read | query: `project`, `tool`, `session_id`, `host` (all REQUIRED), `cursor?`; or `Last-Event-ID` | SSE snapshot, session events, typed control events | 200, 400, 401, 403, 410, 429, 503 | Y | Same durable envelope and bounds as log streaming, restricted to one rendered-session identity. Retention gaps and cursor expiry require explicit resync. |
-| GET | `/api/streams/evidence` | read | query: exact `branch?` or absolute `worktree?` (at least one REQUIRED), `kinds?`, `since?`, `until?`, `include_payload?`, `history_limit?`, `cursor?`; or `Last-Event-ID` | SSE snapshot, historical and live evidence events, typed gap/truncation controls | 200, 400, 401, 403, 410, 429, 503 | Y | Agent Observatory projection scoped to the selected Git identity. Opaque cursors bind principal and filters; payload strings are scrubbed before emission. |
+
+### Recurring error comparison (1)
+
+| Method | Path | Scope | Request | Response (top-level) | Status codes | Idempotent | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| GET | `/api/recurring-error-comparison` | read | query: `signature_hash?`, `since?`, `until?`, `window_minutes?` (5..1440), `limit?` (1..50), `include_acknowledged?` | `RecurringErrorComparisonResponse { focal_from, focal_to, baseline_from, baseline_to, candidate_rows, candidate_cap, candidate_window_truncated, results_truncated, privacy_policy, comparisons }` | 200, 400, 401, 503, 500 | Y | Compares canonical recurring-error signatures in the focal window against the adjacent baseline. Candidates are capped at 512 before deterministic ranking; response text is irreversibly scrubbed and bounded. Each bundle has a replayable SHA-256 identity over canonical source keys, evidence revision, window, and privacy policy, plus bounded graph evidence handles and an explicit next graph query. Boundary/retention/projection gaps are markers, not silent zeroes; rankings are evidence-led and do not claim causation. MCP: `recurring_error_comparison` (`cortex:read`). |
+
+### Agent Observatory (5 canonical routes plus 5 compatibility aliases)
+
+All Agent Observatory endpoints are read-only, token-gated, cursor-paged, and
+return source-attributed, redacted projection data. The `/api/agent-observatory/*`
+spellings are canonical; the shorter forms remain explicitly contracted
+compatibility routes.
+
+| Method | Path | Scope | Request | Response (top-level) | Status codes | Idempotent | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| GET | `/api/agent-observatory/repositories` | read | `host?`, `query?`, `active_runs_only?`, `include_removed?`, `since?`, `until?`, `cursor?`, `limit?` | paged repositories | 200, 400, 401, 503, 500 | Y | Canonical repository inventory. `/api/repositories` is retained compatibility. |
+| GET | `/api/agent-observatory/worktrees` | read | `repository_id` (required), `branch?`, `dirty?`, `include_removed?`, `cursor?`, `limit?` | paged worktrees | 200, 400, 401, 503, 500 | Y | `/api/repositories/{repository_id}/worktrees` is retained compatibility. |
+| GET | `/api/agent-observatory/runs` | read | `repository_id?`, `worktree_id?`, `branch?`, repeated `status?` / `tool?`, `host?`, `query?`, `since?`, `until?`, `active_only?`, `cursor?`, `limit?` | paged runs | 200, 400, 401, 503, 500 | Y | `/api/agent-runs` is retained compatibility. |
+| GET | `/api/agent-observatory/runs/{run_key}/events` | read | repeated `kind?`, `severity_min?`, `actor_key?`, `trace_id?`, `query?`, `since?`, `until?`, `include=payload?`, `order?`, `cursor?`, `limit?` | paged events | 200, 400, 401, 404, 503, 500 | Y | Payload inclusion remains bounded and scrubbed. `/api/agent-runs/{run_key}/events` is retained compatibility. |
+| GET | `/api/agent-observatory/runs/{run_key}/telemetry` | read | `trace_id?`, `metric_name?`, nanosecond bounds, independent span/metric cursors and limits | spans and metrics | 200, 400, 401, 404, 503, 500 | Y | `/api/agent-runs/{run_key}/telemetry` is retained compatibility. |
 
 ### Artifact ecosystem evidence (2) — W16
 
@@ -103,8 +124,8 @@ to them by default.
 | Method | Path | Scope | Request | Response (top-level) | Status codes | Idempotent | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | GET | `/api/db/status` | read | (none) | `DbMaintenanceStatus { db_path, page_count, freelist_count, page_size, logical_size_bytes, physical_size_bytes, wal_size_bytes?, shm_size_bytes?, sqlite_page_cache_mb, sqlite_page_cache_kib_per_connection, sqlite_mmap_mb, sqlite_mmap_bytes, heavy_read_concurrency, wal_checkpoint_mb, wal_checkpoint_threshold_bytes, cgroup_memory_status, cgroup_memory_max_bytes?, cgroup_memory_current_bytes?, cgroup_memory_peak_bytes?, auto_vacuum, journal_mode, integrity_ok?, integrity_messages: [String] }` | 200, 401, 503, 500 | Y | DIFFERENT shape from `/api/stats`: a maintenance-focused PRAGMA/cache/WAL/cgroup snapshot. Cgroup diagnostics expose a compact status plus numeric values only; cgroup file paths and read errors are not returned. Bypasses `MAINTENANCE_PERMIT`. |
-| GET | `/api/db/integrity` | read | query: `quick?` (bool — default `false` runs full `PRAGMA integrity_check`; `true` runs `PRAGMA quick_check`). `deny_unknown_fields`. | `DbIntegrityResult` | 200, 400, 401, 503, 500 | Y | Full check on a multi-GB DB can be slow but does NOT take `MAINTENANCE_PERMIT`. |
-| POST | `/api/db/integrity/background` | **admin** | query: `quick?` (bool). | `DbIntegrityJobStarted { job_id, status }` | 200, 400, 401, **403**, 500 | **N** | Requires the admin header. Starts a server-side background integrity job; poll `/api/db/integrity/jobs/{id}` for the outcome. |
+| GET | `/api/db/integrity` | read | query: `quick?` (bool — default `false` runs full `PRAGMA integrity_check`; `true` runs `PRAGMA quick_check`). `deny_unknown_fields`. | `DbIntegrityResult` | 200, 400, 401, 503, 500 | Y | Full check can scan a multi-GB DB. Single-flight with other maintenance; concurrent attempts return busy. |
+| POST | `/api/db/integrity/background` | **admin** | query: `quick?` (bool). | `DbIntegrityJobStarted { job_id, status }` | 200, 400, 401, **403**, 503, 500 | **N** | Requires the admin header. Starts one single-flight server-side background integrity job; poll `/api/db/integrity/jobs/{id}`. Concurrent maintenance is rejected. |
 | GET | `/api/db/integrity/jobs/{id}` | read | path: `id` (i64). | `MaintenanceJobStatus` | 200, 401, 404, 503, 500 | Y | Polls a background integrity job. |
 | POST | `/api/db/checkpoint` | **admin** | body: `{ "mode": "passive" \| "full" \| "restart" \| "truncate" }`. Validated handler-side BEFORE the service call (eng-review #A17). | `DbCheckpointResult { mode, busy, log_frames, checkpointed_frames, complete }` | 200, 400, 401, **403**, **409**, 500 | **N** | Requires the admin header. Single-flight via `MAINTENANCE_PERMIT`; 409 on contention. `caller_ip` audit-logged before service call. `passive` can return `complete=false` with 200 while active writers prevent a full drain; stricter modes still return 409 when incomplete. |
 | POST | `/api/db/vacuum` | **admin** | body: `{ "full": bool, "force"?: bool, "incremental_pages"?: u32 }`. `force` is `Option<bool>` so the size pre-flight only relaxes on explicit `"force": true`. | `DbVacuumResult` (incl. `after_physical_size_bytes`) | 200, 400, 401, **403**, **409**, 500 | **N** | Requires the admin header. Single-flight via `MAINTENANCE_PERMIT`. Size pre-flight: `full && !force` reads the LIVE `page_count * page_size` (no cached snapshot) on every call and returns 409 if logical size > **2 GB**. `caller_ip` audit-logged before service call. See "VACUUM on large DBs" below. |
@@ -126,7 +147,7 @@ to them by default.
 | GET | `/api/graph/explain` | read | query: entity selector, `depth?` (clamped to 3), `beam_width?`, `max_chains?`, `evidence_sample_limit?`, `payload_budget?` | `GraphExplainResponse { resolved_entity, chains, narrative, open_questions, missing_evidence, next_queries, metadata }` | 200, 400, 401, 404, 503, 500 | Y | Deterministic evidence-backed explanation; weak evidence becomes open questions, not causal claims. |
 | GET | `/api/graph/evidence` | read | query: `evidence_id` (REQUIRED, minimum 1), `payload_budget?` | `GraphEvidenceLookupResponse { evidence, relationship, src_entity, dst_entity, source_log_summary?, missing_source_reason?, metadata }` | 200, 400, 401, 404, 503, 500 | Y | Proof lookup for one evidence row. Source summaries are redacted/truncated and exclude raw frames and raw metadata. |
 
-**Total: 66 routes** (current `src/api.rs` router surface, including syslog,
+**Total: 93 method/path bindings** (current surface registry, including syslog,
 surface-parity, AI, graph, compose, notification, error-ack, and DB routes;
 includes the 3 hook routes above, added alongside the `ai_hook_events`
 subsystem).

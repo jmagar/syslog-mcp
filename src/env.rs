@@ -261,6 +261,7 @@ mod tests {
     /// process-global leak that replacing `PATH` was.
     #[cfg(unix)]
     #[test]
+    #[serial_test::serial]
     fn masking_hides_a_resolvable_program_and_lifts_on_drop() {
         // Restore the effective PATH: `remove_test_var` masks the key outright,
         // which would leave every later test in this binary with no PATH at all.

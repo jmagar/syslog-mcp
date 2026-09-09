@@ -614,7 +614,7 @@ pub(crate) async fn run_ai_smoke_watch(mode: &CliMode, args: OutputArgs) -> Resu
     let response = ai_smoke_watch(service).await?;
     print_ai_smoke_watch_response(&response, args.json)?;
     if !response.pruned_missing_checkpoint {
-        bail!("AI watch smoke checkpoint was not pruned within 30s");
+        bail!("AI watch smoke checkpoint was not pruned within 60s");
     }
     Ok(())
 }

@@ -111,6 +111,8 @@ async fn run_ai_watch_service_setup_install_check_and_remove_round_trip() {
     std::fs::create_dir_all(home.join(".claude/projects")).unwrap();
     std::fs::create_dir_all(home.join(".codex/sessions")).unwrap();
     std::fs::create_dir_all(home.join(".gemini/tmp")).unwrap();
+    std::fs::create_dir_all(home.join(".gemini/antigravity/brain")).unwrap();
+    std::fs::create_dir_all(home.join(".gemini/antigravity-cli/brain")).unwrap();
     std::fs::create_dir_all(&bin_dir).unwrap();
     write_executable(
         &bin_dir.join("cortex"),
@@ -151,6 +153,8 @@ async fn run_ai_watch_service_setup_install_check_and_remove_round_trip() {
     assert!(service.contains("sessions watch --no-initial-scan --json"));
     assert!(service.contains("ProtectHome=read-only"));
     assert!(service.contains(".gemini/tmp"));
+    assert!(service.contains(".gemini/antigravity/brain"));
+    assert!(service.contains(".gemini/antigravity-cli/brain"));
 
     let check = run_sessions_watch_service_setup(SessionsWatchServiceAction::Check)
         .await

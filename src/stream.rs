@@ -2,13 +2,19 @@ use std::{collections::VecDeque, convert::Infallible, sync::OnceLock, time::Dura
 
 use axum::response::sse::{Event, KeepAlive, Sse};
 use chrono::Utc;
-use hmac::{Hmac, Mac};
 use lab_auth::AuthContext;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::{app::CortexService, db};
+
+mod cursor;
+#[cfg(test)]
+use cursor::{StreamCursor, decode_cursor, encode_cursor, test_cursor_keys};
+use cursor::{decode_cursor_with_keys, fingerprint, principal_key};
+pub(crate) use cursor::{
+    decode_session_handoff, encode_cursor_with_keys, principal, session_filter_fingerprint,
+};
 
 pub const MAX_BATCH_ITEMS: u32 = 100;
 pub const MAX_BATCH_BYTES: usize = 128 * 1024;
@@ -19,6 +25,20 @@ const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const MAX_CLIENTS: usize = 64;
 const MAX_CONNECTION_DURATION: Duration = Duration::from_secs(15 * 60);
 static CLIENTS: OnceLock<std::sync::Arc<Semaphore>> = OnceLock::new();
+
+pub(crate) fn shared_client_permits() -> std::sync::Arc<Semaphore> {
+    CLIENTS
+        .get_or_init(|| std::sync::Arc::new(Semaphore::new(MAX_CLIENTS)))
+        .clone()
+}
+
+fn acquire_client_permit(
+    clients: std::sync::Arc<Semaphore>,
+) -> Result<OwnedSemaphorePermit, StreamError> {
+    clients
+        .try_acquire_owned()
+        .map_err(|_| StreamError::Overloaded)
+}
 
 #[derive(Clone)]
 pub struct CursorKeys {
@@ -78,33 +98,6 @@ pub struct SessionStreamRequest {
     pub cursor: Option<String>,
 }
 
-/// A resumable historical + live evidence stream scoped to a Git branch or
-/// absolute worktree path projected by Agent Observatory.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct EvidenceStreamRequest {
-    pub branch: Option<String>,
-    pub worktree: Option<String>,
-    #[serde(default)]
-    pub kinds: Vec<String>,
-    pub since: Option<String>,
-    pub until: Option<String>,
-    #[serde(default)]
-    pub include_payload: bool,
-    pub history_limit: Option<usize>,
-    pub cursor: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct StreamCursor {
-    version: u8,
-    position: i64,
-    principal: String,
-    filters: String,
-    issued_at: i64,
-    signature: String,
-}
-
 struct StreamState {
     service: CortexService,
     params: db::DurableStreamParams,
@@ -124,6 +117,7 @@ struct StreamContract {
     event_name: &'static str,
     cursor_keys: CursorKeys,
     connection_duration: Duration,
+    clients: std::sync::Arc<Semaphore>,
 }
 
 #[derive(Clone)]
@@ -141,15 +135,21 @@ fn client_lease(permit: OwnedSemaphorePermit, duration: Duration) -> ClientLease
     lease
 }
 
-fn history_is_truncated(returned: usize, limit: usize, position: i64, high: i64) -> bool {
-    returned >= limit && position < high
-}
-
 pub async fn log_stream(
     service: CortexService,
     auth: AuthContext,
     request: LogStreamRequest,
     cursor_keys: CursorKeys,
+) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>, StreamError> {
+    log_stream_with_clients(service, auth, request, cursor_keys, shared_client_permits()).await
+}
+
+pub(crate) async fn log_stream_with_clients(
+    service: CortexService,
+    auth: AuthContext,
+    request: LogStreamRequest,
+    cursor_keys: CursorKeys,
+    clients: std::sync::Arc<Semaphore>,
 ) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>, StreamError> {
     let mut filter_request = request.clone();
     filter_request.cursor = None;
@@ -172,6 +172,7 @@ pub async fn log_stream(
             event_name: "log",
             cursor_keys,
             connection_duration: MAX_CONNECTION_DURATION,
+            clients,
         },
     )
     .await
@@ -215,151 +216,10 @@ pub async fn session_stream(
             event_name: "session",
             cursor_keys,
             connection_duration: MAX_CONNECTION_DURATION,
+            clients: shared_client_permits(),
         },
     )
     .await
-}
-
-pub async fn evidence_stream(
-    service: CortexService,
-    auth: AuthContext,
-    request: EvidenceStreamRequest,
-    cursor_keys: CursorKeys,
-) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>, StreamError> {
-    require_read_scope(&auth)?;
-    if request.branch.as_deref().is_none_or(str::is_empty)
-        && request.worktree.as_deref().is_none_or(str::is_empty)
-    {
-        return Err(StreamError::Invalid("branch or worktree is required"));
-    }
-    if request.branch.as_ref().is_some_and(|v| v.len() > 512)
-        || request.worktree.as_ref().is_some_and(|v| v.len() > 4096)
-        || request.kinds.len() > 32
-    {
-        return Err(StreamError::Invalid(
-            "evidence stream filters exceed bounds",
-        ));
-    }
-    let mut bound = request.clone();
-    bound.cursor = None;
-    let filters = fingerprint(&bound)?;
-    let principal = principal_key(&auth);
-    let decoded = request
-        .cursor
-        .as_deref()
-        .map(|value| decode_cursor_with_keys(value, &cursor_keys))
-        .transpose()?;
-    if let Some(cursor) = &decoded {
-        if cursor.principal != principal {
-            return Err(StreamError::Forbidden(
-                "cursor belongs to another principal",
-            ));
-        }
-        if cursor.filters != filters {
-            return Err(StreamError::Invalid("cursor does not match stream filters"));
-        }
-        let age = Utc::now().timestamp() - cursor.issued_at;
-        if !(-CURSOR_CLOCK_SKEW_SECS..=CURSOR_TTL_SECS).contains(&age) {
-            return Err(StreamError::Expired);
-        }
-    }
-    let permit = CLIENTS
-        .get_or_init(|| std::sync::Arc::new(Semaphore::new(MAX_CLIENTS)))
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| StreamError::Overloaded)?;
-    let issued_at = decoded
-        .as_ref()
-        .map_or_else(|| Utc::now().timestamp(), |c| c.issued_at);
-    let start = decoded.as_ref().map_or(0, |c| c.position);
-    let history_limit = request.history_limit.unwrap_or(500).clamp(1, 500);
-    let query = crate::db::agent_observatory::EvidenceScopeQuery {
-        branch: request.branch,
-        worktree: request.worktree,
-        kinds: request.kinds,
-        since: request.since,
-        until: request.until,
-        include_payload: request.include_payload,
-    };
-    let initial = service
-        .scoped_evidence(query.clone(), start, history_limit)
-        .await
-        .map_err(StreamError::Service)?;
-    if decoded.is_some()
-        && initial
-            .minimum_watermark
-            .is_some_and(|minimum| start < minimum.saturating_sub(1))
-    {
-        return Err(StreamError::Gap {
-            minimum: initial.minimum_watermark.unwrap(),
-            requested: start,
-        });
-    }
-    let deadline = tokio::time::Instant::now() + MAX_CONNECTION_DURATION;
-    let lease = client_lease(permit, MAX_CONNECTION_DURATION);
-    let stream = async_stream::stream! {
-        let _lease = lease;
-        let mut position = start;
-        let snapshot_high = initial.high_watermark;
-        let cursor = encode_cursor_with_keys(position, &principal, &filters, issued_at, &cursor_keys);
-        yield Ok(Event::default().event("snapshot").data(serde_json::json!({
-            "kind":"snapshot","scope":{"branch":query.branch,"worktree":query.worktree},
-            "highWatermark":snapshot_high,"historicalCount":initial.items.len(),"cursor":cursor
-        }).to_string()));
-        let initial_count = initial.items.len();
-        for row in initial.items {
-            position = row.id;
-            let cursor = encode_cursor_with_keys(position, &principal, &filters, issued_at, &cursor_keys);
-            yield Ok(Event::default().event("evidence").id(cursor).data(scoped_event_json(&row)));
-        }
-        if history_is_truncated(initial_count, history_limit, position, snapshot_high) {
-            yield Ok(control_event("history_truncated", serde_json::json!({
-                "resync":true,"returnedThrough":position,"snapshotHigh":snapshot_high,
-                "instruction":"request bounded historical pages before following live events"
-            })));
-            position = snapshot_high;
-        }
-        loop {
-            if tokio::time::Instant::now() >= deadline { break; }
-            if Utc::now().timestamp() - issued_at > CURSOR_TTL_SECS {
-                yield Ok(control_event("token_expired", serde_json::json!({"resync":true}))); break;
-            }
-            match service.scoped_evidence(query.clone(), position, 100).await {
-                Ok(page) => {
-                    if page.items.is_empty() {
-                        tokio::select! { _ = tokio::time::sleep(POLL_INTERVAL) => {}, _ = tokio::time::sleep_until(deadline) => break }
-                    } else {
-                        for row in page.items {
-                            position = row.id;
-                            let cursor = encode_cursor_with_keys(position, &principal, &filters, issued_at, &cursor_keys);
-                            yield Ok(Event::default().event("evidence").id(cursor).data(scoped_event_json(&row)));
-                        }
-                    }
-                }
-                Err(_) => { yield Ok(control_event("overload", serde_json::json!({"retryAfterMs":1000,"resync":false}))); break; }
-            }
-        }
-    };
-    Ok(Sse::new(stream).keep_alive(
-        KeepAlive::new()
-            .interval(Duration::from_secs(10))
-            .text("keepalive"),
-    ))
-}
-
-fn scoped_event_json(row: &crate::db::agent_observatory::ObservatoryEventRow) -> String {
-    let mut value = serde_json::to_value(row).unwrap_or_else(|_| serde_json::json!({"id":row.id}));
-    // `payload_json` is JSON encoded inside a string. Redact its leaf values
-    // before the outer tree walk so quoting cannot hide secret prefixes.
-    if let Some(payload) = value.get_mut("payload_json")
-        && let Some(encoded) = payload.as_str()
-        && let Ok(mut parsed) = serde_json::from_str::<serde_json::Value>(encoded)
-    {
-        crate::assessment::redact_json_value_strings(&mut parsed);
-        *payload = serde_json::Value::String(parsed.to_string());
-    }
-    crate::assessment::redact_json_value_strings(&mut value);
-    serde_json::json!({"contractVersion":"1.0.0","kind":"evidence","event":value}).to_string()
 }
 
 async fn build_stream(
@@ -371,11 +231,7 @@ async fn build_stream(
     contract: StreamContract,
 ) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>, StreamError> {
     require_read_scope(&auth)?;
-    let client_permit = CLIENTS
-        .get_or_init(|| std::sync::Arc::new(Semaphore::new(MAX_CLIENTS)))
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| StreamError::Overloaded)?;
+    let client_permit = acquire_client_permit(contract.clients.clone())?;
     let principal = principal_key(&auth);
     let decoded = cursor
         .as_deref()
@@ -536,155 +392,6 @@ fn require_read_scope(auth: &AuthContext) -> Result<(), StreamError> {
     }
 }
 
-fn principal_key(auth: &AuthContext) -> String {
-    format!("{}:{}", auth.issuer, auth.sub)
-}
-fn fingerprint<T: Serialize>(value: &T) -> Result<String, StreamError> {
-    let bytes = serde_json::to_vec(value).map_err(|_| StreamError::Invalid("invalid filters"))?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
-}
-fn cursor_mac(
-    position: i64,
-    principal: &str,
-    filters: &str,
-    issued_at: i64,
-    key: &[u8],
-) -> Hmac<Sha256> {
-    let body = format!("1\0{position}\0{principal}\0{filters}\0{issued_at}");
-    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts arbitrary key lengths");
-    mac.update(body.as_bytes());
-    mac
-}
-fn cursor_signature(
-    position: i64,
-    principal: &str,
-    filters: &str,
-    issued_at: i64,
-    key: &[u8],
-) -> String {
-    hex::encode(
-        cursor_mac(position, principal, filters, issued_at, key)
-            .finalize()
-            .into_bytes(),
-    )
-}
-pub(crate) fn encode_cursor_with_keys(
-    position: i64,
-    principal: &str,
-    filters: &str,
-    issued_at: i64,
-    keys: &CursorKeys,
-) -> String {
-    let cursor = StreamCursor {
-        version: 1,
-        position,
-        principal: principal.into(),
-        filters: filters.into(),
-        issued_at,
-        signature: cursor_signature(position, principal, filters, issued_at, &keys.current),
-    };
-    hex::encode(serde_json::to_vec(&cursor).expect("cursor is serializable"))
-}
-fn decode_cursor_with_keys(value: &str, keys: &CursorKeys) -> Result<StreamCursor, StreamError> {
-    if value.len() > 2048 {
-        return Err(StreamError::Invalid("invalid cursor"));
-    }
-    let bytes = hex::decode(value).map_err(|_| StreamError::Invalid("invalid cursor"))?;
-    let cursor: StreamCursor =
-        serde_json::from_slice(&bytes).map_err(|_| StreamError::Invalid("invalid cursor"))?;
-    if cursor.version != 1 || cursor.position < 0 {
-        return Err(StreamError::Invalid("invalid cursor"));
-    }
-    let tag = hex::decode(&cursor.signature)
-        .map_err(|_| StreamError::Invalid("cursor signature is invalid"))?;
-    if tag.len() != 32 {
-        return Err(StreamError::Invalid("cursor signature is invalid"));
-    }
-    let mut signature_ok = cursor_mac(
-        cursor.position,
-        &cursor.principal,
-        &cursor.filters,
-        cursor.issued_at,
-        &keys.current,
-    )
-    .verify_slice(&tag)
-    .is_ok();
-    for key in keys.previous.iter() {
-        signature_ok |= cursor_mac(
-            cursor.position,
-            &cursor.principal,
-            &cursor.filters,
-            cursor.issued_at,
-            key,
-        )
-        .verify_slice(&tag)
-        .is_ok();
-    }
-    if !signature_ok {
-        return Err(StreamError::Invalid("cursor signature is invalid"));
-    }
-    Ok(cursor)
-}
-
-#[cfg(test)]
-fn test_cursor_keys() -> CursorKeys {
-    CursorKeys::resolved(Some("test-only-cursor-key"), &[], true).unwrap()
-}
-
-#[cfg(test)]
-fn encode_cursor(position: i64, principal: &str, filters: &str, issued_at: i64) -> String {
-    encode_cursor_with_keys(position, principal, filters, issued_at, &test_cursor_keys())
-}
-
-#[cfg(test)]
-fn decode_cursor(value: &str) -> Result<StreamCursor, StreamError> {
-    decode_cursor_with_keys(value, &test_cursor_keys())
-}
-
-pub(crate) fn session_filter_fingerprint(
-    project: &str,
-    tool: &str,
-    session_id: &str,
-    host: &str,
-) -> Result<String, StreamError> {
-    fingerprint(&SessionStreamRequest {
-        project: project.into(),
-        tool: tool.into(),
-        session_id: session_id.into(),
-        host: host.into(),
-        cursor: None,
-    })
-}
-
-pub(crate) fn principal(auth: &AuthContext) -> String {
-    principal_key(auth)
-}
-pub(crate) fn decode_session_handoff(
-    value: &str,
-    auth: &AuthContext,
-    project: &str,
-    tool: &str,
-    session_id: &str,
-    host: &str,
-    keys: &CursorKeys,
-) -> Result<i64, StreamError> {
-    let cursor = decode_cursor_with_keys(value, keys)?;
-    if cursor.principal != principal_key(auth) {
-        return Err(StreamError::Forbidden(
-            "cursor belongs to another principal",
-        ));
-    }
-    if cursor.filters != session_filter_fingerprint(project, tool, session_id, host)? {
-        return Err(StreamError::Invalid(
-            "cursor does not match session filters",
-        ));
-    }
-    let age = Utc::now().timestamp() - cursor.issued_at;
-    if !(-CURSOR_CLOCK_SKEW_SECS..=CURSOR_TTL_SECS).contains(&age) {
-        return Err(StreamError::Expired);
-    }
-    Ok(cursor.position)
-}
 fn truncate_utf8(value: &str, max: usize) -> (String, bool) {
     if value.len() <= max {
         return (value.to_owned(), false);

@@ -24,7 +24,7 @@ impl HeartbeatAgentArgs {
             )?,
             None => Default::default(),
         };
-        let mut config = HeartbeatAgentConfig::from_env_with_fallback(host_id_path, &file_values);
+        let mut config = HeartbeatAgentConfig::from_env_with_fallback(host_id_path, &file_values)?;
         if let Some(target) = self.target {
             config.target = Some(target);
         }

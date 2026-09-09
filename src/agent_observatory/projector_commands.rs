@@ -216,6 +216,7 @@ fn agent_input(
             last_seen_at: source.timestamp.clone(),
             metadata_json: json!({ "cwd": source.cwd }).to_string(),
         }),
+        trace_relation: None,
         event: event_input(source, worktree_key)?,
         outbox: outbox_input(source)?,
     })
@@ -244,6 +245,7 @@ fn atuin_input(
             })
             .to_string(),
         }),
+        trace_relation: None,
         event: event_input(source, worktree_key)?,
         outbox: outbox_input(source)?,
     })

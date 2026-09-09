@@ -154,7 +154,12 @@ async fn spawn_evaluator_returns_none_when_notifications_disabled() {
         ..NotificationsConfig::default()
     };
 
-    let handle = spawn_evaluator(Arc::new(pool), Arc::new(Semaphore::new(1)), cfg);
+    let handle = spawn_evaluator(
+        Arc::new(pool),
+        Arc::new(Semaphore::new(1)),
+        cfg,
+        tokio_util::sync::CancellationToken::new(),
+    );
 
     assert!(handle.is_none());
 }

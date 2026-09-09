@@ -1,0 +1,6 @@
+[
+  {"name":"initialize","body":{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"cortex-live","version":"1"}}}},
+  {"name":"tools-list","body":{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}},
+  {"name":"resources-list","body":{"jsonrpc":"2.0","id":3,"method":"resources/list","params":{}}},
+  {"name":"widget-resource","body":{"jsonrpc":"2.0","id":4,"method":"resources/read","params":{"uri":"ui://cortex/query-widget"}}}
+]

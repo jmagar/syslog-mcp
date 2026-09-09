@@ -154,6 +154,20 @@ fn log_tool_compatibility_remains_explicit_only() {
 }
 
 #[test]
+fn otlp_provider_aliases_use_the_scanner_registry() {
+    for (alias, expected) in [
+        ("claude-transcript", "claude"),
+        ("openai-codex", "codex"),
+        ("gemini-cli", "gemini"),
+    ] {
+        let explicit = vec![kv("ai.tool", alias)];
+        let normalized = normalize_attributes(&[], &explicit);
+        assert_eq!(normalized.ai_tool.as_deref(), Some(expected));
+        assert_eq!(normalized.log_ai_tool().as_deref(), Some(expected));
+    }
+}
+
+#[test]
 fn unknown_attributes_are_retained_and_sensitive_values_remain_redacted() {
     let resource = vec![
         kv("host.name", "devhost"),
@@ -220,6 +234,6 @@ fn shared_signal_attributes_support_256_fields_while_log_view_stays_128_compatib
     let legacy = normalized.legacy_log_signal_attributes.as_object().unwrap();
 
     assert_eq!(full.len(), 200);
-    assert_eq!(legacy.len(), MAX_METADATA_OBJECT_FIELDS + 1);
-    assert_eq!(legacy["_omitted_fields"], 72);
+    assert_eq!(legacy.len(), MAX_METADATA_OBJECT_FIELDS);
+    assert_eq!(legacy["_omitted_fields"], 73);
 }

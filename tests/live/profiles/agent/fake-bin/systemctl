@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+state="${LIVE_AGENT_SYSTEMCTL_STATE:?}"
+args=" $* "
+case "$args" in
+  *" status "*) exit 0 ;;
+  *" enable --now "*) printf 'active\n' >"$state" ;;
+  *" disable --now "*) printf 'inactive\n' >"$state" ;;
+  *" daemon-reload "*) : ;;
+  *" is-enabled "*) if [[ "$(cat "$state" 2>/dev/null || true)" == active ]]; then echo enabled; else echo disabled; exit 1; fi ;;
+  *" is-active "*) if [[ "$(cat "$state" 2>/dev/null || true)" == active ]]; then echo active; else echo inactive; exit 3; fi ;;
+  *) exit 2 ;;
+esac

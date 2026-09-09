@@ -204,7 +204,7 @@ fn remove_event_drops_pending_file_and_requests_checkpoint_prune() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("session.jsonl");
     std::fs::write(&path, "{}\n").unwrap();
-    let targets = watch_targets(&test_watch_options(temp.path().to_path_buf())).unwrap();
+    let targets = vec![WatchTarget::Directory(temp.path().canonicalize().unwrap())];
     let mut pending = PendingFiles::default();
     assert!(pending.push(path.clone(), Instant::now()));
     std::fs::remove_file(&path).unwrap();
@@ -222,9 +222,22 @@ fn remove_event_drops_pending_file_and_requests_checkpoint_prune() {
     );
 
     assert!(new_dirs.is_empty());
-    assert!(!pending.files.contains_key(&path));
+    assert!(pending.files.is_empty());
     assert!(!overflow_rescan.load(std::sync::atomic::Ordering::Relaxed));
     assert!(prune_missing.load(std::sync::atomic::Ordering::Relaxed));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn removed_event_under_var_alias_matches_canonical_watch_root() {
+    let temp = tempfile::tempdir_in("/var/tmp").unwrap();
+    let path = temp.path().join("removed.jsonl");
+    std::fs::write(&path, "{}\n").unwrap();
+    let targets = vec![WatchTarget::Directory(temp.path().canonicalize().unwrap())];
+    std::fs::remove_file(&path).unwrap();
+
+    assert!(path.starts_with("/var"));
+    assert!(event_path_allowed_missing_ok(&path, &targets));
 }
 
 #[test]
@@ -242,6 +255,76 @@ fn overflow_rescan_since_saturates_at_epoch() {
     let now = SystemTime::UNIX_EPOCH + Duration::from_secs(30);
 
     assert_eq!(overflow_rescan_since(now), SystemTime::UNIX_EPOCH);
+}
+
+#[test]
+fn bounded_rescan_deferral_requests_the_existing_retry_path() {
+    let result = IndexResult {
+        scan_budget_cap_hit: true,
+        deferred_sources: 2,
+        ..Default::default()
+    };
+
+    assert_eq!(rescan_status_for_result(&result), RescanStatus::Retry);
+    assert_eq!(
+        rescan_status_for_result(&IndexResult::default()),
+        RescanStatus::Completed
+    );
+}
+
+#[test]
+fn rescan_cursor_advances_only_after_an_attempted_source() {
+    let mut cursor = RescanCursor::default();
+    let no_attempt = IndexResult::default();
+    if let Some(next) = no_attempt.next_scan_cursor.clone() {
+        cursor.start_after = Some(next);
+    }
+    assert!(cursor.start_after.is_none());
+
+    let attempted = IndexResult {
+        next_scan_cursor: Some(PathBuf::from("/safe/root/b.jsonl")),
+        ..Default::default()
+    };
+    if let Some(next) = attempted.next_scan_cursor.clone() {
+        cursor.start_after = Some(next);
+    }
+    assert_eq!(
+        cursor.start_after,
+        Some(PathBuf::from("/safe/root/b.jsonl"))
+    );
+}
+
+#[test]
+fn bounded_backlog_continuation_drops_overflow_since_filter_until_cursor_clears() {
+    let old_overflow_filter = SystemTime::UNIX_EPOCH + Duration::from_secs(1_500);
+    let mut cursor = RescanCursor {
+        start_after: Some(PathBuf::from("/safe/root/deferred-old.jsonl")),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        rescan_since_for_cursor(Some(old_overflow_filter), &cursor),
+        None,
+        "an old deferred source must not be skipped by a new five-minute lookback"
+    );
+
+    cursor.start_after = None;
+    cursor.discovery_start_after.insert(
+        PathBuf::from("/safe/root/.claude/projects"),
+        PathBuf::from("/safe/root/.claude/projects/entry"),
+    );
+    assert_eq!(
+        rescan_since_for_cursor(Some(old_overflow_filter), &cursor),
+        None,
+        "a bounded provider-root continuation also keeps the backlog unfiltered"
+    );
+
+    cursor.discovery_start_after.clear();
+    assert_eq!(
+        rescan_since_for_cursor(Some(old_overflow_filter), &cursor),
+        Some(old_overflow_filter),
+        "a fresh overflow rescan keeps its lookback after backlog completion"
+    );
 }
 
 #[test]

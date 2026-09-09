@@ -61,13 +61,19 @@ impl<I, R> ComposeService<I, R> {
             .map(|path| vec![("CORTEX_ENV_FILE".to_string(), path.display().to_string())])
             .unwrap_or_default();
         ComposeInvocation {
-            program: "docker".into(),
+            program: crate::env::var("CORTEX_COMPOSE_PROGRAM").unwrap_or_else(|_| "docker".into()),
             args,
             env,
             current_dir: target.compose_working_dir.clone(),
             timeout: self.defaults.timeout,
             output_limit_bytes: self.defaults.output_limit_bytes,
         }
+    }
+
+    fn config_invocation(&self, target: &ResolvedComposeTarget) -> ComposeInvocation {
+        let mut args = compose_base_args(target);
+        args.extend(["config".into(), "--format".into(), "json".into()]);
+        self.invocation(target, args)
     }
 }
 
@@ -598,6 +604,49 @@ fn compose_env_file(project_dir: &Path) -> Option<PathBuf> {
 }
 
 impl<I: DockerInspect, R: CommandRunner> ComposeService<I, R> {
+    fn provision_backup_bind(&self, target: &ResolvedComposeTarget) -> Result<()> {
+        let output = self.runner.run(&self.config_invocation(target))?;
+        if output.timed_out || output.exit_status != Some(0) {
+            return Err(anyhow!(
+                "could not resolve Compose backup bind: {}",
+                output.stderr.trim()
+            ));
+        }
+        if output.stdout_truncated {
+            return Err(anyhow!(
+                "could not resolve Compose backup bind: config output was truncated"
+            ));
+        }
+        let config: serde_json::Value = serde_json::from_str(&output.stdout)
+            .map_err(|error| anyhow!("could not parse Compose config JSON: {error}"))?;
+        let volumes = config
+            .pointer(&format!("/services/{}/volumes", target.target.service))
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| anyhow!("Compose service has no volume list"))?;
+        let backup = volumes
+            .iter()
+            .find(|volume| {
+                volume.get("target").and_then(serde_json::Value::as_str) == Some("/backups")
+            })
+            .ok_or_else(|| anyhow!("Compose service has no /backups mount"))?;
+        if backup.get("type").and_then(serde_json::Value::as_str) != Some("bind") {
+            return Err(anyhow!("Compose /backups mount must be a bind mount"));
+        }
+        let source = backup
+            .get("source")
+            .and_then(serde_json::Value::as_str)
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute() && path != Path::new("/"))
+            .ok_or_else(|| anyhow!("Compose /backups bind must resolve to a safe absolute path"))?;
+        std::fs::create_dir_all(&source)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o700))?;
+        }
+        Ok(())
+    }
+
     pub fn run_mutation(
         &self,
         mutation: ComposeMutation,
@@ -616,6 +665,9 @@ impl<I: DockerInspect, R: CommandRunner> ComposeService<I, R> {
                 target: target.target,
                 preflight: "passed".into(),
             }));
+        }
+        if mutation == ComposeMutation::Up {
+            self.provision_backup_bind(&target)?;
         }
         self.runner
             .run(&invocation)

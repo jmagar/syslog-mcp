@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# The disposable Compose fixture publishes no host ports. macOS has no `ss`,
+# so provide the exact empty-listener result required by the ownership probe.
+[[ "${LIVE_SS_CONFLICT:-0}" != 1 ]] || echo 'tcp LISTEN 0 128 127.0.0.1:3100 users:(("foreign",pid=999,fd=7))'
+exit 0

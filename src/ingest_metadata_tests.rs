@@ -40,7 +40,8 @@ fn caps_object_field_count() {
             .map(|(key, value)| (key.as_str(), value.clone())),
     );
 
-    assert_eq!(value["_omitted_fields"], 2);
+    assert_eq!(value["_omitted_fields"], 3);
+    assert_eq!(value.as_object().unwrap().len(), MAX_METADATA_OBJECT_FIELDS);
 }
 
 #[test]
@@ -55,7 +56,8 @@ fn custom_object_field_limit_is_honored() {
         3,
     );
 
-    assert_eq!(value["_omitted_fields"], 2);
+    assert_eq!(value["_omitted_fields"], 3);
+    assert_eq!(value.as_object().unwrap().len(), 3);
 }
 
 #[test]

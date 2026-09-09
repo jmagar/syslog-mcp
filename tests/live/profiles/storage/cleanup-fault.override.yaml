@@ -1,0 +1,4 @@
+services:
+  candidate:
+    environment:
+      CORTEX_CLEANUP_INTERVAL_SECS: "30"

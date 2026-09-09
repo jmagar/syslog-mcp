@@ -1,0 +1,11 @@
+services:
+  candidate:
+    image: ${LIVE_PREVIOUS_IMAGE:?pinned previous image required}
+    platform: linux/amd64
+    pull_policy: never
+    environment:
+      CORTEX_STATIC_TOKEN_ADMIN: "true"
+      CORTEX_ERROR_DETECTION_ENABLED: "true"
+      CORTEX_ERROR_DETECTION_SCAN_INTERVAL_SECS: "1"
+      CORTEX_INVENTORY_GRAPH_PROJECTION_ENABLED: "true"
+      CORTEX_GRAPH_REFRESH_INTERVAL_SECS: "1"

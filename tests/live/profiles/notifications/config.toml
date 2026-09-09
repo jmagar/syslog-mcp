@@ -1,0 +1,13 @@
+[notifications]
+enabled = true
+apprise_url = "http://apprise:8000"
+apprise_urls = ["json://run-owned.invalid"]
+dispatcher_interval_secs = 1
+dedup_window_secs = 900
+max_retry_attempts = 4
+
+[notifications.evaluators]
+evaluator_interval_secs = 1
+heartbeat_silence = false
+stream_silence = false
+ingest_silence = false

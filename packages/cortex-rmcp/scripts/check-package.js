@@ -301,8 +301,9 @@ function checkInstalledBins(installRoot) {
     const platformPath = path.join(installedPackageRoot, "lib", "platform.js");
     assert(fs.existsSync(platformPath), "downloaded-binary packages must include lib/platform.js");
     if (fs.existsSync(platformPath)) {
-      const platform = require(platformPath);
-      writeSmokeBinary(platform.binaryPath());
+      const fakeBinary = path.join(installRoot, "fake-cortex");
+      writeSmokeBinary(fakeBinary);
+      env.CORTEX_RMCP_BINARY_PATH = fakeBinary;
     }
   }
 

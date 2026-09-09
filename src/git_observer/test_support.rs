@@ -1,6 +1,7 @@
 //! Deterministic real-Git fixtures for Git observer tests.
 
 use anyhow::{Context, Result, bail};
+use chrono::{DateTime, SecondsFormat};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -13,6 +14,12 @@ const FEATURE_TIME: &str = "2026-01-02T03:05:05Z";
 const MAIN_TIME: &str = "2026-01-02T03:06:05Z";
 const RESET_TIME: &str = "2026-01-02T03:07:05Z";
 const REBASE_TIME: &str = "2026-01-02T03:08:05Z";
+
+fn canonical_timestamp(value: String) -> Result<String> {
+    DateTime::parse_from_rfc3339(&value)
+        .map(|timestamp| timestamp.to_rfc3339_opts(SecondsFormat::Secs, true))
+        .with_context(|| format!("fixture commit timestamp was not RFC 3339: {value}"))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GitFixtureCommits {
@@ -405,8 +412,8 @@ impl GitFixture {
             sha: strings.next().expect("five fields")?,
             parents: strings.next().expect("five fields")?,
             subject: strings.next().expect("five fields")?,
-            authored_at: strings.next().expect("five fields")?,
-            committed_at: strings.next().expect("five fields")?,
+            authored_at: canonical_timestamp(strings.next().expect("five fields")?)?,
+            committed_at: canonical_timestamp(strings.next().expect("five fields")?)?,
         })
     }
 }

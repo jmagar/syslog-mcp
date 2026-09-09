@@ -11,6 +11,7 @@ use std::time::Instant;
 
 use anyhow::Result;
 use tokio::sync::Semaphore;
+use tokio_util::sync::CancellationToken;
 
 // Phase 1 scans up to 50,000 rows in one blocking call — allow 10s before warning.
 const SLOW_EVAL_SCAN_MS: u128 = 10_000;
@@ -330,6 +331,7 @@ pub(crate) fn spawn_evaluator(
     pool: Arc<DbPool>,
     permit_sem: Arc<Semaphore>,
     cfg: NotificationsConfig,
+    token: CancellationToken,
 ) -> Option<tokio::task::JoinHandle<()>> {
     if !cfg.enabled {
         return None;
@@ -339,7 +341,11 @@ pub(crate) fn spawn_evaluator(
         let mut interval =
             crate::runtime::background_interval(tokio::time::Duration::from_secs(interval_secs));
         loop {
-            interval.tick().await;
+            tokio::select! {
+                biased;
+                _ = token.cancelled() => break,
+                _ = interval.tick() => {}
+            }
             tracing::debug!("notification_evaluator: cycle starting");
             match run_evaluation_cycle(Arc::clone(&pool), Arc::clone(&permit_sem), cfg.clone())
                 .await

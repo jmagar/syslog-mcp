@@ -1,10 +1,91 @@
-//! Shared command/API/action surfaces catalog and decision matrix.
+//! Shared command/API/action surfaces catalog and qualification contract.
+
+use serde::Serialize;
+
+/// Version of the exported qualification contract. Bump this when consumers
+/// must change how they interpret an entry (adding entries does not require a
+/// bump).
+pub const SURFACE_CONTRACT_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SurfaceKind {
     Cli,
     McpAction,
     ApiRoute,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HttpMethod {
+    Get,
+    Post,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MutationClass {
+    None,
+    AppendOnly,
+    Reversible,
+    Destructive,
+    Operational,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RequiredCaseKind {
+    SemanticPositive,
+    ExecutedRefusalSemantic,
+    ValidationNegative,
+    Authorization,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProfileDisposition {
+    ExecutedSemantic,
+    ExecutedRefusalSemantic,
+    PlatformQualified,
+    ArtifactQualified,
+    ContractApprovedNotApplicable,
+    PendingScenario,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Platform {
+    Any,
+    Unix,
+    Linux,
+    Windows,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SurfaceContractEntry {
+    pub id: String,
+    pub kind: &'static str,
+    pub spelling: String,
+    pub aliases: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub method: Option<HttpMethod>,
+    pub auth: &'static str,
+    pub mutation: MutationClass,
+    pub profiles: &'static [&'static str],
+    pub platforms: &'static [Platform],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parity_group: Option<String>,
+    pub required_cases: Vec<RequiredCaseKind>,
+    pub allowed_dispositions: &'static [ProfileDisposition],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scenario_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cleanup: Option<&'static str>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SurfaceContractExport {
+    pub version: u32,
+    pub entries: Vec<SurfaceContractEntry>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -218,6 +299,7 @@ pub const SURFACE_SPECS: &[SurfaceSpec] = &[
     local_cli!("db", Db, RetainedTopLevelOperational),
     local_cli!("compose", Compose, RetainedTopLevelOperational),
     local_cli!("setup", Setup, RetainedTopLevelOperational),
+    local_cli!("update", Setup, RetainedTopLevelOperational),
     local_cli!("config", Config, RetainedTopLevelOperational),
     local_cli!("completions", Runtime, RetainedTopLevelOperational),
     cli!("ai", Sessions, RemovedCleanBreak, Read, replace: "sessions", reason: "AI transcript operations were moved under sessions"),
@@ -309,6 +391,7 @@ pub const SURFACE_SPECS: &[SurfaceSpec] = &[
         RetainedProtocolCompatibility,
         Read
     ),
+    mcp!("recurring_error_comparison", Analysis, Canonical, Read),
     mcp!(
         "incident_context",
         Analysis,
@@ -331,6 +414,13 @@ pub const SURFACE_SPECS: &[SurfaceSpec] = &[
 ];
 
 mod api;
+
+pub use api::{ApiBinding, api_bindings};
+
+mod contract;
+pub use contract::*;
+mod catalog;
+pub use catalog::*;
 
 pub fn specs_for(kind: SurfaceKind) -> impl Iterator<Item = &'static SurfaceSpec> {
     SURFACE_SPECS

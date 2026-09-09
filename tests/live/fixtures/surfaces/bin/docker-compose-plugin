@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+: "${LIVE_DOCKER_BIN:?}"
+exec "$LIVE_DOCKER_BIN" compose "$@"

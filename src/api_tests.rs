@@ -12,6 +12,14 @@ use crate::mcp::AuthPolicy;
 
 use super::*;
 
+#[test]
+fn documented_rest_route_count_matches_router_registrations() {
+    let binding_count = crate::surfaces::api_bindings().count();
+    assert_eq!(binding_count, 93, "update the documented API denominator");
+    assert!(include_str!("../docs/api.md").contains("93 method/path bindings total"));
+    assert!(include_str!("../docs/architecture.md").contains("(93 method/path bindings)"));
+}
+
 /// Build the router for a test, layering a `MockConnectInfo` so handlers
 /// extracting `ConnectInfo<SocketAddr>` (e.g. `ai_prune_checkpoints`) work
 /// under `tower::ServiceExt::oneshot`. Production wires `ConnectInfo` via
@@ -27,6 +35,55 @@ fn test_router(state: ApiState) -> axum::Router {
 /// variant most closely matches the production wiring they care about.
 fn test_state(token: Option<String>) -> (ApiState, Arc<DbPool>, tempfile::TempDir) {
     test_state_with_policy(token, AuthPolicy::Mounted { auth_state: None })
+}
+
+#[tokio::test]
+async fn every_contract_api_method_path_is_actually_mounted() {
+    use crate::surfaces::{HttpMethod, api_bindings};
+    for binding in api_bindings() {
+        let (state, _, _dir) = test_state_with_admin(Some("secret".into()), "admin-secret");
+        let app = test_router(state);
+        let path = binding
+            .path
+            .replace("{id}", "1")
+            .replace("{repository_id}", "1")
+            .replace("{run_key}", "contract-probe");
+        let method = match binding.method {
+            HttpMethod::Get => axum::http::Method::GET,
+            HttpMethod::Post => axum::http::Method::POST,
+        };
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(axum::body::Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // Dynamic resource routes may legitimately return a JSON 404 for this
+        // synthetic probe when the temporary database lacks that resource.
+        // Axum's unmatched-route fallback has no JSON content type, so keep
+        // the construction audit without requiring seeded state for every
+        // contracted dynamic path.
+        assert!(
+            response.status() != axum::http::StatusCode::NOT_FOUND
+                || response.headers().contains_key(header::CONTENT_TYPE),
+            "{:?} {} is contracted but not mounted",
+            binding.method,
+            binding.path
+        );
+        assert_ne!(
+            response.status(),
+            axum::http::StatusCode::METHOD_NOT_ALLOWED,
+            "{:?} {} has wrong mounted method",
+            binding.method,
+            binding.path
+        );
+    }
 }
 
 fn test_state_with_policy(
@@ -146,6 +203,54 @@ async fn get_response(
     app.oneshot(builder.body(axum::body::Body::empty()).unwrap())
         .await
         .unwrap()
+}
+
+#[tokio::test]
+async fn agent_observatory_routes_are_bearer_protected_and_return_bounded_pages() {
+    let (state, pool, _dir) = test_state(Some("secret".into()));
+    pool.get()
+        .unwrap()
+        .execute(
+            "INSERT INTO repositories
+                (repository_key,hostname,common_git_dir,primary_path,display_name,first_seen_at,last_seen_at)
+             VALUES ('repo-one','host','/workspace/repo/.git','/workspace/repo','repo',?1,?1)",
+            ["2026-09-02T12:00:00.000Z"],
+        )
+        .unwrap();
+    let app = test_router(state);
+    let (status, _) = get_json(app.clone(), "/api/repositories", None).await;
+    assert_eq!(status, axum::http::StatusCode::UNAUTHORIZED);
+    let (status, body) = get_json(app.clone(), "/api/repositories?limit=1", Some("secret")).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(body["repositories"][0]["key"], "repo-one");
+    assert_eq!(body["repositories"][0]["id"], "1");
+    assert!(body.get("items").is_none());
+    assert_eq!(body["pagination"]["limit"], 1);
+    let (status, body) = get_json(
+        app.clone(),
+        "/api/repositories?limit=999999",
+        Some("secret"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(body["pagination"]["limit"], 200);
+    let (status, _) = get_json(
+        app.clone(),
+        "/api/repositories?unexpected=yes",
+        Some("secret"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+    let (status, body) = get_json(
+        app,
+        "/api/agent-runs?status=active&status=idle",
+        Some("secret"),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(body["pagination"]["limit"], 50);
+    assert!(body["runs"].is_array());
+    assert!(body.get("items").is_none());
 }
 
 #[test]
@@ -854,6 +959,27 @@ async fn api_cookie_without_bearer_is_rejected() {
 
 // ── /api/version + force-bearer-on-loopback + schema_version cache ────────────
 
+#[test]
+fn version_info_serializes_optional_fleet_identity() {
+    let value = serde_json::to_value(VersionInfo {
+        version: "1.2.3",
+        git_sha: None,
+        schema_version: 48,
+        instance_id: Some("instance".into()),
+        deployment_id: Some("sha256:image".into()),
+        database_fingerprint: Some("db-fingerprint".into()),
+        compose_project: Some("project".into()),
+        compose_service: Some("candidate".into()),
+        compose_container: Some("project-candidate-1".into()),
+        fleet_allowlist: vec!["instance".into()],
+        capabilities: vec!["read".into(), "admin".into()],
+    })
+    .unwrap();
+    assert_eq!(value["instance_id"], "instance");
+    assert_eq!(value["compose_service"], "candidate");
+    assert_eq!(value["capabilities"], serde_json::json!(["read", "admin"]));
+}
+
 /// `/api/version` returns 200 with a well-formed payload when authenticated.
 /// Verifies the cached `version_info` is rendered, not re-queried.
 #[tokio::test]
@@ -878,6 +1004,8 @@ async fn capabilities_advertise_bounded_polling_and_native_streams() {
     let (state, _pool, _dir) = test_state(Some("secret".into()));
     let (status, value) = get_json(test_router(state), "/api/capabilities", Some("secret")).await;
     assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(value["contract_version"], "1.0.0");
+    assert_eq!(value["generation"], 1);
     assert_eq!(value["sessions"]["rendered_pages"], true);
     assert_eq!(value["sessions"]["native_stream"], true);
     assert_eq!(value["logs"]["native_stream"], true);
@@ -979,6 +1107,26 @@ async fn durable_stream_routes_require_auth_and_negotiate_sse() {
         response.headers()[header::CONTENT_TYPE],
         "text/event-stream"
     );
+}
+
+#[tokio::test]
+async fn durable_stream_route_enforces_sixty_four_clients_and_recovers_after_disconnect() {
+    let (state, _pool, _dir) = test_state(Some("secret".into()));
+    let app = test_router(state.with_stream_client_limit(64));
+    let mut responses = Vec::with_capacity(64);
+
+    for _ in 0..64 {
+        let response = get_response(app.clone(), "/api/streams/logs", Some("secret")).await;
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        responses.push(response);
+    }
+
+    let rejected = get_response(app.clone(), "/api/streams/logs", Some("secret")).await;
+    assert_eq!(rejected.status(), axum::http::StatusCode::TOO_MANY_REQUESTS);
+
+    drop(responses.pop());
+    let recovered = get_response(app, "/api/streams/logs", Some("secret")).await;
+    assert_eq!(recovered.status(), axum::http::StatusCode::OK);
 }
 
 #[tokio::test]
@@ -2915,6 +3063,23 @@ async fn similar_incidents_returns_200_with_token() {
     )
     .await;
     assert_eq!(status, axum::http::StatusCode::OK);
+}
+
+#[tokio::test]
+async fn recurring_error_comparison_requires_token_and_returns_bounded_shape() {
+    let (state, _pool, _dir) = test_state(Some("secret".into()));
+    let app = test_router(state);
+    let path = "/api/recurring-error-comparison?until=2026-05-21T13:00:00Z&window_minutes=60";
+    let (unauthorized, _) = get_json(app.clone(), path, None).await;
+    assert_eq!(unauthorized, axum::http::StatusCode::UNAUTHORIZED);
+    let (status, value) = get_json(app, path, Some("secret")).await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{value}");
+    assert_eq!(value["candidate_cap"], 512);
+    assert!(
+        value.get("comparisons").is_some(),
+        "missing comparisons: {value}"
+    );
+    assert_eq!(value["privacy_policy"], "irreversible_redaction/v1");
 }
 
 #[tokio::test]

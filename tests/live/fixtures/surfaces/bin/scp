@@ -1,0 +1,3 @@
+#!/bin/sh
+# Isolated copy boundary; no host or network filesystem is addressed.
+exit 0

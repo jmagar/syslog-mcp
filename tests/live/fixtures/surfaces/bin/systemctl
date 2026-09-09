@@ -1,0 +1,21 @@
+#!/bin/sh
+# Run-owned service-manager double. Setup commands still create and inspect the
+# real disposable unit files; this models successful enable/start/status calls
+# without addressing the host service manager.
+state_dir="${TMPDIR:?}/systemctl-state"; mkdir -p "$state_dir"
+case "$*" in
+  *cortex.service*)
+    case "$*" in *is-active*) printf '%s\n' inactive; exit 3;; *is-enabled*) printf '%s\n' disabled; exit 1;; *show*) printf '%s\n' 'LoadState=not-found'; exit 0;; esac ;;
+  *cortex-ai-watch.service*|*cortex-ai-index.timer*)
+    case "$*" in *is-active*) printf '%s\n' inactive; exit 3;; *is-enabled*) printf '%s\n' disabled; exit 1;; esac ;;
+  *cortex-sessions-index.timer*)
+    case "$*" in
+      *is-enabled*) printf '%s\n' disabled; exit 1 ;;
+      *is-active*) printf '%s\n' inactive; exit 3 ;;
+      *show*) printf '%s\n' inactive ;;
+    esac ;;
+  *is-enabled*) printf '%s\n' enabled ;;
+  *is-active*) printf '%s\n' active ;;
+  *show*) printf '%s\n' 'LoadState=loaded' ;;
+esac
+exit 0

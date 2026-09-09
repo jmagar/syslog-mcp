@@ -1,0 +1,136 @@
+name: ${LIVE_COMPOSE_PROJECT:?LIVE_COMPOSE_PROJECT is required}
+services:
+  candidate:
+    image: ${LIVE_CANDIDATE_IMAGE:?immutable candidate image is required}
+    pull_policy: never
+    init: true
+    restart: "no"
+    environment:
+      CORTEX_HOST: 0.0.0.0
+      CORTEX_PORT: "3100"
+      CORTEX_RECEIVER_HOST: 0.0.0.0
+      CORTEX_RECEIVER_PORT: "1514"
+      CORTEX_DB_PATH: /data/cortex.db
+      CORTEX_TOKEN: ${LIVE_CORTEX_TOKEN:?}
+      CORTEX_API_TOKEN: ${LIVE_API_TOKEN:?}
+      CORTEX_API_ADMIN_TOKEN: ${LIVE_ADMIN_TOKEN:?}
+      CORTEX_CURSOR_SIGNING_KEY: ${LIVE_CURSOR_SIGNING_KEY:?}
+      CORTEX_ALLOWED_HOSTS: localhost,127.0.0.1
+      CORTEX_RETENTION_DAYS: "0"
+      CORTEX_NOTIFICATIONS_ENABLED: "false"
+      CORTEX_NOTIFICATIONS_URLS: ""
+      CORTEX_INSTANCE_ID: ${LIVE_SERVER_INSTANCE_ID:?}
+      CORTEX_SERVER_ID: ${LIVE_SERVER_INSTANCE_ID:?}
+      CORTEX_DEPLOYMENT_ID: ${LIVE_CANDIDATE_IMAGE:?}
+      CORTEX_DATABASE_FINGERPRINT: ${LIVE_DATABASE_FINGERPRINT:?}
+      CORTEX_COMPOSE_PROJECT: ${LIVE_COMPOSE_PROJECT:?}
+      CORTEX_COMPOSE_SERVICE: candidate
+      CORTEX_COMPOSE_CONTAINER: ${LIVE_COMPOSE_PROJECT:?}-candidate-1
+      CORTEX_FLEET_ALLOWLIST: ${LIVE_SERVER_INSTANCE_ID:?}
+      CORTEX_CAPABILITIES: read,admin,otlp,heartbeat,notifications
+    volumes:
+      - state:/data
+      - pressure:/pressure
+    networks: [isolated]
+    labels:
+      cortex.live.run_id: ${LIVE_RUN_ID:?}
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    healthcheck:
+      test: [CMD, curl, -fsS, http://127.0.0.1:3100/health]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  oracle:
+    image: ${LIVE_ORACLE_IMAGE:?immutable oracle image is required}
+    pull_policy: never
+    init: true
+    restart: "no"
+    environment:
+      ORACLE_TOKEN: ${LIVE_ORACLE_TOKEN:?}
+      CAPTURE_DIR: /capture
+    volumes:
+      - oracle:/capture
+    networks: [isolated]
+    labels:
+      cortex.live.run_id: ${LIVE_RUN_ID:?}
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs: [/tmp]
+  toxiproxy:
+    image: ${LIVE_TOXIPROXY_IMAGE:?immutable toxiproxy image is required}
+    pull_policy: never
+    init: true
+    restart: "no"
+    ports:
+      - {target: 13100, host_ip: 127.0.0.1, published: "${LIVE_HTTP_PUBLISHED:-0}", protocol: tcp}
+      - {target: 11514, host_ip: 127.0.0.1, published: "0", protocol: tcp}
+      - {target: 18080, host_ip: 127.0.0.1, published: "0", protocol: tcp}
+      - {target: 8474, host_ip: 127.0.0.1, published: "0", protocol: tcp}
+    networks:
+      isolated: {gw_priority: 1}
+      ingress: {gw_priority: 0}
+    labels:
+      cortex.live.run_id: ${LIVE_RUN_ID:?}
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs: [/tmp]
+  udp-redirector:
+    image: ${LIVE_ORACLE_IMAGE:?immutable redirector image is required}
+    pull_policy: never
+    init: true
+    restart: "no"
+    entrypoint: [python, /app/redirect.py]
+    environment:
+      REDIRECT_LISTEN: 0.0.0.0:11514
+      REDIRECT_UPSTREAM: candidate:1514
+    ports:
+      - {target: 11514, host_ip: 127.0.0.1, published: "0", protocol: udp}
+    networks:
+      isolated: {gw_priority: 1}
+      ingress: {gw_priority: 0}
+    labels:
+      cortex.live.run_id: ${LIVE_RUN_ID:?}
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs: [/tmp]
+  workload-producer:
+    image: ${LIVE_ORACLE_IMAGE:?immutable producer image is required}
+    pull_policy: never
+    init: true
+    restart: "no"
+    entrypoint: [python, /app/producer.py]
+    environment:
+      PRODUCER_UPSTREAM: candidate:1514
+      PRODUCER_INTERVAL: "1"
+      PRODUCER_PREFIX: ${LIVE_RUN_ID:?}-workload
+    networks: [isolated]
+    labels:
+      cortex.live.run_id: ${LIVE_RUN_ID:?}
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs: [/tmp]
+networks:
+  isolated:
+    internal: true
+    labels:
+      cortex.live.run_id: ${LIVE_RUN_ID:?}
+  ingress:
+    labels:
+      cortex.live.run_id: ${LIVE_RUN_ID:?}
+volumes:
+  state:
+    labels: {cortex.live.run_id: "${LIVE_RUN_ID:?}", cortex.live.kind: state}
+  pressure:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: size=64m,mode=0770,uid=1000,gid=1000
+    labels: {cortex.live.run_id: "${LIVE_RUN_ID:?}", cortex.live.kind: pressure}
+  oracle:
+    labels: {cortex.live.run_id: "${LIVE_RUN_ID:?}", cortex.live.kind: oracle}

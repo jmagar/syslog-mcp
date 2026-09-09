@@ -33,7 +33,7 @@ impl CortexService {
             .await?;
 
         let count_truncated = rows.len() > limit as usize;
-        let mut events = Vec::with_capacity(rows.len().min(limit as usize));
+        let mut events = Vec::with_capacity(limit as usize);
         let mut retained_bytes = 0usize;
         let mut byte_truncated = false;
         for row in rows.into_iter().take(limit as usize) {

@@ -20,6 +20,8 @@ const DB_BUSY_TIMEOUT_MS: u64 = 150;
 /// only bounds lock-wait, not execution, so a progress handler enforces this to
 /// keep Tab snappy even on a large DB.
 const DB_QUERY_DEADLINE_MS: u64 = 150;
+#[cfg(test)]
+const COMMAND_CHILDREN: &[(&str, &[&str])] = cortex::surfaces::CLI_CHILDREN;
 
 /// Top-level completion entry. `args[0]` is the context kind.
 pub(crate) fn complete(args: &[String]) -> Result<Vec<String>> {
@@ -38,121 +40,8 @@ pub(crate) fn complete(args: &[String]) -> Result<Vec<String>> {
     }
 }
 
-const COMMAND_CHILDREN: &[(&str, &[&str])] = &[
-    ("hosts", &["sources", "silent"]),
-    (
-        "sessions",
-        &[
-            "search",
-            "abuse",
-            "correlate",
-            "blocks",
-            "context",
-            "tools",
-            "projects",
-            "index",
-            "add",
-            "watch",
-            "checkpoints",
-            "errors",
-            "prunecheckpoints",
-            "doctor",
-            "watchstatus",
-            "smokewatch",
-            "similar",
-            "incidentcontext",
-            "incidents",
-            "investigate",
-            "assess",
-            "llminvocations",
-            "skills",
-            "skillincidents",
-            "skillinvestigate",
-            "skillassess",
-            "mcpevents",
-            "mcpincidents",
-            "mcpinvestigate",
-            "mcpassess",
-            "hookevents",
-            "hookincidents",
-            "hookinvestigate",
-            "hooksbackfill",
-        ],
-    ),
-    ("assess", &["skill", "abuse", "mcp", "hooks"]),
-    (
-        "analysis",
-        &["errors", "incident", "patterns", "anomalies", "compare"],
-    ),
-    ("state", &["host", "fleet", "clockskew"]),
-    (
-        "ingest",
-        &["shell", "inventory", "filetail", "syslog", "docker"],
-    ),
-    ("ingest shell", &["user", "agent"]),
-    ("ingest shell user", &["index", "atuinindex"]),
-    ("ingest shell agent", &["index", "wrap"]),
-    ("ingest inventory", &["refresh", "status"]),
-    (
-        "ingest filetail",
-        &["list", "status", "add", "remove", "enable", "disable"],
-    ),
-    ("ingest syslog", &["status"]),
-    ("ingest docker", &["status", "sources"]),
-    ("alerts", &["signatures", "notifications"]),
-    ("alerts signatures", &["list", "ack", "unack"]),
-    ("alerts notifications", &["recent", "test"]),
-    ("heartbeat", &["agent"]),
-    ("correlate", &["events", "state", "topic"]),
-    ("stats", &["summary", "ingestrate"]),
-    (
-        "compose",
-        &["status", "doctor", "up", "down", "restart", "pull", "logs"],
-    ),
-    (
-        "setup",
-        &[
-            "check",
-            "repair",
-            "install",
-            "pluginhook",
-            "sessionstimer",
-            "sessionswatch",
-            "sessionshealth",
-            "shell",
-            "heartbeatagent",
-            "debugwrapper",
-            "debugcompose",
-            "deploy",
-            "doctor",
-        ],
-    ),
-    ("setup shell", &["agent", "completions"]),
-    ("setup shell agent", &["install", "remove", "check"]),
-    ("setup shell completions", &["install", "remove", "check"]),
-    ("setup sessionstimer", &["install", "remove", "check"]),
-    ("setup sessionswatch", &["install", "remove", "check"]),
-    ("setup heartbeatagent", &["install", "remove", "check"]),
-    ("setup debugwrapper", &["install", "remove", "check"]),
-    ("setup debugcompose", &["install", "remove", "check"]),
-    ("setup deploy", &["preflight", "local", "remote", "agent"]),
-    (
-        "db",
-        &["status", "integrity", "checkpoint", "vacuum", "backup"],
-    ),
-    ("db integrity", &["status"]),
-    ("config", &["get", "set", "unset", "list"]),
-    (
-        "graph",
-        &["around", "explain", "evidence", "status", "rebuild"],
-    ),
-];
-
 fn command_children(path: &str) -> &'static [&'static str] {
-    COMMAND_CHILDREN
-        .iter()
-        .find_map(|(parent, children)| (*parent == path).then_some(*children))
-        .unwrap_or(&[])
+    cortex::surfaces::cli_children(path)
 }
 
 fn completion_words(args: &[String]) -> Vec<&str> {

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cortex.invalid/live/target-v1",
+  "type": "object",
+  "required": ["schema", "target_id", "profile", "base_url", "resolved_ip", "resolved_addresses", "server_instance_id", "server_version", "deployment_id", "database_fingerprint", "compose", "evidence", "roles", "fleet_allowlist", "capabilities", "observed_at", "expires_at"],
+  "properties": {
+    "schema": {"const": "cortex-live-target-v1"},
+    "target_id": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$"},
+    "profile": {"enum": ["deployed-read-only", "fleet-read-only"]},
+    "base_url": {"type": "string", "pattern": "^https://"},
+    "resolved_ip": {"type": "string", "minLength": 2},
+    "resolved_addresses": {"type":"object", "required":["a","aaaa"], "properties":{"a":{"type":"array"},"aaaa":{"type":"array"}}, "additionalProperties":false},
+    "tls_spki_sha256": {"type": ["string", "null"]},
+    "server_instance_id": {"type": "string", "minLength": 1},
+    "server_version": {"type": "string", "minLength": 1},
+    "deployment_id": {"type": "string", "minLength": 1},
+    "database_fingerprint": {"type": "string", "minLength": 8},
+    "compose": {
+      "type": "object",
+      "required": ["project", "service", "container_id"],
+      "properties": {
+        "project": {"type": "string", "minLength": 1},
+        "service": {"type": "string", "minLength": 1},
+        "container_id": {"type": "string", "pattern":"^[A-Za-z0-9_.-]{12,128}$"}
+      },
+      "additionalProperties": false
+    },
+    "evidence":{"type":"object","required":["compose","database","deployment"],"properties":{"compose":{"type":"string"},"database":{"type":"string"},"deployment":{"type":"string"}},"additionalProperties":false},
+    "roles": {"type":"object", "required":["read_token","admin_token"], "properties":{"read_token":{"const":"verified"},"admin_token":{"const":"verified"}}, "additionalProperties":false},
+    "fleet_allowlist": {"type":"array", "minItems":1, "items":{"type":"string"}},
+    "capabilities": {"type":"array", "minItems":1, "items":{"type":"string"}},
+    "observed_at": {"type": "string", "format": "date-time"},
+    "expires_at": {"type": "string", "format": "date-time"}
+  },
+  "additionalProperties": false
+}

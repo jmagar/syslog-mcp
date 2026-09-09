@@ -2,12 +2,12 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
+use crate::surfaces::get;
 use axum::{
     Router,
     extract::State,
     http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, header},
     response::{IntoResponse, Json},
-    routing::get,
 };
 use serde_json::json;
 use tower_http::{cors::CorsLayer, limit::RequestBodyLimitLayer};
@@ -22,12 +22,15 @@ const MCP_SESSION_ID_HEADER: &str = "mcp-session-id";
 
 /// Build the MCP router
 pub fn router(state: AppState) -> Router {
+    use crate::surfaces::ContractRouterExt as _;
     // Authenticated RMCP Streamable HTTP endpoint.
     // /health is unauthenticated — Docker HEALTHCHECK, Compose, and SWAG reach it.
     // /health/full is auth-gated and returns OTLP counters + ingest observability.
     let rmcp_config = streamable_http_config(&state.config);
-    let mcp_service =
-        Router::new().nest_service("/mcp", streamable_http_service(state.clone(), rmcp_config));
+    let mcp_service = Router::new().nest_service(
+        crate::surfaces::contract_path("POST /mcp"),
+        streamable_http_service(state.clone(), rmcp_config),
+    );
 
     // Apply auth layer based on policy (see `build_auth_layer` for invariants).
     // `resource_url` is only used when a layer is actually mounted, so compute
@@ -75,21 +78,27 @@ pub fn router(state: AppState) -> Router {
         );
         let auth_state = state_arc.as_ref().clone();
         let path_based_discovery = Router::new()
-            .route(
-                "/mcp/.well-known/oauth-authorization-server",
+            .contract_route(
+                "GET /mcp/.well-known/oauth-authorization-server",
                 get(lab_auth::metadata::authorization_server_metadata),
             )
-            .route(
-                "/mcp/.well-known/openid-configuration",
+            .contract_route(
+                "GET /mcp/.well-known/openid-configuration",
                 get(lab_auth::metadata::authorization_server_metadata),
             )
-            .route(
-                "/mcp/.well-known/oauth-protected-resource",
+            .contract_route(
+                "GET /mcp/.well-known/oauth-protected-resource",
                 get(lab_auth::metadata::protected_resource_metadata),
             )
             .with_state(auth_state.clone());
 
-        Some(lab_auth::routes::router(auth_state).merge(path_based_discovery))
+        Some(
+            crate::surfaces::contracted_external_router(
+                crate::surfaces::OAUTH_ROUTE_BINDINGS,
+                lab_auth::routes::router(auth_state),
+            )
+            .merge(path_based_discovery),
+        )
     } else {
         None
     };
@@ -113,8 +122,8 @@ pub fn router(state: AppState) -> Router {
     // (which requires AppState) and call .with_state(state) at the end.
     let health_state = state.clone();
     let health_route = Router::new()
-        .route("/health", get(health_minimal))
-        .route("/health/full", get(health_full));
+        .contract_route("GET /health", get(health_minimal))
+        .contract_route("GET /health/full", get(health_full));
 
     let base_with_state: Router<()> = Router::new()
         .merge(authenticated)

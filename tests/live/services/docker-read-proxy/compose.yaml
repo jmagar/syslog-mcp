@@ -1,0 +1,39 @@
+services:
+  daemon:
+    image: docker:29.1.3-dind@sha256:173f284a4299164772a90f52b373e73e087583c0963f1334c9995f190ef6f3f5
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    command: ["dockerd", "--host=tcp://0.0.0.0:2375", "--host=unix:///var/run/docker.sock", "--iptables=false", "--ip-forward=false"]
+    labels:
+      cortex.live.run_id: "${LIVE_RUN_ID:-cortex-live-refuse-unset}"
+      cortex.live.role: daemon
+    networks: [control]
+    volumes: [dind-socket:/var/run]
+    expose: ["2375"]
+  proxy:
+    image: tecnativa/docker-socket-proxy:latest@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
+    environment:
+      CONTAINERS: 1
+      EVENTS: 1
+      INFO: 1
+      PING: 1
+      POST: 0
+      VERSION: 1
+    labels:
+      cortex.live.run_id: "${LIVE_RUN_ID:-cortex-live-refuse-unset}"
+      cortex.live.role: read-proxy
+    networks: [control]
+    volumes: [dind-socket:/var/run:ro]
+    read_only: true
+    tmpfs: [/run, /tmp]
+    ports: ["127.0.0.1::2375"]
+networks:
+  control:
+    internal: true
+    labels:
+      cortex.live.run_id: "${LIVE_RUN_ID:-cortex-live-refuse-unset}"
+volumes:
+  dind-socket:
+    labels:
+      cortex.live.run_id: "${LIVE_RUN_ID:-cortex-live-refuse-unset}"

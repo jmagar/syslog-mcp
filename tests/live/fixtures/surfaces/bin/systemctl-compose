@@ -1,0 +1,8 @@
+#!/bin/sh
+# No host service manager owns the isolated Compose listeners.
+case "$*" in
+  *is-active*) printf '%s\n' inactive; exit 3 ;;
+  *is-enabled*) printf '%s\n' disabled; exit 1 ;;
+  *show*) printf '%s\n' 'LoadState=not-found'; exit 0 ;;
+esac
+exit 0

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Run-owned launchd boundary double; plist files and their contents remain the
+# semantic postcondition while no host launchd domain is contacted.
+exit 0

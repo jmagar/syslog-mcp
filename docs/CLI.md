@@ -899,7 +899,7 @@ local binary and probe each configured host over SSH without deploying.
 Live client updates preserve the existing remote heartbeat-agent env before
 reinstalling. Because this is an update path for already configured agents, it
 fails if the remote agent token cannot be read/preserved; use
-`cortex setup deploy agent --heartbeat-token ...` to seed or repair a client.
+`cortex setup deploy agent --heartbeat-token-file PATH` to seed or repair a client without exposing the token in process arguments.
 
 ### `cortex setup deploy`
 

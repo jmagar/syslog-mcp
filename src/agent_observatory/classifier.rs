@@ -72,8 +72,7 @@ fn required(value: Option<&str>) -> Option<&str> {
 }
 
 fn canonical_known_tool(value: &str) -> Option<String> {
-    let normalized = value.trim().to_lowercase();
-    matches!(normalized.as_str(), "claude" | "codex" | "gemini").then_some(normalized)
+    crate::scanner::providers::canonical_transcript_provider(value).map(str::to_string)
 }
 
 fn truncate_utf8(value: &str, max_bytes: usize) -> (String, bool) {

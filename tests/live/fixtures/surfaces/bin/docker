@@ -1,0 +1,37 @@
+#!/bin/sh
+# Read-only Docker boundary for host-side CLI surface qualification. It
+# exposes deterministic ownership/status data and rejects every mutation.
+case "${1:-}" in
+  --version) printf '%s\n' 'Docker version 29.1.3-surface-read-boundary' ;;
+  inspect)
+    compose_file="${COMPOSE_FILE:-${HOME:?}/.cortex/compose/compose.yaml}"
+    compose_dir="$(dirname "$compose_file")"
+    case "$*" in
+      *'project.working_dir'*) printf '%s\n' "$compose_dir" ;;
+      *'Config.Image'*) printf '%s\n' cortex:local-debug ;;
+      *'{{.Image}}'*) printf '%s\n' sha256:surface-live ;;
+      *) printf '%s\n' "{\"Id\":\"surface-live-candidate\",\"Name\":\"/surface-live-candidate\",\"Image\":\"sha256:surface-live\",\"State\":{\"Status\":\"running\",\"Health\":{\"Status\":\"healthy\"}},\"Config\":{\"Image\":\"cortex:local-debug\",\"Labels\":{\"com.docker.compose.project\":\"surface-live\",\"com.docker.compose.service\":\"cortex\",\"com.docker.compose.project.working_dir\":\"$compose_dir\",\"com.docker.compose.project.config_files\":\"$compose_file\"}},\"HostConfig\":{\"NetworkMode\":\"surface-live_isolated\"},\"Mounts\":[{\"Type\":\"bind\",\"Source\":\"${HOME:?}/.cortex/data\",\"Destination\":\"/data\"}],\"NetworkSettings\":{\"Ports\":{\"3100/tcp\":[{\"HostIp\":\"127.0.0.1\",\"HostPort\":\"3100\"}],\"1514/udp\":[{\"HostIp\":\"127.0.0.1\",\"HostPort\":\"1514\"}],\"1514/tcp\":[{\"HostIp\":\"127.0.0.1\",\"HostPort\":\"1514\"}]}}}" ;;
+    esac
+    ;;
+  ps)
+    case "$*" in
+      *com.docker.compose.service*) printf '%s\n' surface-live-candidate ;;
+      *publish=*) printf '%s\t%s\n' surface-live-candidate surface-live-candidate ;;
+      *) exit 0 ;;
+    esac
+    ;;
+  version|info) printf '%s\n' '29.1.3-surface-read-boundary' ;;
+  compose)
+    case "${2:-}" in
+      version) printf '%s\n' 'Docker Compose version v2.40.3-surface-read-boundary' ;;
+      config) case "$*" in *--images*) printf '%s\n' cortex:local-debug;; esac ;;
+      ps) printf '%s\n' 'surface-live-candidate' ;;
+      *) printf '%s\n' 'read-only docker fixture: mutation denied' >&2; exit 64 ;;
+    esac
+    ;;
+  image)
+    case "$*" in *'{{.Id}}'*) printf '%s\n' sha256:surface-live;; *RepoDigests*) printf '%s\n' '';; esac
+    ;;
+  exec) printf '%s\n' 'cortex 3.15.0' ;;
+  *) printf '%s\n' 'read-only docker fixture: mutation denied' >&2; exit 64 ;;
+esac

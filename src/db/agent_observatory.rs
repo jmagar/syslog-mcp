@@ -22,8 +22,9 @@ pub use run_commits::{
 #[path = "agent_observatory_sources.rs"]
 mod sources;
 pub use sources::{
-    AgentHookSourceRow, AgentLlmSourceRow, AgentMcpSourceRow, AgentSkillSourceRow, AgentSourceKind,
-    AgentSourceRecord, page_agent_sources,
+    AgentHookSourceRow, AgentLlmSourceRow, AgentMcpSourceRow, AgentOtelMetricSourceRow,
+    AgentOtelSpanSourceRow, AgentRepositoryObservationSourceRow, AgentSkillSourceRow,
+    AgentSourceKind, AgentSourceRecord, page_agent_sources,
 };
 
 #[path = "agent_observatory_projection.rs"]
@@ -31,17 +32,22 @@ mod projection;
 pub use projection::{
     AgentActorUpsert, AgentProjectionOutboxInput, AgentProjectionRunMatch,
     AgentProjectionWriteInput, AgentProjectionWriteResult, AgentRunEventUpsert, AgentRunUpsert,
-    AgentWorktreeEvidenceUpsert, find_active_projection_worktree,
+    AgentTraceRelationUpsert, AgentWorktreeEvidenceUpsert, find_active_projection_worktree,
     find_unique_overlapping_projection_run, find_unique_projection_run_by_session,
     write_agent_projection,
 };
-pub(crate) use projection::{projection_event_has_summary, write_agent_projection_with_cursor};
+pub(crate) use projection::{
+    AgentRepositoryObservationRunMatch, find_unique_projection_run_for_repository_observation,
+    projection_event_has_summary, reconcile_unmatched_trace_relations,
+    write_agent_existing_run_event, write_agent_existing_run_event_with_cursor,
+    write_agent_projection_with_cursor, write_agent_trace_relation_without_run,
+};
 
 #[path = "agent_observatory_observations.rs"]
 mod observations;
 pub use observations::RepositoryObservationInput;
 #[cfg(test)]
-pub use observations::list_repository_observations;
+pub use observations::{list_repository_observations, record_repository_observations_if_changed};
 
 #[path = "agent_observatory_queries.rs"]
 mod queries;

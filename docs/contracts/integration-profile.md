@@ -1,3 +1,9 @@
+---
+title: Palette integration profile
+created: 2026-08-29
+updated: 2026-08-29
+---
+
 # Palette integration profile
 
 Cortex owns this conservative version/schema contract. Its canonical source is `contracts/integration-profile.schema.json`, its generated snapshot is `docs/contracts/generated/integration-profile.schema.json`, and `python3 scripts/check-integration-contracts.py` checks drift and fail-closed fixtures.

@@ -1,3 +1,4 @@
+use crate::surfaces::get;
 use axum::{
     Router,
     body::Body,
@@ -6,7 +7,6 @@ use axum::{
         header::{CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE},
     },
     response::{IntoResponse, Response},
-    routing::get,
 };
 
 const INDEX_HTML: &str = include_str!("../web/app/index.html");
@@ -14,19 +14,24 @@ const APP_CSS: &str = include_str!("../web/app/app.css");
 const APP_JS: &str = include_str!("../web/app/app.js");
 const CYTOSCAPE_JS: &str = include_str!("../web/vendor/cytoscape-3.34.0.min.js");
 
-const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; \
+// Cytoscape positions its canvas layers with element style properties. CSP
+// treats those properties as inline styles, so the workspace must permit
+// style attributes even though all stylesheet and script resources remain
+// same-origin. Script execution deliberately does not receive unsafe-inline.
+const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; \
                   img-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; \
                   frame-ancestors 'none'";
 const NO_STORE: &str = "no-store";
 const IMMUTABLE: &str = "public, max-age=31536000, immutable";
 
 pub fn router() -> Router {
+    use crate::surfaces::ContractRouterExt as _;
     Router::new()
-        .route("/app", get(index))
-        .route("/app/", get(index))
-        .route("/app/investigate", get(index))
-        .route("/app/assets/{*path}", get(asset))
-        .route("/app/{*path}", get(index))
+        .contract_route("GET /app", get(index))
+        .contract_route("GET /app/", get(index))
+        .contract_route("GET /app/investigate", get(index))
+        .contract_route("GET /app/assets/{*path}", get(asset))
+        .contract_route("GET /app/{*path}", get(index))
 }
 
 async fn index() -> Response {

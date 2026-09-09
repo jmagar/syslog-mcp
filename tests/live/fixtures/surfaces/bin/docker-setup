@@ -1,0 +1,16 @@
+#!/bin/sh
+# Setup's external Docker dependency double. The setup command still writes and
+# validates every run-owned filesystem asset; the real Compose lifecycle is
+# independently exercised by the compose surfaces in the same phase.
+case "$*" in
+  *'compose ps -q'*) printf '%s\n' surface-setup-cortex ;;
+  *'compose config --images'*) printf '%s\n' cortex:local-debug ;;
+  *'inspect '*'project.working_dir'*) printf '%s\n' "${HOME:?}/.cortex/compose" ;;
+  *'inspect '*'Config.Image'*) printf '%s\n' cortex:local-debug ;;
+  *'inspect '*'{{.Image}}'*) printf '%s\n' sha256:surface-setup ;;
+  *'image inspect '*'{{.Id}}'*) printf '%s\n' sha256:surface-setup ;;
+  *'image inspect '*'RepoDigests'*) printf '%s\n' '' ;;
+  *'exec '*'cortex --version'*) printf '%s\n' 'cortex 3.15.0' ;;
+  *version*) printf '%s\n' 'Docker Compose version v5.1.2' ;;
+esac
+exit 0

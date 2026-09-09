@@ -1,0 +1,16 @@
+services:
+  cortex:
+    image: ${LIVE_COMPOSE_FIXTURE_IMAGE:?set immutable LIVE_COMPOSE_FIXTURE_IMAGE}
+    command: ["sh", "-c", "echo cortex-live-compose-ready; trap 'exit 0' TERM; while :; do sleep 1; done"]
+    labels:
+      cortex.live.run_id: ${LIVE_RUN_ID:?set LIVE_RUN_ID}
+    volumes:
+      - data:/data
+volumes:
+  data:
+    labels:
+      cortex.live.run_id: ${LIVE_RUN_ID:?set LIVE_RUN_ID}
+networks:
+  default:
+    labels:
+      cortex.live.run_id: ${LIVE_RUN_ID:?set LIVE_RUN_ID}

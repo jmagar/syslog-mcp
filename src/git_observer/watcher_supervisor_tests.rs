@@ -12,7 +12,6 @@ fn options() -> GitWatchSupervisorOptions {
         periodic_interval: Duration::from_secs(60),
     }
 }
-
 #[test]
 fn hundred_overflow_notifications_emit_one_full_reconcile_per_interval() {
     let start = Instant::now();

@@ -1,0 +1,32 @@
+{
+  "schema": "cortex-live-platform-coverage-v1",
+  "policies": {
+    "portable": {
+      "platforms": ["darwin", "windows"],
+      "certification": "portable",
+      "approved_qualifications": {
+        "topology.pressure-quota": ["platform-qualified"],
+        "topology.docker-agent-boundary": ["platform-qualified", "not-authorized"],
+        "topology.projection_watermark": ["not-applicable"],
+        "topology.evaluator_cycle": ["not-applicable"],
+        "topology.agent_checkpoint": ["not-applicable"],
+        "topology.redirector-egress": ["platform-qualified"],
+        "storage.pressure": ["platform-qualified"]
+      },
+      "linux_only_coverage": ["hard-volume-quota", "run-owned-dind", "oom-control", "daemon-death-restart", "unix-socket-permissions", "redirector-egress-denial"]
+    },
+    "linux-full": {
+      "platforms": ["linux"],
+      "certification": "full",
+      "approved_qualifications": {
+        "topology.projection_watermark": ["not-applicable"],
+        "topology.evaluator_cycle": ["not-applicable"],
+        "topology.agent_checkpoint": ["not-applicable"],
+        "topology.docker-agent-boundary": ["not-applicable"]
+      },
+      "required_profiles": ["smoke", "full", "storage", "soak", "isolated", "agent", "legacy-central-pull", "mcp", "auth", "stateful", "notifications", "security", "upgrade", "mutation"],
+      "required_passes": ["topology.pressure-quota", "topology.redirector-egress"],
+      "profile_required_passes": {"agent": ["topology.docker-agent-boundary"]}
+    }
+  }
+}

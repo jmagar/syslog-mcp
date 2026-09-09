@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'scp\t%s\n' "$*" >>"${LIVE_AGENT_CLI_TRANSPORT_LOG:?}"

@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Minimal run-local GNU-timeout compatibility for hosts (notably macOS) where
+# coreutils is absent. Cortex invokes: timeout -k 1s SECONDS COMMAND ARGS...
+set -u
+if [[ "${1:-}" == -k ]]; then shift 2; fi
+seconds="${1:-}"; shift || exit 2
+[[ "$seconds" =~ ^[1-9][0-9]*([.]?[0-9]*)?[smh]?$ && $# -gt 0 ]] || exit 2
+case "$seconds" in *m) seconds=$(( ${seconds%m} * 60 ));; *h) seconds=$(( ${seconds%h} * 3600 ));; *s) seconds="${seconds%s}";; esac
+"$@" & command_pid=$!
+(
+  sleep "$seconds"
+  kill -TERM "$command_pid" 2>/dev/null || exit 0
+  sleep 1
+  kill -KILL "$command_pid" 2>/dev/null || true
+) & watcher_pid=$!
+status=0; wait "$command_pid" || status=$?
+if kill "$watcher_pid" 2>/dev/null; then wait "$watcher_pid" 2>/dev/null || true; else status=124; fi
+exit "$status"

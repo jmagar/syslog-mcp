@@ -1,0 +1,9 @@
+services:
+  candidate:
+    environment:
+      CORTEX_AUTH_MODE: oauth
+      CORTEX_PUBLIC_URL: http://localhost:3100
+      CORTEX_GOOGLE_CLIENT_ID: cortex-live-client
+      CORTEX_GOOGLE_CLIENT_SECRET: cortex-live-secret
+      CORTEX_AUTH_ADMIN_EMAIL: live-admin@example.invalid
+      CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH: "true"

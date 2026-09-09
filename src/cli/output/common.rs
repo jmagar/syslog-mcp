@@ -46,17 +46,41 @@ fn print_ai_log(log: &LogEntry) {
                 .and_then(|app| app.strip_suffix("-transcript"))
         })
         .unwrap_or("ai");
-    let project = log.ai_project.as_deref().unwrap_or("(unknown project)");
-    let session = log.ai_session_id.as_deref().unwrap_or("(unknown session)");
+    let tool = terminal_safe_line(tool);
+    let timestamp = terminal_safe_line(&local_ts(&log.timestamp));
+    let severity_label = terminal_safe_line(&log.severity);
+    let project = terminal_safe_line(log.ai_project.as_deref().unwrap_or("(unknown project)"));
+    let session = terminal_safe_line(log.ai_session_id.as_deref().unwrap_or("(unknown session)"));
     println!(
         "{} {:<7} {:<8} {:<36} session={}",
-        muted(&local_ts(&log.timestamp)),
-        severity(&log.severity),
-        violet(&truncate(tool, 8)),
-        primary(&truncate(project, 35)),
-        muted(&truncate(session, 24))
+        muted(&timestamp),
+        severity(&severity_label),
+        violet(&truncate(&tool, 8)),
+        primary(&truncate(&project, 35)),
+        muted(&truncate(&session, 24))
     );
-    println!("    {}", indent_multiline(&log.message));
+    println!(
+        "    {}",
+        indent_multiline(&terminal_safe_multiline(&log.message))
+    );
+}
+
+pub(crate) fn terminal_safe_line(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect()
+}
+
+pub(crate) fn terminal_safe_multiline(value: &str) -> String {
+    value
+        .chars()
+        .filter_map(|ch| match ch {
+            '\n' => Some('\n'),
+            ch if ch.is_control() => None,
+            ch => Some(ch),
+        })
+        .collect()
 }
 
 pub(crate) fn is_transcript_log(log: &LogEntry) -> bool {

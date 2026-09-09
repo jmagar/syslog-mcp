@@ -51,23 +51,19 @@ Database tests use `tempfile::TempDir` for isolated SQLite instances. Each test 
 
 ## Live smoke tests
 
-Live tests run against a running cortex server:
+The canonical profile creates a run-owned Cortex topology:
 
 ```bash
 just test-live
-# or: bash tests/test_live.sh
+# or: bash tests/live/run-profile.sh smoke
 ```
 
-The smoke test (`scripts/smoke-test.sh`) exercises all `cortex` actions via mcporter.
-`tests/test_live.sh` additionally covers live UDP and TCP syslog ingest, MCP
-tool calls, CLI parity between local SQLite and `--http`, REST surface parity,
-and a deterministic admin `POST /api/file-tails` status/list path when
-`CORTEX_API_ADMIN_TOKEN` is set. Docker log ingest is split by operational
-path: host-local agent Docker streaming is covered by agent deployment parity
-tests, while the legacy central pull path uses the mocked Docker HTTP fixture
-in `src/docker_ingest/client_tests.rs`.
-Compose diagnostics are non-mutating and are validated only for redacted shape,
-so the smoke test can pass on either Docker-backed or non-Docker deployments.
+Smoke covers live UDP/TCP/OTLP ingest plus its portable REST, CLI, browser,
+admin/auth-negative, lifecycle, and cleanup assertions. Run `just live-mcp` for
+the registry-derived every-action MCP qualification. Complete CLI/API/MCP and
+owner-profile coverage is established by the aggregate suite, not smoke alone.
+`scripts/smoke-test.sh` and `tests/test_live.sh` are thin compatibility wrappers.
+See `docs/LIVE_QUALIFICATION.md` for specialist profiles and cadence.
 When seeding is enabled, the smoke scripts import
 `tests/fixtures/ai-session-smoke.jsonl` and assert that `sessions`,
 `search_sessions`, `evidence_scope`, `abuse`, `abuse_incidents`, `abuse_investigate`, `ai_correlate`, and `project_context` can retrieve real AI transcript
@@ -86,7 +82,7 @@ Action registry covered by live/script references: `search`, `filter`, `tail`, `
 `silent_hosts`, `clock_skew`, `anomalies`, `compare`, `compose_status`,
 `compose_doctor`, `unaddressed_errors`, `ack_error`, `unack_error`,
 `notifications_recent`, `file_tails`, `notifications_test`, `llm_invocations`,
-`similar_incidents`, `incident_context`, `graph`, `artifact_evidence`,
+`similar_incidents`, `recurring_error_comparison`, `incident_context`, `graph`, `artifact_evidence`,
 `artifact_evidence_record`, `skill_events`, `skill_incidents`, `skill_investigate`, `mcp_events`, `mcp_incidents`,
 `mcp_investigate`, `hook_events`, `hook_incidents`, `hook_investigate`, `help`.
 

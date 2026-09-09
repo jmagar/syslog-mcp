@@ -1,0 +1,11 @@
+{
+  "schema": "cortex-live-security-contract-v1",
+  "network": {"external_egress": false, "mixed_address_sets": "reject", "redirects": "reject"},
+  "limits": {"wall_seconds": 600, "request_bytes": 1048576, "decompressed_bytes": 4194304, "connections": 128, "cases": 32},
+  "mandatory_classes": [
+    "host", "origin", "forwarded-proxy", "parser", "body", "path",
+    "docker-authority", "secret"
+  ],
+  "recovery_probe_after_every_case": true,
+  "evidence_allowlist": ["case", "class", "result", "status", "recovery_status", "detail_sha256"]
+}

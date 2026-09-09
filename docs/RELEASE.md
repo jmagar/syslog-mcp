@@ -41,14 +41,21 @@ and `CHANGELOG.md`. Plugin manifests are intentionally unversioned —
 
 ## Live Gates
 
-Run these only against an intended test or production deployment:
+Run the release-blocking isolated profiles against run-owned services:
 
 ```bash
-bash tests/test_live.sh
-bash scripts/smoke-test.sh
-bash scripts/smoke-test-http.sh
-bash tests/mcporter/test-tools.sh
+just live-full
+just live-auth
+just live-stateful
+just live-notifications
+just live-artifact
+just live-upgrade
+just live-security
+just live-mutation
 ```
+
+Fleet/provider qualification is a separate explicit opt-in with immutable
+target manifests and operation-specific grants. See `docs/LIVE_QUALIFICATION.md`.
 
 Live Docker ingest validation now follows two paths: host-local cortex agent
 parity for deployed agents, and the legacy central pull fixture with

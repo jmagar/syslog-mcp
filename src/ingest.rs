@@ -172,14 +172,35 @@ impl IngestTx {
     /// open until all listener clones are also dropped (by their task futures
     /// completing), but the `shutdown_tx` signal causes the writer to drain
     /// and return before that happens.
-    pub(crate) async fn shutdown(self, timeout: std::time::Duration) {
+    pub(crate) async fn shutdown(self, timeout: std::time::Duration) -> bool {
         let _ = self.shutdown_tx.send(true);
         // Drop our tx clone — not strictly required since the shutdown arm in
         // the writer doesn't wait for EOF, but good hygiene.
         let handle = self.writer_handle.lock().take();
         drop(self.tx);
-        if let Some(handle) = handle {
-            let _ = tokio::time::timeout(timeout, handle).await;
+        let Some(mut handle) = handle else {
+            tracing::error!("Ingest writer handle was unavailable during shutdown");
+            return false;
+        };
+        match tokio::time::timeout(timeout, &mut handle).await {
+            Ok(Ok(())) => true,
+            Ok(Err(error)) => {
+                tracing::error!(%error, "Ingest writer failed during shutdown");
+                false
+            }
+            Err(_) => {
+                tracing::error!(
+                    timeout_secs = timeout.as_secs_f64(),
+                    "Ingest writer drain timed out; aborting writer"
+                );
+                handle.abort();
+                if let Err(error) = handle.await
+                    && !error.is_cancelled()
+                {
+                    tracing::error!(%error, "Ingest writer failed while aborting shutdown");
+                }
+                false
+            }
         }
     }
 
@@ -231,6 +252,12 @@ impl IngestTx {
             shutdown_tx: Arc::new(shutdown_tx),
             writer_handle: Arc::new(Mutex::new(None)),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_writer_handle_for_test(mut self, handle: JoinHandle<()>) -> Self {
+        self.writer_handle = Arc::new(Mutex::new(Some(handle)));
+        self
     }
 }
 
@@ -294,4 +321,46 @@ pub(crate) fn start_writer_from_receiver_config(
         enrichment,
         observability,
     )
+}
+
+#[cfg(test)]
+mod shutdown_tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn test_ingest(handle: JoinHandle<()>) -> IngestTx {
+        let (tx, _rx) = mpsc::channel(1);
+        IngestTx::from_envelope_sender_for_test(tx).with_writer_handle_for_test(handle)
+    }
+
+    #[tokio::test]
+    async fn shutdown_classifies_clean_writer_exit() {
+        assert!(
+            test_ingest(tokio::spawn(async {}))
+                .shutdown(Duration::from_secs(1))
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_classifies_writer_panic_as_unclean() {
+        let handle = tokio::spawn(async { panic!("injected writer panic") });
+        assert!(!test_ingest(handle).shutdown(Duration::from_secs(1)).await);
+    }
+
+    #[tokio::test]
+    async fn shutdown_aborts_and_joins_timed_out_writer() {
+        let progress = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let worker_progress = Arc::clone(&progress);
+        let handle = tokio::spawn(async move {
+            loop {
+                worker_progress.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                tokio::task::yield_now().await;
+            }
+        });
+        assert!(!test_ingest(handle).shutdown(Duration::ZERO).await);
+        let stopped = progress.load(std::sync::atomic::Ordering::SeqCst);
+        tokio::task::yield_now().await;
+        assert_eq!(progress.load(std::sync::atomic::Ordering::SeqCst), stopped);
+    }
 }

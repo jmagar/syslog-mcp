@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::surfaces::{get, post};
 use axum::{
     Router,
     body::Body,
@@ -24,7 +25,6 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     middleware::{Next, from_fn},
     response::{IntoResponse, Json, Response},
-    routing::{get, post},
 };
 use bytes::Bytes;
 use lab_auth::middleware::{parse_bearer_token, tokens_equal};
@@ -209,12 +209,13 @@ pub struct AgentUpdateDirective {
 }
 
 pub fn router(state: HeartbeatState) -> Router {
+    use crate::surfaces::ContractRouterExt as _;
     Router::new()
-        .route("/v1/heartbeats", post(heartbeat_handler))
+        .contract_route("POST /v1/heartbeats", post(heartbeat_handler))
         .layer(RequestBodyLimitLayer::new(HEARTBEAT_BODY_LIMIT_BYTES))
         .layer(from_fn(json_payload_too_large))
-        .route("/v1/agent/binary", get(agent_binary_handler))
-        .route("/v1/agent/release", get(agent_release_handler))
+        .contract_route("GET /v1/agent/binary", get(agent_binary_handler))
+        .contract_route("GET /v1/agent/release", get(agent_release_handler))
         .with_state(state)
 }
 

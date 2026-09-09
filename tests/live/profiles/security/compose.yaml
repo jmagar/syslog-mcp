@@ -1,0 +1,17 @@
+services:
+  candidate:
+    environment:
+      CORTEX_ALLOWED_HOSTS: localhost
+      CORTEX_ALLOWED_ORIGINS: http://localhost
+    networks: [isolated]
+  security-probe:
+    image: ${LIVE_ORACLE_IMAGE:?immutable oracle image required}
+    pull_policy: never
+    command: ["sleep", "infinity"]
+    init: true
+    read_only: true
+    tmpfs: [/tmp]
+    networks: [isolated]
+    labels: {cortex.live.run_id: "${LIVE_RUN_ID:?}"}
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]

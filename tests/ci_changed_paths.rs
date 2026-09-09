@@ -1,13 +1,17 @@
 use std::collections::HashMap;
 use std::fs;
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static CLASSIFY_NONCE: AtomicU64 = AtomicU64::new(0);
 
 fn classify(event: &str, files: &[&str]) -> HashMap<String, String> {
     let temp_dir = std::env::temp_dir().join(format!(
-        "cortex-ci-paths-{}-{}-{}",
+        "cortex-ci-paths-{}-{}-{}-{}",
         std::process::id(),
         files.len(),
+        CLASSIFY_NONCE.fetch_add(1, Ordering::Relaxed),
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system time after unix epoch")

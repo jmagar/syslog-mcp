@@ -890,6 +890,153 @@ fn search_logs_filters_by_source_ip_prefix_without_fts() {
 }
 
 #[test]
+fn search_logs_filters_by_multiple_source_prefixes_with_indexed_or() {
+    let (pool, _dir) = test_pool();
+    let mut direct = make_entry(
+        "2026-01-01T00:00:00Z",
+        "devhost",
+        "info",
+        "direct shell history",
+    );
+    direct.source_ip = "shell-history://devhost/user/zsh".into();
+    direct.app_name = Some("zsh".into());
+
+    let mut forwarded = make_entry(
+        "2026-01-01T00:00:01Z",
+        "devhost",
+        "info",
+        "forwarded shell history",
+    );
+    forwarded.source_ip = "agent-shell-history://devhost/user/bash".into();
+    forwarded.app_name = Some("zsh".into());
+
+    let mut boundary = make_entry(
+        "2026-01-01T00:00:02Z",
+        "devhost",
+        "info",
+        "prefix boundary neighbor",
+    );
+    boundary.source_ip = "shell-historz://devhost/user/zsh".into();
+    boundary.app_name = Some("zsh".into());
+    insert_logs_batch(&pool, &[direct, forwarded, boundary]).unwrap();
+
+    let params = SearchParams {
+        host: Some("devhost".into()),
+        app: Some("zsh".into()),
+        source_ip_prefixes: Some(vec![
+            "shell-history://".into(),
+            "agent-shell-history://".into(),
+        ]),
+        ..Default::default()
+    };
+    let rows = search_logs(&pool, &params).unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(
+        rows.iter()
+            .all(|row| row.message != "prefix boundary neighbor")
+    );
+
+    let mut sql = String::from("SELECT l.id FROM logs l WHERE 1=1");
+    let mut bindings = Vec::new();
+    let mut idx = 1;
+    append_filters(&mut sql, &mut bindings, &mut idx, &params);
+    assert!(sql.contains("l.source_ip >= ?2 AND l.source_ip < ?3"));
+    assert!(sql.contains("l.source_ip >= ?4 AND l.source_ip < ?5"));
+    assert_eq!(
+        bindings,
+        vec![
+            rusqlite::types::Value::Text("devhost".into()),
+            rusqlite::types::Value::Text("shell-history://".into()),
+            rusqlite::types::Value::Text("shell-history:/0".into()),
+            rusqlite::types::Value::Text("agent-shell-history://".into()),
+            rusqlite::types::Value::Text("agent-shell-history:/0".into()),
+            rusqlite::types::Value::Text("zsh".into()),
+        ]
+    );
+
+    let plan_params = SearchParams {
+        source_ip_prefixes: params.source_ip_prefixes.clone(),
+        ..Default::default()
+    };
+    let mut plan_sql = String::from("SELECT l.id FROM logs l WHERE 1=1");
+    let mut plan_bindings = Vec::new();
+    let mut plan_idx = 1;
+    append_filters(
+        &mut plan_sql,
+        &mut plan_bindings,
+        &mut plan_idx,
+        &plan_params,
+    );
+    let plan = query_plan(&pool, &plan_sql, &plan_bindings);
+    assert!(
+        plan.contains("MULTI-INDEX OR"),
+        "expected indexed OR plan:\n{plan}"
+    );
+    assert!(
+        plan.matches("idx_logs_source_ip_timestamp").count() >= 2,
+        "both prefix arms must use the source index:\n{plan}"
+    );
+    assert!(
+        !plan.contains("SCAN l"),
+        "must not scan the logs table:\n{plan}"
+    );
+}
+
+#[test]
+fn empty_source_prefixes_neither_match_all_nor_select_the_fts_fast_path() {
+    let (pool, _dir) = test_pool();
+    insert_logs_batch(
+        &pool,
+        &[make_entry(
+            "2026-01-01T00:00:00Z",
+            "devhost",
+            "info",
+            "must not be returned",
+        )],
+    )
+    .unwrap();
+
+    for prefixes in [
+        vec![],
+        vec![String::new()],
+        vec![String::new(), String::new()],
+    ] {
+        let params = SearchParams {
+            source_ip_prefixes: Some(prefixes),
+            ..Default::default()
+        };
+        assert!(!params.has_indexed_equality_filter());
+
+        let mut sql = String::from("SELECT l.id FROM logs l WHERE 1=1");
+        let mut bindings = Vec::new();
+        let mut idx = 1;
+        append_filters(&mut sql, &mut bindings, &mut idx, &params);
+        assert_eq!(sql, "SELECT l.id FROM logs l WHERE 1=1");
+        assert!(bindings.is_empty());
+        assert_eq!(idx, 1);
+
+        let error = search_logs(&pool, &params).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("source prefixes must be non-empty")
+        );
+    }
+
+    let singular = SearchParams {
+        source_ip_prefix: Some(String::new()),
+        ..Default::default()
+    };
+    assert!(!singular.has_indexed_equality_filter());
+    let error = search_logs(&pool, &singular).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("source prefixes must be non-empty")
+    );
+}
+
+#[test]
 fn search_logs_filters_by_event_action_column() {
     let (pool, _dir) = test_pool();
     let mut die = make_entry(
@@ -1797,6 +1944,121 @@ fn ai_session_queries_respect_filters() {
     assert_eq!(searched.sessions.len(), 1);
     assert_eq!(searched.sessions[0].ai_session_id, "s2");
     assert_eq!(searched.sessions[0].hostname, "host-b");
+}
+
+#[test]
+fn ai_session_list_and_search_surface_redacted_title_provenance() {
+    let (pool, _dir) = test_pool();
+    let mut entry = make_ai_entry(
+        "2026-01-01T00:00:00Z",
+        "host-a",
+        "codex",
+        "/tmp/project",
+        "session-title",
+        "storage latency investigation",
+    );
+    entry.metadata_json = Some(
+        serde_json::json!({
+            "session": {
+                "title": "Investigate storage latency",
+                "title_provenance": "user"
+            }
+        })
+        .to_string(),
+    );
+    insert_logs_batch(&pool, &[entry]).unwrap();
+
+    let listed = list_ai_sessions(
+        &pool,
+        &ListAiSessionsParams {
+            since: Some("2025-12-31T00:00:00Z".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        listed[0].title.as_deref(),
+        Some("Investigate storage latency")
+    );
+    assert_eq!(listed[0].title_provenance.as_deref(), Some("user"));
+
+    refresh_ai_session_rollup(&pool).unwrap();
+    let rolled_up = list_ai_sessions(&pool, &ListAiSessionsParams::default()).unwrap();
+    assert_eq!(
+        rolled_up[0].title.as_deref(),
+        Some("Investigate storage latency")
+    );
+    assert_eq!(rolled_up[0].title_provenance.as_deref(), Some("user"));
+
+    let searched = search_ai_sessions(
+        &pool,
+        &SearchAiSessionsParams {
+            query: "latency".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        searched.sessions[0].title.as_deref(),
+        Some("Investigate storage latency")
+    );
+    assert_eq!(
+        searched.sessions[0].title_provenance.as_deref(),
+        Some("user")
+    );
+}
+
+#[test]
+fn live_ai_session_list_keeps_title_and_provenance_from_latest_title_row() {
+    let (pool, _dir) = test_pool();
+    let mut older = make_ai_entry(
+        "2026-01-01T00:00:00Z",
+        "host-a",
+        "claude",
+        "/tmp/project",
+        "session-title-history",
+        "older event",
+    );
+    older.metadata_json = Some(
+        serde_json::json!({
+            "session": {
+                "title": "Zulu older title",
+                "title_provenance": "aaa-old"
+            }
+        })
+        .to_string(),
+    );
+    let mut latest = make_ai_entry(
+        "2026-01-01T00:01:00Z",
+        "host-a",
+        "claude",
+        "/tmp/project",
+        "session-title-history",
+        "latest event",
+    );
+    latest.metadata_json = Some(
+        serde_json::json!({
+            "session": {
+                "title": "Alpha latest title",
+                "title_provenance": "zzz-new"
+            }
+        })
+        .to_string(),
+    );
+    insert_logs_batch(&pool, &[older, latest]).unwrap();
+
+    let listed = list_ai_sessions_live(
+        &pool,
+        &ListAiSessionsParams {
+            since: Some("2025-12-31T00:00:00Z".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].title.as_deref(), Some("Alpha latest title"));
+    assert_eq!(listed[0].title_provenance.as_deref(), Some("zzz-new"));
 }
 
 #[test]
@@ -2932,9 +3194,18 @@ fn bench_seed_rows(pool: &DbPool, n: usize) {
     );
 }
 
-/// Median of N timed runs of `f`, in milliseconds. One warm-up run first.
-fn bench_median_ms(runs: usize, mut f: impl FnMut()) -> f64 {
+#[derive(Debug)]
+struct BenchPercentiles {
+    p50_ms: f64,
+    p95_ms: f64,
+}
+
+/// p50/p95 of N timed runs of `f`, in milliseconds. One warm-up run first.
+/// Uses nearest-rank p95 so the emitted values remain reproducible from the
+/// captured sample count without interpolating measurements that never ran.
+fn bench_percentiles_ms(runs: usize, mut f: impl FnMut()) -> BenchPercentiles {
     use std::time::Instant;
+    assert!(runs > 0);
     f(); // warm-up
     let mut samples: Vec<f64> = Vec::with_capacity(runs);
     for _ in 0..runs {
@@ -2943,7 +3214,42 @@ fn bench_median_ms(runs: usize, mut f: impl FnMut()) -> f64 {
         samples.push(t.elapsed().as_secs_f64() * 1000.0);
     }
     samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    samples[samples.len() / 2]
+    let p50_index = (samples.len() - 1) / 2;
+    let p95_index = ((samples.len() * 95).div_ceil(100)).saturating_sub(1);
+    BenchPercentiles {
+        p50_ms: samples[p50_index],
+        p95_ms: samples[p95_index],
+    }
+}
+
+#[test]
+fn session_rollup_query_plan_uses_ordering_index_without_temp_sort() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = init_pool(&test_storage_config(dir.path().join("plan.db"))).unwrap();
+    let conn = pool.get().unwrap();
+    let plan = conn
+        .prepare(
+            "EXPLAIN QUERY PLAN
+             SELECT ai_project, ai_tool, ai_session_id, hostname, last_seen
+             FROM ai_session_rollup
+             WHERE 1=1
+             ORDER BY last_seen DESC LIMIT 100",
+        )
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(3))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert!(
+        plan.iter()
+            .any(|detail| detail.contains("idx_ai_session_rollup_last_seen")),
+        "rollup query must use its last-seen index: {plan:?}"
+    );
+    assert!(
+        plan.iter()
+            .all(|detail| !detail.contains("USE TEMP B-TREE")),
+        "rollup query must not perform a temporary sort: {plan:?}"
+    );
 }
 
 #[test]
@@ -2986,13 +3292,13 @@ fn bench_stats_and_sessions() {
 
     // --- stats (default: FTS diagnostic skipped) ---
     let mut last_stats = None;
-    let stats_ms = bench_median_ms(5, || {
+    let stats_latency = bench_percentiles_ms(20, || {
         last_stats = Some(get_stats(&pool, &cfg).unwrap());
     });
     let stats = last_stats.unwrap();
     eprintln!(
-        "[bench] get_stats (default, FTS skipped): {stats_ms:.1} ms  (total_logs={})",
-        stats.total_logs
+        "[bench] get_stats (default, FTS skipped): p50={:.1} ms p95={:.1} ms (total_logs={})",
+        stats_latency.p50_ms, stats_latency.p95_ms, stats.total_logs
     );
     assert_eq!(
         stats.total_logs, ground_truth,
@@ -3000,10 +3306,13 @@ fn bench_stats_and_sessions() {
     );
 
     // --- stats with FTS diagnostic ON (the expensive COUNT(*) FROM logs_fts) ---
-    let stats_fts_ms = bench_median_ms(3, || {
+    let stats_fts_latency = bench_percentiles_ms(20, || {
         let _ = get_stats_with_options(&pool, &cfg, true).unwrap();
     });
-    eprintln!("[bench] get_stats (FTS diagnostic ON): {stats_fts_ms:.1} ms");
+    eprintln!(
+        "[bench] get_stats (FTS diagnostic ON): p50={:.1} ms p95={:.1} ms",
+        stats_fts_latency.p50_ms, stats_fts_latency.p95_ms
+    );
 
     // --- sessions BEFORE: live aggregation (GROUP BY + temp-btree sort) ---
     let params = ListAiSessionsParams {
@@ -3015,29 +3324,32 @@ fn bench_stats_and_sessions() {
         limit: Some(100),
     };
     let mut live_rows = 0usize;
-    let sessions_live_ms = bench_median_ms(5, || {
+    let sessions_live_latency = bench_percentiles_ms(20, || {
         live_rows = list_ai_sessions_live(&pool, &params).unwrap().len();
     });
     eprintln!(
-        "[bench] BEFORE list_ai_sessions_live(limit=100): {sessions_live_ms:.1} ms  ({live_rows} rows)"
+        "[bench] BEFORE list_ai_sessions_live(limit=100): p50={:.1} ms p95={:.1} ms ({live_rows} rows)",
+        sessions_live_latency.p50_ms, sessions_live_latency.p95_ms
     );
 
     // --- refresh cost (background cadence; not on the request path) ---
     let mut rollup_total = 0usize;
-    let refresh_ms = bench_median_ms(3, || {
+    let refresh_latency = bench_percentiles_ms(10, || {
         rollup_total = refresh_ai_session_rollup(&pool).unwrap();
     });
     eprintln!(
-        "[bench] refresh_ai_session_rollup: {refresh_ms:.1} ms  ({rollup_total} session rows total)"
+        "[bench] refresh_ai_session_rollup: p50={:.1} ms p95={:.1} ms ({rollup_total} session rows total)",
+        refresh_latency.p50_ms, refresh_latency.p95_ms
     );
 
     // --- sessions AFTER: indexed read from the rollup materialization ---
     let mut rollup_rows = 0usize;
-    let sessions_rollup_ms = bench_median_ms(5, || {
+    let sessions_rollup_latency = bench_percentiles_ms(20, || {
         rollup_rows = list_ai_sessions(&pool, &params).unwrap().len();
     });
     eprintln!(
-        "[bench] AFTER list_ai_sessions(rollup, limit=100): {sessions_rollup_ms:.1} ms  ({rollup_rows} rows)"
+        "[bench] AFTER list_ai_sessions(rollup, limit=100): p50={:.1} ms p95={:.1} ms ({rollup_rows} rows)",
+        sessions_rollup_latency.p50_ms, sessions_rollup_latency.p95_ms
     );
 
     // Correctness: the rollup-served top-N must equal the live top-N. Both
@@ -3077,13 +3389,66 @@ fn bench_stats_and_sessions() {
         }
     }
 
-    let speedup = sessions_live_ms / sessions_rollup_ms.max(0.001);
+    let speedup = sessions_live_latency.p50_ms / sessions_rollup_latency.p50_ms.max(0.001);
+    let minimum_speedup = crate::env::var("CORTEX_BENCH_MIN_SESSION_SPEEDUP")
+        .ok()
+        .map(|value| {
+            value
+                .parse::<f64>()
+                .expect("CORTEX_BENCH_MIN_SESSION_SPEEDUP must be a number")
+        });
+    let maximum_p95 = crate::env::var("CORTEX_BENCH_MAX_SESSION_P95_MS")
+        .ok()
+        .map(|value| {
+            value
+                .parse::<f64>()
+                .expect("CORTEX_BENCH_MAX_SESSION_P95_MS must be a number")
+        });
+    let speedup_passed = minimum_speedup.is_none_or(|minimum| speedup >= minimum);
+    let p95_passed = maximum_p95.is_none_or(|maximum| sessions_rollup_latency.p95_ms <= maximum);
+    if let Ok(path) = crate::env::var("CORTEX_BENCH_ARTIFACT") {
+        let artifact = serde_json::json!({
+            "rows": rows,
+            "stats_default": {"p50_ms": stats_latency.p50_ms, "p95_ms": stats_latency.p95_ms},
+            "stats_fts": {"p50_ms": stats_fts_latency.p50_ms, "p95_ms": stats_fts_latency.p95_ms},
+            "sessions_live": {"p50_ms": sessions_live_latency.p50_ms, "p95_ms": sessions_live_latency.p95_ms},
+            "sessions_rollup": {"p50_ms": sessions_rollup_latency.p50_ms, "p95_ms": sessions_rollup_latency.p95_ms},
+            "refresh": {"p50_ms": refresh_latency.p50_ms, "p95_ms": refresh_latency.p95_ms},
+            "session_speedup": speedup,
+            "minimum_session_speedup": minimum_speedup,
+            "maximum_session_p95_ms": maximum_p95,
+            "outcome": {"speedup_passed": speedup_passed, "p95_passed": p95_passed},
+        });
+        std::fs::write(path, serde_json::to_vec_pretty(&artifact).unwrap()).unwrap();
+    }
+    if let Some(minimum_speedup) = minimum_speedup {
+        assert!(
+            speedup_passed,
+            "session rollup speedup {speedup:.2}x is below the {minimum_speedup:.2}x configured threshold"
+        );
+    }
+    assert!(
+        p95_passed,
+        "session rollup p95 {:.1}ms exceeds the configured diagnostic threshold",
+        sessions_rollup_latency.p95_ms
+    );
     eprintln!(
         "[bench] SUMMARY rows={rows} \
-         stats_default_ms={stats_ms:.1} stats_fts_on_ms={stats_fts_ms:.1} \
-         sessions_BEFORE_live_ms={sessions_live_ms:.1} \
-         sessions_AFTER_rollup_ms={sessions_rollup_ms:.1} \
-         refresh_ms={refresh_ms:.1} sessions_speedup={speedup:.1}x"
+         stats_default_p50_ms={:.1} stats_default_p95_ms={:.1} \
+         stats_fts_on_p50_ms={:.1} stats_fts_on_p95_ms={:.1} \
+         sessions_BEFORE_live_p50_ms={:.1} sessions_BEFORE_live_p95_ms={:.1} \
+         sessions_AFTER_rollup_p50_ms={:.1} sessions_AFTER_rollup_p95_ms={:.1} \
+         refresh_p50_ms={:.1} refresh_p95_ms={:.1} sessions_p50_speedup={speedup:.1}x",
+        stats_latency.p50_ms,
+        stats_latency.p95_ms,
+        stats_fts_latency.p50_ms,
+        stats_fts_latency.p95_ms,
+        sessions_live_latency.p50_ms,
+        sessions_live_latency.p95_ms,
+        sessions_rollup_latency.p50_ms,
+        sessions_rollup_latency.p95_ms,
+        refresh_latency.p50_ms,
+        refresh_latency.p95_ms,
     );
 }
 

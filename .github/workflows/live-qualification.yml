@@ -1,0 +1,161 @@
+name: Live Qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "Isolated profile, or fleet/provider with configured target grants"
+        required: true
+        default: full
+        type: choice
+        options: [noop, smoke, full, storage, soak, isolated, agent, legacy-central-pull, mcp, auth, stateful, artifacts, notifications, security, upgrade, mutation, compose-isolated, fleet-read-only, fleet-mutating, docker-boundary-reduced, docker-boundary-full]
+  schedule:
+    - cron: "17 5 * * 2" # resilience and storage
+    - cron: "31 3 * * 6" # bounded soak
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-qualification-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  isolated:
+    name: live ${{ matrix.profile }}
+    if: ${{ github.event_name == 'schedule' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        profile: [stateful, storage, agent, security, upgrade, soak]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 390
+    env:
+      LIVE_RUNS_ROOT: ${{ github.workspace }}/.live-runs
+      LIVE_PLATFORM_POLICY: linux-full
+      CORTEX_LIVE_DIND_AUTHORIZED: "1"
+      LIVE_AGENT_BOUNDARY_MODE: full
+      LIVE_UPGRADE_SCHEDULED: "true"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Require Docker infrastructure
+        run: docker info >/dev/null && docker compose version >/dev/null
+      - name: Sweep expired exact-identity leases
+        run: |
+          provider="docker-host:$(docker info --format '{{.ID}}')"
+          bash tests/live/runner.sh --janitor --runs-root "$LIVE_RUNS_ROOT" --provider "$provider"
+      - name: Run scheduled profile
+        run: bash tests/live/run-profile.sh "${{ matrix.profile }}"
+      - name: Reconcile leases after success, failure, or cancellation
+        if: always()
+        run: |
+          provider="docker-host:$(docker info --format '{{.ID}}')"
+          bash tests/live/runner.sh --janitor --runs-root "$LIVE_RUNS_ROOT" --provider "$provider"
+      - name: Sanitize upload set
+        if: always()
+        run: bash scripts/ci/prepare-live-artifacts.sh "$LIVE_RUNS_ROOT" live-upload
+      - name: Upload ledgers and JUnit
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: live-${{ matrix.profile }}-${{ github.run_id }}
+          path: live-upload
+          if-no-files-found: error
+          retention-days: 14
+
+  aggregate:
+    name: complete owner aggregate
+    if: ${{ github.event_name == 'schedule' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 390
+    env:
+      LIVE_RUNS_ROOT: ${{ github.workspace }}/.live-runs-aggregate
+      LIVE_PLATFORM_POLICY: linux-full
+      CORTEX_LIVE_DIND_AUTHORIZED: "1"
+      LIVE_AGENT_BOUNDARY_MODE: full
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Sweep expired aggregate leases
+        run: |
+          mkdir -p "$LIVE_RUNS_ROOT"
+          provider="docker-host:$(docker info --format '{{.ID}}')"
+          bash tests/live/runner.sh --janitor --runs-root "$LIVE_RUNS_ROOT" --provider "$provider"
+      - name: Build immutable qualification images once
+        run: |
+          docker build --pull=false -f config/Dockerfile -t cortex-live-candidate:aggregate .
+          docker build --pull=false -t cortex-live-oracle:aggregate tests/live/services/oracle
+          docker pull ghcr.io/shopify/toxiproxy:2.12.0
+      - name: Run every SurfaceContract owner and aggregate
+        env:
+          LIVE_CANDIDATE_IMAGE_REF: cortex-live-candidate:aggregate
+          LIVE_ORACLE_IMAGE_REF: cortex-live-oracle:aggregate
+          LIVE_TOXIPROXY_IMAGE_REF: ghcr.io/shopify/toxiproxy:2.12.0
+        run: |
+          mkdir -p "$LIVE_RUNS_ROOT"
+          for profile in full mcp isolated storage auth security agent; do
+            bash tests/live/run-profile.sh "$profile"
+          done
+          mapfile -t runs < <(find "$LIVE_RUNS_ROOT" -mindepth 1 -maxdepth 1 -type d -name 'cortex-e2e-*' | sort)
+          (( ${#runs[@]} == 7 ))
+          LIVE_AGGREGATE_OUTPUT="$LIVE_RUNS_ROOT/aggregate-qualification.json" \
+            bash tests/live/aggregate.sh "${runs[0]}/surface-contract.json" "${runs[@]}"
+      - name: Reconcile aggregate leases after success, failure, or cancellation
+        if: always()
+        run: |
+          provider="docker-host:$(docker info --format '{{.ID}}')"
+          bash tests/live/runner.sh --janitor --runs-root "$LIVE_RUNS_ROOT" --provider "$provider"
+      - name: Sanitize aggregate evidence
+        if: always()
+        run: bash scripts/ci/prepare-live-artifacts.sh "$LIVE_RUNS_ROOT" live-upload-aggregate
+      - name: Upload aggregate evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: live-aggregate-${{ github.run_id }}
+          path: live-upload-aggregate
+          if-no-files-found: error
+          retention-days: 14
+
+  requested:
+    name: requested live profile
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 390
+    env:
+      LIVE_RUNS_ROOT: ${{ github.workspace }}/.live-runs
+      LIVE_PLATFORM_POLICY: linux-full
+      CORTEX_LIVE_DIND_AUTHORIZED: "1"
+      LIVE_AGENT_BOUNDARY_MODE: full
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Require Docker for isolated profiles
+        if: ${{ inputs.profile != 'noop' && inputs.profile != 'artifacts' && inputs.profile != 'fleet-read-only' && inputs.profile != 'fleet-mutating' }}
+        run: docker info >/dev/null && docker compose version >/dev/null
+      - name: Sweep expired exact-identity leases
+        if: ${{ inputs.profile != 'noop' && inputs.profile != 'artifacts' && inputs.profile != 'fleet-read-only' && inputs.profile != 'fleet-mutating' }}
+        run: |
+          provider="docker-host:$(docker info --format '{{.ID}}')"
+          bash tests/live/runner.sh --janitor --runs-root "$LIVE_RUNS_ROOT" --provider "$provider"
+      - name: Run requested profile
+        run: bash tests/live/run-profile.sh "${{ inputs.profile }}"
+      - name: Reconcile leases after success, failure, or cancellation
+        if: always()
+        run: |
+          if docker info >/dev/null 2>&1; then
+            provider="docker-host:$(docker info --format '{{.ID}}')"
+          else
+            provider="local:${GITHUB_WORKSPACE}"
+          fi
+          bash tests/live/runner.sh --janitor --runs-root "$LIVE_RUNS_ROOT" --provider "$provider"
+      - name: Sanitize upload set
+        if: always()
+        run: bash scripts/ci/prepare-live-artifacts.sh "$LIVE_RUNS_ROOT" live-upload
+      - name: Upload ledgers and JUnit
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: live-${{ inputs.profile }}-${{ github.run_id }}
+          path: live-upload
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,28 @@
+{
+  "schema": "cortex-live-cross-bead-obligation-v1",
+  "producer_bead": "syslog-mcp-av6.3",
+  "consumer_bead": "syslog-mcp-av6.8",
+  "case": "otlp-storage-blocked",
+  "authoritative_semantics": {
+    "metrics": "HTTP 503 JSON error=metric_storage_blocked, retryable=true, Retry-After=1",
+    "traces": "HTTP 200 protobuf partial_success.rejected_spans=1",
+    "logs": "HTTP 200 enqueue response; writer retains the batch while blocked and persists it exactly once after recovery"
+  },
+  "source_contract": [
+    "src/otlp/metric_http.rs: storage-state branch",
+    "src/otlp/trace_http.rs: storage-state branch",
+    "src/receiver/writer.rs: retained blocked batch",
+    "src/otlp_tests.rs: metric_storage_budget_block_is_retryable",
+    "src/otlp_tests.rs: storage_budget_block_is_otlp_partial_success_not_server_failure",
+    "src/receiver/writer_tests.rs: blocked batch retention/recovery tests"
+  ],
+  "required_evidence": [
+    "storage budget reports write_blocked=true",
+    "OTLP logs returns HTTP 200 but its marker is not observable while blocked",
+    "OTLP metrics returns HTTP 503 metric_storage_blocked, retryable=true, Retry-After=1",
+    "OTLP traces returns partial success with exactly one rejected span",
+    "the retained blocked log becomes observable exactly once after recovery",
+    "recovery accepts one additional uniquely attributable log, metric, and trace"
+  ],
+  "mandatory_profiles": ["storage", "full"]
+}

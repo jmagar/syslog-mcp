@@ -21,6 +21,50 @@ pub struct SourceMetadata {
     pub content_hash: Option<String>,
     pub last_offset: Option<i64>,
     pub last_error: Option<String>,
+    /// A scanner-owned identity for the source revision currently represented
+    /// by this checkpoint. Legacy checkpoints have no revision and must not
+    /// be used for revision-sensitive continuation.
+    pub source_revision: Option<String>,
+    /// The recovery point represented by `last_offset`.
+    pub scan_state: SourceScanState,
+}
+
+/// The only scanner recovery states persisted for a transcript source.
+///
+/// `Boundary` means `last_offset` is a verified record boundary.  A scanner
+/// may persist `DiscardUntilNewline` while it is safely skipping an oversized
+/// physical record, and must resume that work before parsing more records.
+/// `Restart` invalidates continuation and requires a duplicate-safe restart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceScanState {
+    Restart,
+    Boundary,
+    DiscardUntilNewline,
+    Complete,
+}
+
+impl SourceScanState {
+    const fn as_db_value(self) -> &'static str {
+        match self {
+            Self::Restart => "restart",
+            Self::Boundary => "boundary",
+            Self::DiscardUntilNewline => "discard_until_newline",
+            Self::Complete => "complete",
+        }
+    }
+
+    fn from_db_value(value: Option<String>) -> Self {
+        match value.as_deref() {
+            Some("restart") => Self::Restart,
+            Some("boundary") => Self::Boundary,
+            Some("discard_until_newline") => Self::DiscardUntilNewline,
+            // A database created before migration 51 had no state. Its
+            // checkpoints were necessarily completed scans, so that is the
+            // safe compatibility interpretation. Unknown values restart.
+            Some("complete") | None => Self::Complete,
+            Some(_) => Self::Restart,
+        }
+    }
 }
 
 impl<'a> CheckpointStore<'a> {
@@ -90,9 +134,9 @@ impl<'a> CheckpointStore<'a> {
         file_mtime: Option<i64>,
     ) -> Result<bool> {
         let conn = self.pool.get()?;
-        let Some((stored_size, stored_mtime, last_error)) = conn
+        let Some((stored_size, stored_mtime, last_error, scan_state)) = conn
             .query_row(
-                "SELECT file_size, file_mtime, last_error
+                "SELECT file_size, file_mtime, last_error, scan_state
                  FROM transcript_sources
                  WHERE id = ?1",
                 [source_id],
@@ -101,6 +145,7 @@ impl<'a> CheckpointStore<'a> {
                         row.get::<_, Option<i64>>(0)?,
                         row.get::<_, Option<i64>>(1)?,
                         row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
                     ))
                 },
             )
@@ -110,6 +155,7 @@ impl<'a> CheckpointStore<'a> {
         };
 
         Ok(last_error.is_none()
+            && SourceScanState::from_db_value(scan_state) == SourceScanState::Complete
             && stored_size == Some(file_size as i64)
             && stored_mtime == file_mtime)
     }
@@ -117,7 +163,8 @@ impl<'a> CheckpointStore<'a> {
     pub fn source_metadata(&self, source_id: i64) -> Result<Option<SourceMetadata>> {
         let conn = self.pool.get()?;
         conn.query_row(
-            "SELECT file_size, file_mtime, content_hash, last_offset, last_error
+            "SELECT file_size, file_mtime, content_hash, last_offset, last_error,
+                    source_revision, scan_state
              FROM transcript_sources
              WHERE id = ?1",
             [source_id],
@@ -128,6 +175,8 @@ impl<'a> CheckpointStore<'a> {
                     content_hash: row.get(2)?,
                     last_offset: row.get(3)?,
                     last_error: row.get(4)?,
+                    source_revision: row.get(5)?,
+                    scan_state: SourceScanState::from_db_value(row.get(6)?),
                 })
             },
         )
@@ -168,6 +217,8 @@ impl<'a> CheckpointStore<'a> {
                  file_mtime = NULL,
                  content_hash = NULL,
                  last_offset = 0,
+                 source_revision = NULL,
+                 scan_state = 'restart',
                  last_indexed_at = NULL,
                  last_error = NULL
              WHERE id = ?1",
@@ -485,6 +536,7 @@ impl<'a> CheckpointStore<'a> {
             affected_paths,
             recent_schema_error_count,
             stale_indicators,
+            provider_coverage: crate::scanner::providers::runtime_health_conn(&conn)?,
         })
     }
 }
@@ -582,10 +634,14 @@ pub fn claim_imports_in_tx(
     Ok(claimed)
 }
 
-pub fn update_source_metadata_in_tx(
+/// Persist a checkpoint after a source has been fully scanned.  Completion is
+/// the only path that clears accumulated parse errors: partial scans retain
+/// their diagnostics for the next bounded pass.
+pub fn update_complete_source_metadata_in_tx(
     tx: &Transaction<'_>,
     source_id: i64,
     file_metadata: &FileMetadata,
+    source_revision: &str,
 ) -> Result<()> {
     tx.execute(
         "DELETE FROM transcript_parse_errors WHERE source_id = ?1",
@@ -597,6 +653,8 @@ pub fn update_source_metadata_in_tx(
              file_mtime = ?3,
              content_hash = ?4,
              last_offset = ?5,
+             source_revision = ?6,
+             scan_state = 'complete',
              last_indexed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
              last_error = NULL
          WHERE id = ?1",
@@ -606,9 +664,63 @@ pub fn update_source_metadata_in_tx(
             file_metadata.mtime,
             file_metadata.content_hash,
             file_metadata.size as i64,
+            source_revision,
         ],
     )?;
     Ok(())
+}
+
+/// Persist a recoverable bounded-scan checkpoint without pretending that the
+/// source is complete. `file_metadata` describes the full observed source,
+/// while `last_offset` and `scan_state` describe the exact resumable point.
+pub fn update_partial_source_metadata_in_tx(
+    tx: &Transaction<'_>,
+    source_id: i64,
+    file_metadata: &FileMetadata,
+    source_revision: &str,
+    scan_state: SourceScanState,
+    last_offset: u64,
+) -> Result<()> {
+    if scan_state == SourceScanState::Complete {
+        anyhow::bail!("partial source metadata requires a non-complete scan state");
+    }
+    let last_offset = i64::try_from(last_offset).map_err(|_| {
+        anyhow::anyhow!("transcript checkpoint offset exceeds SQLite integer range")
+    })?;
+    tx.execute(
+        "UPDATE transcript_sources
+         SET file_size = ?2,
+             file_mtime = ?3,
+             content_hash = ?4,
+             last_offset = ?5,
+             source_revision = ?6,
+             scan_state = ?7,
+             last_indexed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+             last_error = NULL
+         WHERE id = ?1",
+        params![
+            source_id,
+            file_metadata.size as i64,
+            file_metadata.mtime,
+            file_metadata.content_hash,
+            last_offset,
+            source_revision,
+            scan_state.as_db_value(),
+        ],
+    )?;
+    Ok(())
+}
+
+/// Compatibility shim for callers that completed a scan before explicit scan
+/// state existed. New bounded scan paths should call the complete or partial
+/// API directly.
+#[cfg(test)]
+pub fn update_source_metadata_in_tx(
+    tx: &Transaction<'_>,
+    source_id: i64,
+    file_metadata: &FileMetadata,
+) -> Result<()> {
+    update_complete_source_metadata_in_tx(tx, source_id, file_metadata, &file_metadata.content_hash)
 }
 
 #[cfg(test)]

@@ -1,0 +1,4 @@
+#!/bin/sh
+# The isolated Compose project publishes no ports, so the correct listener
+# inventory is empty.
+exit 0

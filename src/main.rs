@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use axum::Router;
 pub(crate) use cortex::env;
@@ -614,15 +614,19 @@ async fn serve_mcp() -> Result<()> {
     info!("Agent-command forward receiver mounted at /v1/agent-commands");
     app = app.merge(runtime.ai_transcript_router());
     info!("AI-transcript forward receiver mounted at /v1/ai-transcripts");
+    app = app.merge(runtime.syslog_forward_router());
+    info!("Receipt-backed syslog forward receiver mounted at /v1/syslog-forward");
     app = app.merge(runtime.shell_history_router());
     info!("Shell-history forward receiver mounted at /v1/shell-history");
+    app = app.merge(runtime.agent_file_tail_router());
+    info!("Agent file-tail receiver mounted at /v1/file-tails");
     app = app.merge(web_app::router());
     info!("Investigation workspace mounted under /app");
     if runtime.config.mcp.api_token.is_none() && !runtime.config.mcp.host.starts_with("127.") {
         tracing::warn!(
             bind = %runtime.config.mcp.bind_addr(),
-            "OTLP /v1/logs, heartbeat /v1/heartbeats, and agent-command forwarding \
-             /v1/agent-commands are mounted WITHOUT authentication on a non-loopback bind. \
+            "OTLP /v1/logs, heartbeat /v1/heartbeats, agent-command forwarding \
+             /v1/agent-commands, and agent file tails /v1/file-tails are mounted WITHOUT authentication on a non-loopback bind. \
              Anyone reachable on this address can write telemetry. \
              Set CORTEX_TOKEN to require Bearer auth."
         );
@@ -632,13 +636,22 @@ async fn serve_mcp() -> Result<()> {
     let mcp_bind = runtime.config.mcp.bind_addr();
     let listener = tokio::net::TcpListener::bind(&mcp_bind).await?;
     info!(bind = %mcp_bind, "MCP server listening");
+    let fatal_shutdown = runtime.fatal_shutdown_token();
+    let graceful_shutdown = fatal_shutdown.clone();
 
     // OTLP handler needs ConnectInfo<SocketAddr> for source_ip provenance.
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal())
+    .with_graceful_shutdown(async move {
+        tokio::select! {
+            _ = shutdown_signal() => {},
+            _ = graceful_shutdown.cancelled() => {
+                tracing::error!("Fatal runtime condition requested shutdown");
+            }
+        }
+    })
     .await?;
 
     // HTTP connections are drained. Now drain in order:
@@ -646,11 +659,18 @@ async fn serve_mcp() -> Result<()> {
     //    error_scan); wait up to 10 s for them to exit cleanly.
     // 2. Drain the ingest pipeline (batch writer flush) then checkpoint WAL.
     info!("HTTP server stopped; shutting down maintenance tasks");
-    maintenance
+    let maintenance_clean = maintenance
         .shutdown(std::time::Duration::from_secs(10))
         .await;
     info!("Maintenance tasks done; draining ingest pipeline");
-    runtime.shutdown(std::time::Duration::from_secs(5)).await;
+    let runtime_clean = runtime.shutdown(std::time::Duration::from_secs(5)).await;
+
+    if fatal_shutdown.is_cancelled() {
+        anyhow::bail!("fatal syslog listener failure");
+    }
+    if !maintenance_clean || !runtime_clean {
+        anyhow::bail!("unclean runtime shutdown");
+    }
 
     Ok(())
 }
@@ -888,6 +908,21 @@ fn parse_setup_command(args: &[String]) -> Result<SetupCommand> {
     let mut json = false;
     let mut iter = args.iter();
     if matches!(iter.clone().next().map(String::as_str), Some("install")) {
+        // Validate the complete command line before the first filesystem
+        // mutation. Historically this branch installed immediately after
+        // seeing `install`, so an unknown flag (and even `--help`) could
+        // overwrite ~/.local/bin/cortex before parsing rejected anything.
+        let _ = iter.next();
+        for arg in iter {
+            match arg.as_str() {
+                "--json" => {}
+                "--help" | "-h" => {
+                    print_usage();
+                    std::process::exit(0);
+                }
+                other => anyhow::bail!("unknown setup install argument: {other}"),
+            }
+        }
         let dest = cli::install_self()?;
         println!("installed -> {}", dest.display());
         std::process::exit(0);
@@ -1101,9 +1136,18 @@ fn parse_deploy_command(args: &[String]) -> Result<DeployCommand> {
                 i += 1;
                 agent_target = Some(required_arg(rest, i, "--target")?);
             }
-            "--heartbeat-token" if subcommand == "agent" => {
+            "--heartbeat-token" if subcommand == "agent" => anyhow::bail!(
+                "--heartbeat-token exposes credentials in process arguments; use --heartbeat-token-file PATH"
+            ),
+            "--heartbeat-token-file" if subcommand == "agent" => {
                 i += 1;
-                agent_token = Some(required_arg(rest, i, "--heartbeat-token")?);
+                let token_path = required_arg(rest, i, "--heartbeat-token-file")?;
+                agent_token = Some(
+                    std::fs::read_to_string(&token_path)
+                        .with_context(|| format!("read heartbeat token file {token_path}"))?
+                        .trim_end_matches(['\r', '\n'])
+                        .to_string(),
+                );
             }
             "--binary" if subcommand == "agent" => {
                 i += 1;

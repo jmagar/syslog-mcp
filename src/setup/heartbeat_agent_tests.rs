@@ -131,6 +131,7 @@ fn write_heartbeat_agent_env_writes_private_agent_defaults() {
     let _shell_history = EnvGuard::remove("CORTEX_AGENT_SHELL_HISTORY_FORWARD");
     let _shell_history_checkpoint = EnvGuard::remove("CORTEX_AGENT_SHELL_HISTORY_CHECKPOINT");
     let _auto_update = EnvGuard::remove("CORTEX_AGENT_AUTO_UPDATE");
+    let _preserve = EnvGuard::remove(PRESERVE_ENV);
 
     let phase = write_heartbeat_agent_env(&env_path).unwrap();
     let raw = std::fs::read_to_string(&env_path).unwrap();
@@ -152,6 +153,24 @@ fn write_heartbeat_agent_env_writes_private_agent_defaults() {
         let mode = std::fs::metadata(&env_path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
     }
+}
+
+#[test]
+#[serial]
+fn write_heartbeat_agent_env_preserves_existing_configuration() {
+    let dir = tempfile::tempdir().unwrap();
+    let env_path = dir.path().join("heartbeat-agent.env");
+    std::fs::write(&env_path, "CORTEX_HEARTBEAT_TOKEN=existing-secret\n").unwrap();
+    let _preserve = EnvGuard::set(PRESERVE_ENV, "1");
+
+    let phase = write_heartbeat_agent_env(&env_path).unwrap();
+
+    assert!(matches!(phase.status, SetupStatus::Ok));
+    assert!(phase.detail.contains("preserved existing"));
+    assert_eq!(
+        std::fs::read_to_string(env_path).unwrap(),
+        "CORTEX_HEARTBEAT_TOKEN=existing-secret\n"
+    );
 }
 
 #[test]

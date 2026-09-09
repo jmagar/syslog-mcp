@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::process::{Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
 
@@ -85,35 +87,78 @@ impl DockerInspect for CliDockerInspect {
     }
 
     fn systemd_status(&self, unit: &str) -> Result<Option<SystemdStatus>> {
-        let output = run_inspector_command(
-            "systemctl",
-            &["--user", "is-active", unit],
-            Duration::from_secs(3),
-        )?;
-        systemd_status_from_output(unit, &output)
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = unit;
+            Ok(None)
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let output = match run_inspector_command(
+                "systemctl",
+                &["--user", "is-active", unit],
+                Duration::from_secs(3),
+            ) {
+                Ok(output) => output,
+                Err(error)
+                    if error
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+                {
+                    return Ok(None);
+                }
+                Err(error) => return Err(error),
+            };
+            systemd_status_from_output(unit, &output)
+        }
     }
 
     fn listeners(&self, ports: &[u16]) -> Result<Vec<ListenerInfo>> {
         let mut listeners = Vec::new();
         for port in ports {
-            let port_arg = format!(":{port}");
-            let output = run_inspector_command(
-                "ss",
-                &["-H", "-ltnup", "sport", "=", &port_arg],
-                Duration::from_secs(3),
-            )?;
-            if !output.status.success() {
-                return Err(anyhow!(
-                    "ss listener check failed for port {port}: {}",
-                    String::from_utf8_lossy(&output.stderr).trim()
-                ));
+            #[cfg(target_os = "macos")]
+            {
+                let selector = format!("-iTCP:{port}");
+                let output = run_inspector_command(
+                    "lsof",
+                    &["-nP", &selector, "-sTCP:LISTEN"],
+                    Duration::from_secs(3),
+                )?;
+                if output.status.success() && ss_output_has_listener(&output.stdout) {
+                    listeners.push(ListenerInfo {
+                        port: *port,
+                        process: Some(String::from_utf8_lossy(&output.stdout).to_string()),
+                        belongs_to_target: false,
+                    });
+                } else if !matches!(output.status.code(), Some(1)) {
+                    return Err(anyhow!(
+                        "lsof listener check failed for port {port}: {}",
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    ));
+                }
+                continue;
             }
-            if ss_output_has_listener(&output.stdout) {
-                listeners.push(ListenerInfo {
-                    port: *port,
-                    process: Some(String::from_utf8_lossy(&output.stdout).to_string()),
-                    belongs_to_target: false,
-                });
+            #[cfg(not(target_os = "macos"))]
+            {
+                let port_arg = format!(":{port}");
+                let output = run_inspector_command(
+                    "ss",
+                    &["-H", "-ltnup", "sport", "=", &port_arg],
+                    Duration::from_secs(3),
+                )?;
+                if !output.status.success() {
+                    return Err(anyhow!(
+                        "ss listener check failed for port {port}: {}",
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    ));
+                }
+                if ss_output_has_listener(&output.stdout) {
+                    listeners.push(ListenerInfo {
+                        port: *port,
+                        process: Some(String::from_utf8_lossy(&output.stdout).to_string()),
+                        belongs_to_target: false,
+                    });
+                }
             }
         }
         Ok(listeners)
@@ -163,6 +208,7 @@ pub(crate) fn ss_output_has_listener(stdout: &[u8]) -> bool {
         .any(|line| !line.trim().is_empty() && !line.trim_start().starts_with("Netid "))
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) fn systemd_status_from_output(
     unit: &str,
     output: &std::process::Output,
@@ -210,19 +256,7 @@ pub(super) fn run_inspector_command(
     args: &[&str],
     timeout: Duration,
 ) -> Result<std::process::Output> {
-    let timeout_secs = timeout.as_secs().max(1).to_string();
-    let mut timeout_args = vec!["-k", "1s", &timeout_secs, program];
-    timeout_args.extend(args);
-    let output = crate::env::command("timeout")
-        .args(timeout_args)
-        .output()
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                anyhow!("'timeout' binary not found; please install GNU coreutils or add timeout to PATH before running compose diagnostics")
-            } else {
-                anyhow!("failed to run {program} inspector command: {e}")
-            }
-        })?;
+    let output = run_command_with_timeout(crate::env::command(program), args, timeout)?;
     if program == "systemctl"
         && args.first() == Some(&"--user")
         && !output.status.success()
@@ -230,16 +264,44 @@ pub(super) fn run_inspector_command(
         && systemctl_needs_user_bus_fallback(&output)
         && let Some((runtime_dir, bus_address)) = inferred_user_bus_env()
     {
-        let mut retry_args = vec!["-k", "1s", &timeout_secs, program];
-        retry_args.extend(args);
-        return crate::env::command("timeout")
+        let mut command = crate::env::command(program);
+        command
             .env("XDG_RUNTIME_DIR", runtime_dir)
-            .env("DBUS_SESSION_BUS_ADDRESS", bus_address)
-            .args(retry_args)
-            .output()
-            .map_err(|e| anyhow!("failed to run {program} inspector command: {e}"));
+            .env("DBUS_SESSION_BUS_ADDRESS", bus_address);
+        return run_command_with_timeout(command, args, timeout);
     }
     Ok(output)
+}
+
+fn run_command_with_timeout(
+    mut command: Command,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<Output> {
+    command
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().map_err(anyhow::Error::from)?;
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| anyhow!("inspector timeout overflow"))?;
+    loop {
+        if child.try_wait()?.is_some() {
+            return child
+                .wait_with_output()
+                .map_err(|error| anyhow!("failed to collect inspector output: {error}"));
+        }
+        if Instant::now() >= deadline {
+            child.kill()?;
+            let _ = child.wait();
+            return Err(anyhow!(
+                "inspector command timed out after {} ms",
+                timeout.as_millis()
+            ));
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
 }
 
 fn systemctl_needs_user_bus_fallback(output: &std::process::Output) -> bool {

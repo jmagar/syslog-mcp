@@ -1,0 +1,8 @@
+#!/bin/sh
+# Portable deterministic replacement for GNU timeout used by Cortex's Docker
+# diagnostics. The outer Python harness already enforces a hard 20s bound.
+if [ "${1:-}" = "-k" ]; then
+  shift 2
+fi
+shift
+exec "$@"

@@ -117,7 +117,9 @@ fn remote_repair_writes_assets_before_compose_up() {
             .position(|cmd| cmd.contains(needle))
             .unwrap_or_else(|| panic!("missing command containing {needle}"))
     };
-    let mkdir = index("mkdir -p '/home/syslog/.cortex/compose/config' '/home/syslog/.cortex/data'");
+    let mkdir = index(
+        "mkdir -p '/home/syslog/.cortex/compose/config' '/home/syslog/.cortex/data' '/home/syslog/.cortex/backups' && chmod 700 '/home/syslog/.cortex/backups'",
+    );
     let docker_check = index("docker --version && docker compose version");
     let env_write = index("cat > '/home/syslog/.cortex/.env.tmp'");
     let assets_write = index("docker-compose.yml.tmp");
@@ -172,7 +174,7 @@ fn remote_repair_home_override_targets_existing_home_and_preserves_remote_env() 
                 && cmd.contains("cat '/mnt/cache/appdata/cortex/compose/.env'"))
     );
     assert!(runner.commands.iter().any(|cmd| cmd.contains(
-        "mkdir -p '/mnt/cache/appdata/cortex/compose/config' '/mnt/cache/appdata/cortex/data'"
+        "mkdir -p '/mnt/cache/appdata/cortex/compose/config' '/mnt/cache/appdata/cortex/data' '/mnt/cache/appdata/cortex/backups' && chmod 700 '/mnt/cache/appdata/cortex/backups'"
     )));
     let env_write = runner
         .commands
@@ -183,11 +185,44 @@ fn remote_repair_home_override_targets_existing_home_and_preserves_remote_env() 
     assert!(env_write.contains("CORTEX_TOKEN=keep-token"));
     assert!(!env_write.contains("CORTEX_VERSION=dev"));
     assert!(env_write.contains("CORTEX_DATA_VOLUME=/mnt/cache/appdata/cortex/data"));
+    assert!(env_write.contains("CORTEX_BACKUP_DIR=/mnt/cache/appdata/cortex/backups"));
     assert!(env_write.contains(
         "mv '/mnt/cache/appdata/cortex/compose/.env' '/mnt/cache/appdata/cortex/compose/.env.legacy'"
     ));
     assert!(env_write.contains("chmod 600 '/mnt/cache/appdata/cortex/compose/.env.legacy'"));
     assert!(!runner.commands.iter().any(|cmd| cmd.contains("~/.cortex")));
+}
+
+#[test]
+fn remote_deploy_preserves_and_provisions_custom_backup_bind_before_up() {
+    let mut runner =
+        FakeRemoteRunner::with_existing_env("CORTEX_BACKUP_DIR=/srv/cortex-recovery\n");
+    run_remote_deploy_with_runner("host-a", false, &mut runner).unwrap();
+
+    let index = |needle: &str| {
+        runner
+            .commands
+            .iter()
+            .position(|cmd| cmd.contains(needle))
+            .unwrap_or_else(|| panic!("missing command containing {needle}"))
+    };
+    let provision = index(
+        "mkdir -p '/home/syslog/.cortex/compose/config' '/home/syslog/.cortex/data' '/srv/cortex-recovery' && chmod 700 '/srv/cortex-recovery'",
+    );
+    let compose_up = index("up -d");
+    assert!(provision < compose_up);
+}
+
+#[test]
+fn remote_dry_run_does_not_provision_backup_bind() {
+    let mut runner = FakeRemoteRunner::ok();
+    run_remote_deploy_with_runner("host-a", true, &mut runner).unwrap();
+    assert!(
+        !runner
+            .commands
+            .iter()
+            .any(|command| { command.contains("backups") || command.contains("chmod 700") })
+    );
 }
 
 #[test]

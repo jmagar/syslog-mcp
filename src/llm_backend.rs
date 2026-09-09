@@ -140,9 +140,11 @@ impl LlmBackend {
         F: FnMut(&str) -> Result<()> + Send,
     {
         match self {
-            Self::Codex(config) => {
-                crate::codex_assessment::run(prompt, config, max_output_bytes, on_delta).await
-            }
+            // `codex_assessment::run` owns its own hard output ceiling; the
+            // runner still truncates the returned text to
+            // `max_output_bytes`, so the caller-supplied bound is only
+            // applied at stream time on the Gemini path.
+            Self::Codex(config) => crate::codex_assessment::run(prompt, config, on_delta).await,
             Self::Gemini(config) => {
                 run_gemini_assessment(prompt, config, max_output_bytes, on_delta).await
             }

@@ -26,6 +26,7 @@ fn test_state_no_auth() -> (AppState, tempfile::TempDir) {
                 allowed_hosts: Vec::new(),
                 allowed_origins: Vec::new(),
                 auth: Default::default(),
+                forwarding_agents: Default::default(),
                 static_token_is_admin: false,
             },
             notifications_config: crate::config::NotificationsConfig::default(),
@@ -55,6 +56,7 @@ fn test_state_with_token(token: String) -> (AppState, tempfile::TempDir) {
                 allowed_hosts: Vec::new(),
                 allowed_origins: Vec::new(),
                 auth: Default::default(),
+                forwarding_agents: Default::default(),
                 static_token_is_admin: false,
             },
             notifications_config: crate::config::NotificationsConfig::default(),
@@ -733,6 +735,7 @@ async fn test_state_with_oauth() -> (AppState, tempfile::TempDir) {
                 public_url: Some("https://syslog.example.com".into()),
                 ..Default::default()
             },
+            forwarding_agents: Default::default(),
             static_token_is_admin: false,
         },
         notifications_config: crate::config::NotificationsConfig::default(),
@@ -763,6 +766,37 @@ async fn oauth_router_mounted_when_auth_state_is_some() {
         StatusCode::OK,
         "OAuth well-known endpoint must be reachable when auth_state is Some"
     );
+}
+
+/// The external lab-auth router is upgraded independently, so its complete
+/// contracted method/path surface must remain mounted. This prevents the
+/// declaration passed to `contracted_external_router` from becoming a
+/// post-hoc list that stays green after an upstream route is removed.
+#[tokio::test]
+async fn every_contracted_external_oauth_route_is_mounted_with_its_method() {
+    let (state, _dir) = test_state_with_oauth().await;
+    let app = router(state);
+
+    for binding in crate::surfaces::OAUTH_ROUTE_BINDINGS {
+        let (method, path) = binding.split_once(' ').expect("METHOD /path binding");
+        let request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from("{}"))
+            .unwrap();
+        let status = app.clone().oneshot(request).await.unwrap().status();
+        assert_ne!(
+            status,
+            StatusCode::NOT_FOUND,
+            "contracted external OAuth route {binding} is not mounted"
+        );
+        assert_ne!(
+            status,
+            StatusCode::METHOD_NOT_ALLOWED,
+            "contracted external OAuth route {binding} is mounted with the wrong method"
+        );
+    }
 }
 
 /// Codex derives OAuth discovery URLs from the configured MCP URL

@@ -1,0 +1,15 @@
+{
+  "schema": "cortex-live-mutants-v1",
+  "production_runtime_switches": false,
+  "mutants": [
+    {"id":"disabled-tcp","fingerprint":"receiver_tcp_disabled","target":"src/runtime.rs","needle":"listener_handles.tcp","replacement":"listener_handles.tcp_DISABLED","killer":"ingest.tcp"},
+    {"id":"dropped-fts-insertion","fingerprint":"fts_insert_dropped","target":"src/db/queries.rs","needle":"logs_fts","replacement":"logs_fts_DISABLED","killer":"mcp.search"},
+    {"id":"wrong-ordering","fingerprint":"ordering_reversed","target":"src/db/queries.rs","needle":"ORDER BY l.timestamp DESC, l.id DESC","replacement":"ORDER BY l.timestamp ASC, l.id ASC","killer":"mcp.tail"},
+    {"id":"token-confusion","fingerprint":"token_map_confused","target":"src/config.rs","needle":"api_token","replacement":"api_token_CONFUSED","killer":"rest.auth"},
+    {"id":"admin-escalation","fingerprint":"admin_scope_escalated","target":"src/mcp/actions.rs","needle":"Admin","replacement":"Read","killer":"mcp.admin-auth"},
+    {"id":"lost-tail-checkpoint","fingerprint":"checkpoint_lost","target":"src/agent/ai_transcript.rs","needle":"checkpoint","replacement":"checkpoint_LOST","killer":"agent.restart-checkpoint"},
+    {"id":"notification-dedup-removal","fingerprint":"dedup_removed","target":"src/notifications/dispatcher.rs","needle":"dedup","replacement":"dedup_REMOVED","killer":"notifications.dedup"},
+    {"id":"unsafe-backup","fingerprint":"backup_not_wal_safe","target":"src/cli/dispatch_db.rs","needle":"run_db_backup","replacement":"run_db_backup_UNSAFE","killer":"cli.db-backup"},
+    {"id":"missing-action-dispatch","fingerprint":"action_dispatch_missing","target":"src/mcp/tools.rs","needle":"dispatch","replacement":"dispatch_MISSING","killer":"mcp.help"}
+  ]
+}

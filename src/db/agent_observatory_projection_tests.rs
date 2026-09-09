@@ -103,6 +103,7 @@ fn input() -> AgentProjectionWriteInput {
             last_seen_at: EVENT_AT.to_string(),
             metadata_json: "{}".to_string(),
         }),
+        trace_relation: None,
         event: AgentRunEventUpsert {
             source_kind: "ai_logs".to_string(),
             source_id: "42".to_string(),

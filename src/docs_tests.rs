@@ -48,7 +48,7 @@ fn coverage_docs_use_cortex_names_and_current_smoke_scope() {
         "UDP",
         "TCP",
         "file-tail",
-        "CLI parity",
+        "CLI surfaces",
         "REST",
         "host-local agent",
         "cargo llvm-cov",
@@ -76,33 +76,47 @@ fn coverage_tooling_is_documented_and_scripted() {
 }
 
 #[test]
-fn live_smoke_stabilizes_rollups_before_data_assertions() {
-    let live = include_str!("../tests/test_live.sh");
-    assert!(
-        live.contains("wait_for_timeline_rollup")
-            && live.contains("for attempt in {1..120}")
-            && live.contains(".rollup_as_of")
-            && live.contains("timeline rollup not ready after 120s"),
-        "live smoke should give the eager hourly rollup a bounded loaded-CI startup budget"
+fn published_package_readme_tracks_the_current_schema_version() {
+    let package_readme = include_str!("../packages/cortex-rmcp/README.md");
+    let current = format!(
+        "{} sequential schema migrations",
+        crate::db::KNOWN_SCHEMA_VERSION
     );
     assert!(
-        live.contains(r#""action":"sessions","project":$project,"since":"2026-05-11T00:00:00Z","until":"2026-05-13T00:00:00Z""#),
-        "seeded-session visibility should use an exact time-windowed query instead of a stale rollup"
+        package_readme.contains(&current),
+        "packages/cortex-rmcp/README.md should report {current}"
+    );
+}
+
+#[test]
+fn live_smoke_uses_the_fail_closed_registry_runner() {
+    let live = include_str!("../tests/live/runner.sh");
+    let surfaces = include_str!("../tests/live/phases/surfaces/run.sh");
+    assert!(
+        live.contains("live_ledger_validate")
+            && live.contains("live_summary_accepts_profile")
+            && surfaces.contains("rest_sweep.py")
+            && surfaces.contains("cli_sweep.py"),
+        "live smoke should use registry-derived, fail-closed REST and CLI qualification"
+    );
+    assert!(
+        include_str!("../tests/test_live.sh").contains("tests/live/run-profile.sh"),
+        "the historical live entry point should be a thin compatibility wrapper"
     );
 }
 
 #[test]
 fn live_smoke_keeps_deterministic_admin_rest_coverage() {
-    let live = include_str!("../tests/test_live.sh");
+    let live = include_str!("../tests/live/phases/surfaces/rest_sweep.py");
     assert!(
-        live.contains("CORTEX_API_ADMIN_TOKEN"),
-        "live smoke should expose a deterministic admin REST gate"
+        live.contains("ADMIN_TOKEN"),
+        "live smoke should expose a deterministic admin REST gate in its run-owned topology"
     );
     assert!(
         live.contains("POST /api/file-tails")
-            && live.contains(r#"{"op":"status"}"#)
-            && live.contains(r#"{"op":"list"}"#),
-        "live smoke should cover file-tail status/list admin POST routes"
+            && live.contains("authorization")
+            && live.contains("validation-negative"),
+        "live smoke should cover semantic, validation, and authorization cases for admin routes"
     );
 }
 

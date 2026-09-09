@@ -1,0 +1,18 @@
+{
+  "schema": "cortex-live-security-corpus-v1",
+  "http": [
+    {"case":"host-unlisted","class":"host","header":"Host: evil.invalid","expect":[400,403,421]},
+    {"case":"origin-unlisted","class":"origin","header":"Origin: https://evil.invalid","expect":[403]},
+    {"case":"forwarded-spoof","class":"forwarded-proxy","header":"X-Forwarded-For: 127.0.0.1","authorized":false,"expect":[401]},
+    {"case":"body-oversize","class":"body","bytes":1048577,"expect":[0,400,413]},
+    {"case":"parser-malformed-json","class":"parser","body":"{\"broken\":","expect":[400,415,422]}
+  ],
+  "targets": [
+    {"case":"dns-mixed-set","class":"dns","target":"mixed.invalid","result":"rejected-before-connect"},
+    {"case":"redirect-mutation","class":"redirect","target":"http://oracle/redirect","result":"redirect-not-followed"},
+    {"case":"ipv4-mapped-ipv6","class":"ipv6","target":"::ffff:127.0.0.1","result":"rejected-before-connect"},
+    {"case":"ipv6-link-local","class":"ipv6","target":"fe80::1%lo0","result":"rejected-before-connect"}
+  ],
+  "paths": ["../escape.log", "/etc/passwd", "fifo", "symlink"],
+  "encoded_secret_variants": ["plain", "url", "base64", "hex"]
+}

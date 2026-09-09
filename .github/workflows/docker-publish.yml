@@ -29,7 +29,7 @@ jobs:
       image: ghcr.io/${{ github.repository }}
       release-tag: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.event.release.tag_name }}
       dockerfile: config/Dockerfile
-      smoke-command: docker run --rm --entrypoint cortex "$IMAGE_REF" --help
+      smoke-command: bash scripts/container-release-smoke.sh "$IMAGE_REF"
       cache-scope: cortex-container-release
     secrets:
       REGISTRY_USERNAME: ${{ github.actor }}

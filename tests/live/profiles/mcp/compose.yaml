@@ -1,0 +1,17 @@
+services:
+  candidate:
+    environment:
+      CORTEX_STATIC_TOKEN_ADMIN: "true"
+      CORTEX_ERROR_DETECTION_ENABLED: "true"
+      CORTEX_ERROR_DETECTION_SCAN_INTERVAL_SECS: "1"
+      CORTEX_NOTIFICATIONS_ENABLED: "true"
+      CORTEX_NOTIFICATIONS_APPRISE_URL: "http://oracle:8080"
+      CORTEX_NOTIFICATIONS_APPRISE_URLS: "json://oracle.invalid"
+      CORTEX_INVENTORY_GRAPH_PROJECTION_ENABLED: "true"
+      # A live assessment is intentionally denied by this guard during fixture
+      # setup; the denial itself is a real, deterministic llm_invocations row.
+      CORTEX_LLM_ENABLED: "false"
+    volumes:
+      - ${LIVE_MCP_FILETAIL_ROOT:?}:/file-tail-root
+      - ${LIVE_PROJECT_ROOT:?}/tests/live/profiles/mcp/config.toml:/config.toml:ro
+      - ${LIVE_PROJECT_ROOT:?}/tests/live/phases/mcp/docker-read-cli.sh:/usr/local/bin/docker:ro

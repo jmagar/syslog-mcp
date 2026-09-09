@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "profiles": {
+    "linux-dind": {
+      "disposition": "pass",
+      "certification": "full",
+      "platforms": ["linux"],
+      "authority": "run-owned-dind",
+      "requires": ["docker", "compose", "privileged-run-owned-dind"],
+      "forbids": ["host-docker-socket", "host-mounts", "external-egress", "unowned-cleanup"],
+      "fidelity": ["stdout", "stderr", "events", "health", "oom", "daemon-restart", "socket-denial", "daemon-death-cleanup"]
+    },
+    "desktop-proxy": {
+      "disposition": "platform-qualified",
+      "certification": "reduced",
+      "platforms": ["darwin", "windows"],
+      "authority": "operator-provisioned-read-only-proxy",
+      "requires": ["CORTEX_LIVE_DOCKER_PROXY_URL"],
+      "forbids": ["host-docker-socket", "create", "start", "exec", "build", "volume", "plugin", "swarm", "host-mounts"],
+      "fidelity": ["stdout", "stderr", "events", "proxy-outage", "socket-denial"],
+      "unsupported_fidelity": ["daemon-restart", "daemon-death-cleanup", "oom-control"]
+    }
+  },
+  "probe": {
+    "timeout_seconds": 5,
+    "max_response_bytes": 65536,
+    "allowed_schemes": ["http", "https"],
+    "allowed_read_paths": ["/_ping", "/version", "/info", "/events", "/containers/json"],
+    "denied_methods": ["POST", "PUT", "PATCH", "DELETE"],
+    "denied_paths": ["/containers/create", "/containers/forged/start", "/containers/forged/exec", "/build", "/volumes/create", "/plugins/pull", "/swarm/init"]
+  },
+  "cleanup": {
+    "identity": "provider-daemon-id-plus-run-id-plus-canonical-resource-id",
+    "labels_are_evidence_not_authority": true,
+    "forged_labels_never_authorize_cleanup": true,
+    "daemon_identity_change": "manual-reconciliation-required",
+    "unresolved_creation": "manual-reconciliation-required",
+    "verification": "independent-exact-id-absence-probe"
+  }
+}

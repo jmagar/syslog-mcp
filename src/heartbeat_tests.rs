@@ -7,6 +7,7 @@ use axum::body::{Body, to_bytes};
 use axum::extract::connect_info::MockConnectInfo;
 use axum::http::{Request, StatusCode};
 use serde_json::{Value, json};
+use serial_test::serial;
 use tower::util::ServiceExt;
 
 use crate::config::StorageConfig;
@@ -742,6 +743,7 @@ fn hold_only_connection(
 /// unretried `pool.get()` whose r2d2 timeout fell through to the handler's
 /// generic error arm.
 #[tokio::test]
+#[serial]
 async fn heartbeat_returns_busy_when_pool_contention_outlasts_the_retry_budget() {
     let dir = tempfile::tempdir().unwrap();
     let (app, pool) = contention_app(&dir);
@@ -776,7 +778,8 @@ async fn heartbeat_returns_busy_when_pool_contention_outlasts_the_retry_budget()
 /// Contention shorter than the retry budget but longer than one attempt must
 /// still be accepted. Pre-fix the single attempt expired at the pool's
 /// `connection_timeout` and the heartbeat was lost to a 500.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial]
 async fn heartbeat_recovers_from_contention_shorter_than_the_retry_budget() {
     let dir = tempfile::tempdir().unwrap();
     let (app, pool) = contention_app(&dir);

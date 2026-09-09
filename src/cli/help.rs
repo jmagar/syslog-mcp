@@ -655,7 +655,7 @@ const NESTED_CATALOG: &[NestedCommandDoc] = &[
             "cortex setup deploy preflight [--json]",
             "cortex setup deploy local [--dry-run] [--json]",
             "cortex setup deploy remote [--home PATH] HOST [--dry-run] [--json]",
-            "cortex setup deploy agent [--hosts h1,h2] [--target URL] [--heartbeat-token TOKEN] [--docker] [--journald] [--binary PATH]",
+            "cortex setup deploy agent [--hosts h1,h2] [--target URL] [--heartbeat-token-file PATH] [--docker] [--journald] [--binary PATH]",
         ],
     },
     NestedCommandDoc {

@@ -1,0 +1,7 @@
+services:
+  candidate:
+    environment:
+      # The agent reaches the candidate through the run-owned redirector. Only
+      # RFC1918 container-network senders are trusted in this isolated profile;
+      # an empty gate would correctly reject every agent identity marker.
+      CORTEX_AGENT_DOCKER_SOURCE_PREFIXES: "${LIVE_AGENT_SOURCE_PREFIXES:-10.,172.,192.168.}"

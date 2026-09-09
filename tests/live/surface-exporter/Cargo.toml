@@ -1,0 +1,10 @@
+[package]
+name = "cortex-live-surface-exporter"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+cortex = { path = "../../.." }
+
+[workspace]

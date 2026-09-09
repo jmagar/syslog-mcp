@@ -16,6 +16,10 @@ pub fn redact_sensitive(input: &str) -> String {
         "client_secret",
         "authorization",
     ];
+    if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(input) {
+        redact_json_secrets(&mut value, &sensitive);
+        return value.to_string();
+    }
     input
         .lines()
         .map(|line| {
@@ -28,6 +32,27 @@ pub fn redact_sensitive(input: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn redact_json_secrets(value: &mut serde_json::Value, sensitive: &[&str]) {
+    match value {
+        serde_json::Value::Object(entries) => {
+            for (key, value) in entries {
+                let lower = key.to_ascii_lowercase();
+                if sensitive.iter().any(|term| lower.contains(term)) {
+                    *value = serde_json::Value::String("[REDACTED]".into());
+                } else {
+                    redact_json_secrets(value, sensitive);
+                }
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                redact_json_secrets(value, sensitive);
+            }
+        }
+        _ => {}
+    }
 }
 
 pub fn mcp_projection(status: &ComposeStatus) -> ComposeMcpStatus {

@@ -60,7 +60,7 @@ concurrency:
 jobs:
   release-please:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
-    runs-on: ci-pool-ops
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: write       # required to create release commits and tags
@@ -83,7 +83,7 @@ jobs:
   release-pr-fixup:
     needs: release-please
     if: ${{ needs.release-please.outputs.prs_created == 'true' }}
-    runs-on: ci-pool-ops
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: write  # required to push the fixup commit to the release PR branch

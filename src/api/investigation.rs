@@ -1,9 +1,9 @@
+use crate::surfaces::{get, post};
 use axum::{
     Json, Router,
     extract::{Query, State},
     http::{HeaderValue, header::CACHE_CONTROL},
     response::IntoResponse,
-    routing::{get, post},
 };
 
 use super::{ApiState, CRATE_VERSION, respond};
@@ -17,13 +17,14 @@ use crate::app::{
 };
 
 pub fn routes() -> Router<ApiState> {
+    use crate::surfaces::ContractRouterExt as _;
     Router::new()
-        .route("/api/v1/investigation/version", get(version))
-        .route("/api/v1/investigations/ask", post(ask))
-        .route("/api/v1/graph/entity", get(graph_entity))
-        .route("/api/v1/graph/around", get(graph_around))
-        .route("/api/v1/graph/explain", get(graph_explain))
-        .route("/api/v1/graph/evidence", get(graph_evidence))
+        .contract_route("GET /api/v1/investigation/version", get(version))
+        .contract_route("POST /api/v1/investigations/ask", post(ask))
+        .contract_route("GET /api/v1/graph/entity", get(graph_entity))
+        .contract_route("GET /api/v1/graph/around", get(graph_around))
+        .contract_route("GET /api/v1/graph/explain", get(graph_explain))
+        .contract_route("GET /api/v1/graph/evidence", get(graph_evidence))
 }
 
 pub async fn version() -> impl IntoResponse {

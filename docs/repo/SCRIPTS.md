@@ -13,7 +13,7 @@ Code lifecycle hooks; `plugin-setup.sh` is invoked manually.
 
 | Script | Purpose | Usage |
 | --- | --- | --- |
-| `smoke-test.sh` | Live smoke test across the MCP action surface | `bash scripts/smoke-test.sh` |
+| `smoke-test.sh` | Compatibility wrapper for the canonical live smoke profile | `bash scripts/smoke-test.sh` |
 | `backup.sh` | WAL-safe SQLite backup using PRAGMA wal_checkpoint + .backup | `bash scripts/backup.sh` |
 | `reset-db.sh` | Backup first, then destructive DB reset (stop server first) | `bash scripts/reset-db.sh` |
 

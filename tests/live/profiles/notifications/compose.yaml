@@ -1,0 +1,30 @@
+services:
+  candidate:
+    working_dir: /live-config
+    environment:
+      CORTEX_NOTIFICATIONS_ENABLED: "true"
+      CORTEX_NOTIFICATIONS_APPRISE_URL: http://apprise:8000
+      CORTEX_NOTIFICATIONS_APPRISE_URLS: json://run-owned.invalid
+      CORTEX_STATIC_TOKEN_ADMIN: "true"
+      CORTEX_ERROR_DETECTION_ENABLED: "true"
+      CORTEX_ERROR_DETECTION_SCAN_INTERVAL_SECS: "1"
+    volumes:
+      - ${LIVE_PROJECT_ROOT:?}/tests/live/profiles/notifications/config.toml:/live-config/config.toml:ro
+  apprise:
+    image: ${LIVE_ORACLE_IMAGE:?oracle Python image required}
+    pull_policy: never
+    init: true
+    restart: "no"
+    environment:
+      MOCK_CONTROL_TOKEN: ${LIVE_APPRISE_CONTROL_TOKEN:?}
+      MOCK_MAX_RECORDS: "128"
+      MOCK_MAX_BODY: "65536"
+    entrypoint: [python, /apprise/mock_apprise.py]
+    volumes:
+      - ${LIVE_PROJECT_ROOT:?}/tests/live/services/apprise/mock_apprise.py:/apprise/mock_apprise.py:ro
+    networks: [isolated]
+    labels: {cortex.live.run_id: "${LIVE_RUN_ID:?}"}
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs: [/tmp]

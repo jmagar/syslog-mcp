@@ -46,6 +46,22 @@ fn known_provider_uses_existing_fields_normalizes_project_and_bounds_message() {
 }
 
 #[test]
+fn transcript_provider_aliases_use_the_shared_registry() {
+    for (alias, expected) in [
+        ("claude-code", "claude"),
+        ("openai-codex", "codex"),
+        ("gemini-transcript", "gemini"),
+    ] {
+        let row = log(Some(alias), Some("session-one"), None);
+        let TranscriptLogClassification::Project(projected) = classify_transcript_log(&row) else {
+            panic!("registry alias {alias} should project");
+        };
+        assert_eq!(projected.tool, expected);
+        assert_eq!(projected.provider_tool, alias);
+    }
+}
+
+#[test]
 fn missing_session_unsupported_tool_and_invalid_metadata_are_diagnostics() {
     let missing = log(Some("claude"), None, None);
     let TranscriptLogClassification::Skip(diagnostic) = classify_transcript_log(&missing) else {

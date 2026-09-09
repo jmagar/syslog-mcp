@@ -47,6 +47,7 @@ if [[ "$before" == "$after" && "$running_version" == "$expected_version" ]]; the
 fi
 
 echo "cortex auto-deploy: deploying $expected_version (running=${running_version:-unknown})"
+bash scripts/prepare-compose-dirs.sh
 docker compose build cortex
 docker compose up -d --no-deps --force-recreate cortex
 

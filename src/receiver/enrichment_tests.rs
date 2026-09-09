@@ -276,6 +276,23 @@ fn scrub_api_token_value() {
 }
 
 #[test]
+fn scrub_generic_credential_assignments() {
+    let cases = [
+        "token=ordinary-value",
+        "access_token: ordinary-value",
+        "client-secret=ordinary-value",
+        "credential: ordinary-value",
+        "private_key=ordinary-value",
+        "\"token\":\"ordinary-value\"",
+    ];
+    for credential_case in cases {
+        let scrubbed = scrub_ai_message(&format!("before {credential_case} after"), None);
+        assert_eq!(scrubbed, "before [REDACTED] after");
+        assert!(!scrubbed.contains("ordinary-value"));
+    }
+}
+
+#[test]
 fn scrub_disabled_leaves_message_untouched() {
     let cfg = EnrichmentConfig {
         scrub_prompts: false,

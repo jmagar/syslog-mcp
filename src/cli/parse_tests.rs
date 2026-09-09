@@ -6,6 +6,50 @@ use super::super::{
 use super::*;
 
 #[test]
+fn every_parser_root_is_in_the_compiled_surface_contract() {
+    let contract = cortex::surfaces::contract();
+    for command in TOP_LEVEL_COMMANDS {
+        assert!(
+            contract
+                .entries
+                .iter()
+                .any(|entry| entry.kind == "cli" && entry.spelling == *command),
+            "parser root {command} is missing from SurfaceContract"
+        );
+    }
+}
+
+#[test]
+fn catalog_children_reach_parser_dispatch_in_both_directions() {
+    for domain in ["analysis", "correlate", "stats", "heartbeat", "sessions"] {
+        for child in cortex::surfaces::cli_children(domain) {
+            let result = parse_command(vec![domain.into(), (*child).into(), "--help".into()]);
+            if let Err(error) = result {
+                assert!(
+                    !error
+                        .to_string()
+                        .contains(&format!("unknown {domain} subcommand")),
+                    "catalog child {domain} {child} lacks a parser arm: {error}"
+                );
+            }
+        }
+    }
+    for (domain, bogus) in [
+        ("analysis", "bogus-analysis"),
+        ("correlate", "bogus-correlate"),
+        ("sessions", "bogus-session"),
+    ] {
+        let error = parse_command(vec![domain.into(), bogus.into()])
+            .expect_err("uncataloged child must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("unknown {domain} subcommand"))
+        );
+    }
+}
+
+#[test]
 fn parser_top_level_commands_are_classified_in_surfaces() {
     for command in TOP_LEVEL_COMMANDS {
         let spec = cortex::surfaces::find(cortex::surfaces::SurfaceKind::Cli, command)

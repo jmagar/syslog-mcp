@@ -339,6 +339,7 @@ fn filesystem_phase_repair_creates_private_runtime_directories() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join(".cortex");
     let data_dir = home.join("data");
+    let backup_dir = home.join("backups");
     let compose_dir = home.join("compose");
 
     let phase = filesystem_phase(SetupMode::Repair, &home, &data_dir, &compose_dir).unwrap();
@@ -346,14 +347,17 @@ fn filesystem_phase_repair_creates_private_runtime_directories() {
     assert_eq!(phase.status, SetupStatus::Ok);
     assert!(home.is_dir());
     assert!(data_dir.is_dir());
+    assert!(backup_dir.is_dir());
     assert!(compose_dir.is_dir());
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let home_mode = std::fs::metadata(&home).unwrap().permissions().mode() & 0o777;
         let data_mode = std::fs::metadata(&data_dir).unwrap().permissions().mode() & 0o777;
+        let backup_mode = std::fs::metadata(&backup_dir).unwrap().permissions().mode() & 0o777;
         assert_eq!(home_mode, 0o700);
         assert_eq!(data_mode, 0o700);
+        assert_eq!(backup_mode, 0o700);
     }
 }
 
@@ -480,6 +484,9 @@ fn ai_watch_service_unit_is_hardened_and_uses_absolute_exec() {
     assert!(
         unit.contains("BindReadOnlyPaths=-/home/me/.claude/projects -/home/me/.codex/sessions")
     );
+    assert!(unit.contains("-/home/me/.gemini/tmp"));
+    assert!(unit.contains("-/home/me/.gemini/antigravity/brain"));
+    assert!(unit.contains("-/home/me/.gemini/antigravity-cli/brain"));
     assert!(unit.contains("BindPaths=/home/me/.cortex/data /home/me/.local/state/cortex"));
     assert!(unit.contains("ReadWritePaths=/home/me/.cortex/data /home/me/.local/state/cortex"));
     assert!(unit.contains("WantedBy=default.target"));
@@ -622,6 +629,8 @@ fn transcript_root_permissions_phase_reports_missing_roots() {
     assert!(phase.detail.contains(".claude/projects"));
     assert!(phase.detail.contains(".codex/sessions"));
     assert!(phase.detail.contains(".gemini/tmp"));
+    assert!(phase.detail.contains(".gemini/antigravity/brain"));
+    assert!(phase.detail.contains(".gemini/antigravity-cli/brain"));
 }
 
 #[test]
@@ -630,6 +639,8 @@ fn transcript_root_permissions_phase_accepts_owned_writable_roots() {
     std::fs::create_dir_all(dir.path().join(".claude/projects")).unwrap();
     std::fs::create_dir_all(dir.path().join(".codex/sessions")).unwrap();
     std::fs::create_dir_all(dir.path().join(".gemini/tmp")).unwrap();
+    std::fs::create_dir_all(dir.path().join(".gemini/antigravity/brain")).unwrap();
+    std::fs::create_dir_all(dir.path().join(".gemini/antigravity-cli/brain")).unwrap();
 
     let phase = transcript_root_permissions_phase(dir.path());
 

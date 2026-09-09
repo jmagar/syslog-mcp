@@ -1,0 +1,6 @@
+services:
+  candidate:
+    environment:
+      CORTEX_NO_AUTH: "true"
+      CORTEX_TRUSTED_GATEWAY_NO_AUTH: "true"
+      CORTEX_TOKEN: ""

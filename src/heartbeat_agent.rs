@@ -34,6 +34,8 @@ pub const OPTIONAL_ENV_KEYS: &[&str] = &[
     "CORTEX_AGENT_COMMAND_SPOOL",
     "CORTEX_AGENT_SHELL_HISTORY_FORWARD",
     "CORTEX_AGENT_SHELL_HISTORY_CHECKPOINT",
+    "CORTEX_AGENT_SYSLOG_FORWARD_SPOOL",
+    "CORTEX_AGENT_SYSLOG_FORWARD_TARGET",
     "CORTEX_AGENT_AUTO_UPDATE",
     "CORTEX_AGENT_ALLOW_TRUSTED_OVERLAY_HTTP",
 ];
@@ -120,6 +122,11 @@ pub struct HeartbeatAgentConfig {
     pub file_tails: Vec<crate::agent::syslog_file::FileTailSource>,
     /// Override TCP syslog target (`host:port`).  Derived from `target` when absent.
     pub syslog_target: Option<String>,
+    /// Explicit HTTP endpoint for receipt-backed syslog forwarding. When
+    /// absent, the heartbeat target is used.
+    pub syslog_forward_target: Option<String>,
+    /// Local durable queue for receipt-backed syslog delivery.
+    pub syslog_forward_spool_path: PathBuf,
     /// Forward local AI transcript (Claude/Codex) changes to the central
     /// server's `/v1/ai-transcripts` endpoint using `target`/`token`.
     pub ai_transcripts: bool,
@@ -137,14 +144,14 @@ pub struct HeartbeatAgentConfig {
 }
 
 impl HeartbeatAgentConfig {
-    pub fn from_env(host_id_path: PathBuf) -> Self {
+    pub fn from_env(host_id_path: PathBuf) -> Result<Self> {
         Self::from_env_with_fallback(host_id_path, &BTreeMap::new())
     }
 
     pub fn from_env_with_fallback(
         host_id_path: PathBuf,
         fallback: &BTreeMap<String, String>,
-    ) -> Self {
+    ) -> Result<Self> {
         let get = |key: &str| {
             crate::env::var(key)
                 .ok()
@@ -169,6 +176,29 @@ impl HeartbeatAgentConfig {
             .map(|spec| crate::agent::syslog_file::parse_file_tails(&spec))
             .unwrap_or_default();
         let syslog_target = get("CORTEX_SYSLOG_TARGET");
+        let explicit_syslog_forward_target = get("CORTEX_AGENT_SYSLOG_FORWARD_TARGET")
+            .filter(|value| !value.trim().is_empty());
+        let syslog_forward_target = if explicit_syslog_forward_target.is_some() {
+            explicit_syslog_forward_target
+        } else if syslog_target.is_some() {
+            tracing::warn!(
+                warning_code = "legacy_syslog_target_migrated",
+                legacy_env = "CORTEX_SYSLOG_TARGET",
+                replacement_env = "CORTEX_AGENT_SYSLOG_FORWARD_TARGET",
+                "legacy TCP syslog target is ignored; durable forwarding uses the heartbeat HTTP target"
+            );
+            target.clone()
+        } else {
+            None
+        };
+        let syslog_forward_spool_path = match get("CORTEX_AGENT_SYSLOG_FORWARD_SPOOL") {
+            Some(path) => PathBuf::from(path),
+            None => crate::setup::cortex_home_dir()
+                .context(
+                    "cannot resolve a durable Cortex state directory for the syslog forwarding spool; set CORTEX_AGENT_SYSLOG_FORWARD_SPOOL explicitly",
+                )?
+                .join("syslog-forward-spool.json"),
+        };
         let current_transcript_forward = get(AI_TRANSCRIPT_FORWARD_ENV);
         let legacy_transcript_forward = get(AI_TRANSCRIPT_FORWARD_LEGACY_ENV);
         let transcript_forward = resolve_ai_transcript_forward_env(
@@ -221,7 +251,7 @@ impl HeartbeatAgentConfig {
         let allow_trusted_overlay_http = get("CORTEX_AGENT_ALLOW_TRUSTED_OVERLAY_HTTP")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
-        Self {
+        Ok(Self {
             target,
             token,
             interval: Duration::from_secs(DEFAULT_INTERVAL_SECS),
@@ -238,6 +268,8 @@ impl HeartbeatAgentConfig {
             syslog_file,
             file_tails,
             syslog_target,
+            syslog_forward_target,
+            syslog_forward_spool_path,
             ai_transcripts,
             ai_transcript_checkpoint_path,
             agent_command_forward,
@@ -245,7 +277,7 @@ impl HeartbeatAgentConfig {
             shell_history_forward,
             shell_history_checkpoint_path,
             allow_trusted_overlay_http,
-        }
+        })
     }
 }
 
@@ -1443,7 +1475,19 @@ pub async fn run_agent(config: HeartbeatAgentConfig) -> Result<()> {
             journald: config.journald,
             syslog_file: config.syslog_file.clone(),
             file_tails: config.file_tails.clone(),
+            file_tail_target: config
+                .target
+                .clone()
+                .unwrap_or_else(|| DEFAULT_TARGET.to_string()),
+            file_tail_token: config.token.clone(),
             syslog_target,
+            syslog_forward_target: config
+                .syslog_forward_target
+                .clone()
+                .or_else(|| config.target.clone())
+                .unwrap_or_else(|| DEFAULT_TARGET.to_string()),
+            syslog_forward_token: config.token.clone(),
+            syslog_forward_spool_path: config.syslog_forward_spool_path.clone(),
             hostname: hostname(),
             ai_transcripts: config.ai_transcripts,
             ai_transcript_target: config
@@ -1830,11 +1874,34 @@ fn hostname() -> String {
                 return name;
             }
         }
-        Err(error) => {
-            tracing::warn!(error = %error, "could not determine hostname; using 'unknown'");
-        }
+        Err(error) => tracing::debug!(error = %error, "Linux proc hostname unavailable"),
     }
+    #[cfg(unix)]
+    if let Some(name) = unix_hostname() {
+        return name;
+    }
+    tracing::warn!("could not determine hostname; using 'unknown'");
     "unknown".to_string()
+}
+
+#[cfg(unix)]
+fn unix_hostname() -> Option<String> {
+    let mut bytes = [0_u8; 256];
+    // SAFETY: `bytes` is writable for its full advertised length. gethostname
+    // writes at most that many bytes; we find the first NUL (or use the full
+    // buffer) before validating UTF-8.
+    if unsafe { libc::gethostname(bytes.as_mut_ptr().cast(), bytes.len()) } != 0 {
+        return None;
+    }
+    let len = bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(bytes.len());
+    std::str::from_utf8(&bytes[..len])
+        .ok()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn kernel_release() -> Option<String> {
@@ -1852,15 +1919,38 @@ fn boot_id() -> String {
                 return trimmed;
             }
         }
-        Err(error) => {
-            tracing::warn!(
-                error = %error,
-                "failed to read boot_id from /proc; falling back to process ID \
-                 (heartbeat deduplication will not survive agent restart)"
-            );
-        }
+        Err(error) => tracing::debug!(error = %error, "Linux proc boot_id unavailable"),
     }
+    #[cfg(target_os = "macos")]
+    if let Some(id) = macos_boot_id() {
+        return id;
+    }
+    tracing::warn!("stable platform boot identity unavailable; falling back to process ID");
     format!("process-{}", std::process::id())
+}
+
+#[cfg(target_os = "macos")]
+fn macos_boot_id() -> Option<String> {
+    let mut boot = libc::timeval {
+        tv_sec: 0,
+        tv_usec: 0,
+    };
+    let mut len = std::mem::size_of::<libc::timeval>();
+    let name = b"kern.boottime\0";
+    // SAFETY: `boot` and `len` point to initialized writable storage of the
+    // declared size, the sysctl name is NUL-terminated, and no new value is
+    // supplied for this read-only query.
+    let result = unsafe {
+        libc::sysctlbyname(
+            name.as_ptr().cast(),
+            (&raw mut boot).cast(),
+            &raw mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    (result == 0 && len == std::mem::size_of::<libc::timeval>() && boot.tv_sec > 0)
+        .then(|| format!("darwin-boot-{}-{}", boot.tv_sec, boot.tv_usec))
 }
 
 #[cfg(test)]

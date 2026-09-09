@@ -11,7 +11,7 @@ REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 DEFAULT_COMPOSE_DIR="${CORTEX_HOME:-${HOME}/.cortex}/compose"
 COMPOSE_DIR="${CORTEX_COMPOSE_DIR:-$DEFAULT_COMPOSE_DIR}"
 ALLOW_LEGACY="false"
-ALLOW_LOCAL_IMAGE="false"
+ALLOW_LOCAL_IMAGE="${CORTEX_RUNTIME_CURRENT_ALLOW_LOCAL_IMAGE:-false}"
 
 usage() {
   cat <<'EOF'
@@ -134,16 +134,18 @@ resolve_env_file_args() {
 
 compose_image() {
   if [[ -d "$COMPOSE_DIR" ]]; then
-    (cd "$COMPOSE_DIR" && docker compose "${ENV_FILE_ARGS[@]}" config --images 2>/dev/null | head -1) || true
+    (cd "$COMPOSE_DIR" && docker compose ${ENV_FILE_ARGS[@]+"${ENV_FILE_ARGS[@]}"} config --images 2>/dev/null | head -1) || true
   fi
 }
 
 realpath_or_echo() {
   if command -v realpath >/dev/null 2>&1; then
-    realpath -m "$1"
-  else
-    printf '%s\n' "$1"
+    # GNU realpath supports -m; macOS/BSD realpath does not. Existing paths
+    # need neither extension, and unresolved paths retain their diagnostic
+    # spelling rather than turning a platform difference into a hard failure.
+    realpath "$1" 2>/dev/null && return
   fi
+  printf '%s\n' "$1"
 }
 
 git_common_dir() {
@@ -186,7 +188,7 @@ check_docker() {
   # Resolve the deploy env file now that COMPOSE_DIR is final (it may have been
   # rewritten from the container's compose project-dir label above).
   resolve_env_file_args
-  if [[ ${#ENV_FILE_ARGS[@]} -gt 0 ]]; then
+  if [[ -n "${ENV_FILE_ARGS+x}" && ${#ENV_FILE_ARGS[@]} -gt 0 ]]; then
     status_line env_file "${ENV_FILE_ARGS[1]}"
   fi
 
@@ -214,7 +216,7 @@ check_docker() {
   fi
 
   if [[ "$PULL" == "true" && -d "$COMPOSE_DIR" ]]; then
-    (cd "$COMPOSE_DIR" && docker compose "${ENV_FILE_ARGS[@]}" pull --quiet "$SERVICE")
+    (cd "$COMPOSE_DIR" && docker compose ${ENV_FILE_ARGS[@]+"${ENV_FILE_ARGS[@]}"} pull --quiet "$SERVICE")
   fi
 
   running_image="$(docker inspect "$cid" --format '{{.Image}}')"

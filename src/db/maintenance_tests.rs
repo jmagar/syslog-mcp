@@ -402,7 +402,7 @@ fn test_enforce_storage_budget_reconciles_hosts_after_deletes() {
     // Deliberately small relative to `recovery_db_size_mb` below: after both
     // `deleted-host` rows are trimmed, this row alone (plus fixed schema/
     // index overhead, which grows slowly as the schema gains tables/indexes
-    // over time) must land comfortably under the 2MB recovery target with
+    // over time) must land comfortably under the 3MB recovery target with
     // real headroom — not within a single SQLite page (4096 bytes) of it.
     // A prior version of this fixture sized `large_keep` right at that
     // boundary, so an unrelated schema change (e.g. a new index) could tip
@@ -430,8 +430,8 @@ fn test_enforce_storage_budget_reconciles_hosts_after_deletes() {
     update_received_at(&pool, &large_keep, "2026-01-02T00:00:00Z");
 
     let mut config = test_storage_config(dir.path().join("test.db"));
-    config.max_db_size_mb = 3;
-    config.recovery_db_size_mb = 2;
+    config.max_db_size_mb = 4;
+    config.recovery_db_size_mb = 3;
 
     enforce_storage_budget(&pool, &config).unwrap();
 

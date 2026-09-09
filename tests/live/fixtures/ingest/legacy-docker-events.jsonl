@@ -1,0 +1,2 @@
+{"status":"start","id":"cortex-live-container","from":"cortex-live-fixture:sha256","Type":"container","Action":"start","Actor":{"ID":"cortex-live-container","Attributes":{"name":"cortex-live-fixture","image":"cortex-live-fixture:sha256"}},"time":1787788800,"timeNano":1787788800000000000}
+{"status":"die","id":"cortex-live-container","from":"cortex-live-fixture:sha256","Type":"container","Action":"die","Actor":{"ID":"cortex-live-container","Attributes":{"name":"cortex-live-fixture","exitCode":"137"}},"time":1787788801,"timeNano":1787788801000000000}

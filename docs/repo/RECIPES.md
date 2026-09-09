@@ -36,7 +36,7 @@ Run `just --list` to see all available recipes.
 | Recipe | Command | Description |
 | --- | --- | --- |
 | `just health` | `curl -sf http://localhost:3100/health \| jq .` | Health check |
-| `just test-live` | `bash tests/test_live.sh` | Run live smoke tests |
+| `just test-live` | `bash tests/live/run-profile.sh smoke` | Run the fail-closed live smoke profile |
 
 ## Setup and security
 

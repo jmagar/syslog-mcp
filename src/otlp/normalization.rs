@@ -129,10 +129,7 @@ fn legacy_log_ai_tool(
     if raw.len() > MAX_TOOL_BYTES {
         return None;
     }
-    match raw.to_ascii_lowercase().as_str() {
-        "claude" | "codex" | "gemini" => Some(raw.to_ascii_lowercase()),
-        _ => None,
-    }
+    crate::scanner::providers::canonical_transcript_provider(&raw).map(str::to_string)
 }
 
 fn canonical_tool(value: &str) -> Option<String> {
@@ -140,14 +137,8 @@ fn canonical_tool(value: &str) -> Option<String> {
     if normalized.is_empty() {
         return None;
     }
-    let known = match normalized.as_str() {
-        "claude" | "claude-code" | "claude-transcript" => Some("claude"),
-        "codex" | "codex-transcript" => Some("codex"),
-        "gemini" | "gemini-cli" | "gemini-transcript" => Some("gemini"),
-        _ => None,
-    };
-    if let Some(known) = known {
-        return Some(known.to_string());
+    if let Some(provider) = crate::scanner::providers::canonical_transcript_provider(&normalized) {
+        return Some(provider.to_string());
     }
     let source = normalized
         .strip_prefix("unknown:")

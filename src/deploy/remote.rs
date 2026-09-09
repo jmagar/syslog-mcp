@@ -110,6 +110,10 @@ fn run_remote_deploy_with_runner(
     let remote_data_dir = format!("{remote_home}/data");
     let mut env = default_env_for_data_dir(Path::new(&remote_data_dir))?;
     env.insert("CORTEX_DATA_VOLUME".to_string(), remote_data_dir.clone());
+    env.insert(
+        "CORTEX_BACKUP_DIR".to_string(),
+        format!("{remote_home}/backups"),
+    );
     env.insert("CORTEX_UID".to_string(), identity_values.uid.clone());
     env.insert("CORTEX_GID".to_string(), identity_values.gid.clone());
     if !dry_run {
@@ -129,6 +133,10 @@ fn run_remote_deploy_with_runner(
         .get("CORTEX_PORT")
         .cloned()
         .unwrap_or_else(|| "3100".to_string());
+    let remote_backup_dir = env
+        .get("CORTEX_BACKUP_DIR")
+        .expect("remote backup default is always populated");
+    validate_remote_absolute_path(remote_backup_dir, "CORTEX_BACKUP_DIR")?;
 
     if dry_run {
         phases.push(remote_phase(
@@ -183,9 +191,10 @@ fn run_remote_deploy_with_runner(
         host,
         "remote-filesystem",
         &format!(
-            "mkdir -p {compose_config} {data_dir}",
+            "mkdir -p {compose_config} {data_dir} {backup_dir} && chmod 700 {backup_dir}",
             compose_config = shell_quote(&format!("{remote_home}/compose/config")),
             data_dir = shell_quote(&remote_data_dir),
+            backup_dir = shell_quote(remote_backup_dir),
         ),
         None,
     )?);
@@ -447,6 +456,21 @@ fn validate_remote_home(home: &str) -> io::Result<String> {
         ));
     }
     Ok(trimmed.to_string())
+}
+
+fn validate_remote_absolute_path(path: &str, name: &str) -> io::Result<()> {
+    let trimmed = path.trim();
+    if trimmed.is_empty()
+        || trimmed.contains(['\0', '\n', '\r'])
+        || !Path::new(trimmed).is_absolute()
+        || trimmed == "/"
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("remote deploy {name} must be a safe single-line absolute path"),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -16,12 +16,12 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use crate::surfaces::post;
 use axum::{
     Router,
     extract::{ConnectInfo, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json, Response},
-    routing::post,
 };
 use bytes::Bytes;
 use lab_auth::middleware::{parse_bearer_token, tokens_equal};
@@ -87,8 +87,9 @@ impl ShellHistoryIngestState {
 }
 
 pub fn router(state: ShellHistoryIngestState) -> Router {
+    use crate::surfaces::ContractRouterExt as _;
     Router::new()
-        .route("/v1/shell-history", post(ingest_handler))
+        .contract_route("POST /v1/shell-history", post(ingest_handler))
         .layer(RequestBodyLimitLayer::new(SHELL_HISTORY_BODY_LIMIT_BYTES))
         .with_state(state)
 }

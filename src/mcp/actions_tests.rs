@@ -1,5 +1,12 @@
 use super::*;
 
+#[test]
+fn documented_action_count_matches_registry() {
+    assert_eq!(ACTION_SPECS.len(), 59);
+    let claude = include_str!("../../CLAUDE.md");
+    assert!(claude.contains("authoritative registry of all 59 MCP actions"));
+}
+
 // PR 4 of GH #94 / GH #105: LLM skill/abuse/hook assessment is CLI-only. See
 // the doc comment near `ACTION_SPECS` above for the full invariant. This
 // guards against a future PR accidentally adding an MCP action for it
