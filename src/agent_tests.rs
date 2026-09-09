@@ -32,6 +32,8 @@ async fn run_agent_streams_returns_immediately_when_all_sources_disabled() {
         journald: false,
         syslog_file: None,
         file_tails: Vec::new(),
+        file_tail_target: "http://127.0.0.1:3100".to_string(),
+        file_tail_token: None,
         syslog_target: "127.0.0.1:1514".to_string(),
         syslog_forward_target: "http://127.0.0.1:3100".to_string(),
         syslog_forward_token: None,

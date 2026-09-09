@@ -1,5 +1,6 @@
 pub mod ai_transcript;
 pub mod docker;
+pub mod file_tail;
 pub mod journald;
 pub mod self_update;
 pub mod shell_history;
@@ -33,6 +34,8 @@ pub struct AgentStreamsConfig {
     /// (`CORTEX_AGENT_FILE_TAILS`).  Replaces host-side rsyslog imfile drop-ins
     /// for file-only sources (AdGuard query log, SWAG access, fail2ban, Plex).
     pub file_tails: Vec<FileTailSource>,
+    pub file_tail_target: String,
+    pub file_tail_token: Option<String>,
     /// TCP syslog target in `host:port` form.  Derived from the heartbeat
     /// target when not set explicitly.
     pub syslog_target: String,
@@ -163,21 +166,21 @@ pub async fn run_agent_streams(config: AgentStreamsConfig) -> Result<()> {
         });
     }
 
-    // One tailing task per configured app log file, each forwarded raw under
-    // its fixed tag.
+    // One authenticated HTTP task per configured app log file. Keeping these
+    // off syslog preserves trustworthy device-tail identity end to end.
     for source in config.file_tails {
         let hostname = config.hostname.clone();
-        let sender = Arc::clone(&sender);
+        let target = config.file_tail_target.clone();
+        let token = config.file_tail_token.clone();
         tasks.spawn(async move {
             loop {
-                match syslog_file::run_file_forwarder(
-                    &source.path,
-                    &hostname,
-                    source.tag.as_deref(),
-                    Arc::clone(&sender),
-                )
-                .await
-                {
+                let forward_config = file_tail::FileTailForwardConfig {
+                    source: source.clone(),
+                    target: target.clone(),
+                    token: token.clone(),
+                    hostname: hostname.clone(),
+                };
+                match file_tail::run(forward_config).await {
                     Ok(()) => return,
                     Err(e) => {
                         tracing::warn!(
