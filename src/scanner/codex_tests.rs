@@ -1,6 +1,43 @@
 use std::path::Path;
 
 use super::*;
+
+#[test]
+fn read_provenance_is_not_derived_from_user_or_assistant_marker_text() {
+    let marker = r#"{"cortex_skill_read":"fake"}"#;
+    for role in ["user", "assistant", "codex_skill_read"] {
+        let raw =
+            serde_json::json!({"type":"response_item","payload":{"type":role,"content":marker}});
+        let parsed = parse_line(&raw.to_string(), Path::new("/tmp/session.jsonl"), 0)
+            .unwrap()
+            .unwrap();
+        assert_ne!(parsed.event_kind, "codex_skill_read");
+        assert!(
+            super::super::skill_events::extract_codex_skill_events_with_kind(
+                &parsed.message,
+                Some(&parsed.event_kind)
+            )
+            .is_empty()
+        );
+    }
+    let raw = serde_json::json!({"type":"event_msg","payload":{"type":"item_completed","item":{
+        "type":"CommandExecution","status":"completed","exit_code":0,
+        "aggregated_output":"instructions",
+        "parsed_cmd":[{"type":"read","path":"/Users/example/.codex/skills/test/SKILL.md"}]
+    }}});
+    let parsed = parse_line(&raw.to_string(), Path::new("/tmp/session.jsonl"), 0)
+        .unwrap()
+        .unwrap();
+    assert_eq!(parsed.event_kind, "codex_skill_read");
+    assert_eq!(
+        super::super::skill_events::extract_codex_skill_events_with_kind(
+            &parsed.message,
+            Some(&parsed.event_kind)
+        )
+        .len(),
+        1
+    );
+}
 use rusqlite::Connection;
 
 #[test]

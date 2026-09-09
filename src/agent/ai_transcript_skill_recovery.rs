@@ -40,7 +40,7 @@ pub async fn backfill_codex_skill_reads(config: AiTranscriptForwardConfig) -> Re
             scanner::update_codex_fallbacks(source_kind, &line, &mut project, &mut session);
             if let Ok(Some(parsed)) =
                 scanner::parse_line_for_source(source_kind, &line, &path, line_no)
-                && parsed.message.starts_with("{\"cortex_skill_read\":")
+                && parsed.event_kind == "codex_skill_read"
             {
                 let ai_session_id = parsed.session_id.or_else(|| session.clone());
                 let title = path

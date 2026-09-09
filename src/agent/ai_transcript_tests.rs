@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "ai_transcript_recovery_tests.rs"]
+mod recovery_integration;
+
 #[tokio::test]
 async fn skill_read_recovery_uses_stable_receipts_without_rewinding_live_checkpoint() {
     let dir = tempfile::tempdir().unwrap();

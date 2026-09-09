@@ -8,6 +8,9 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 const MAX_FRAME: u64 = 2 * 1024 * 1024;
 const MAX_OUTPUT: usize = 512 * 1024;
 
+#[path = "codex_assessment_worker.rs"]
+mod worker;
+
 #[derive(Clone)]
 pub(crate) struct CodexAssessConfig {
     pub program: String,
@@ -32,7 +35,7 @@ impl CodexAssessConfig {
 
 fn thread_params(cwd: &std::path::Path, model: &Option<String>) -> Value {
     json!({
-        "cwd": cwd, "model": model, "ephemeral": true,
+        "cwd": cwd, "model": model, "ephemeral": true, "environments": [],
         "approvalPolicy": "never", "sandbox": "read-only",
         "developerInstructions": "Analyze only the supplied passive evidence. Return Markdown. Do not use tools, access files, browse, execute commands or change any state.",
         "config": {"features.shell_tool": false, "web_search": "disabled"}
@@ -68,6 +71,15 @@ async fn receive<R: tokio::io::AsyncBufRead + Unpin>(reader: &mut R) -> Result<V
     if value.get("method").is_some() && value.get("id").is_some() {
         bail!("Codex app-server requested an interactive operation during text-only assessment");
     }
+    if matches!(
+        value.get("method").and_then(Value::as_str),
+        Some("item/started" | "item/completed")
+    ) && !matches!(
+        value.pointer("/params/item/type").and_then(Value::as_str),
+        Some("userMessage" | "agentMessage" | "reasoning")
+    ) {
+        bail!("Codex app-server emitted an unexpected item during text-only assessment");
+    }
     Ok(value)
 }
 
@@ -91,47 +103,37 @@ pub(crate) async fn run<F>(
 where
     F: FnMut(&str) -> Result<()> + Send,
 {
-    let home = tempfile::Builder::new()
-        .prefix("cortex-codex-home-")
-        .tempdir()?;
-    let cwd = tempfile::Builder::new()
-        .prefix("cortex-codex-assess-")
-        .tempdir()?;
-    // Reuse authentication only; never inherit user MCP servers, hooks, skills,
-    // project instructions or unrestricted execution settings into this worker.
-    let auth = std::fs::read(config.source_home.join("auth.json")).context(
-        "Codex assessment requires auth.json in CORTEX_CODEX_HOME; authenticate Codex first",
-    )?;
-    std::fs::write(home.path().join("auth.json"), auth)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(
-            home.path().join("auth.json"),
-            std::fs::Permissions::from_mode(0o600),
-        )?;
-    }
-    let mut child = tokio::process::Command::new(&config.program)
-        .args(["app-server", "--listen", "stdio://"])
-        .env_clear()
-        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-        .env("HOME", home.path())
-        .env("CODEX_HOME", home.path())
-        .current_dir(cwd.path())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .context("could not start Codex app-server")?;
+    let mut worker = worker::Worker::prepare(&config.source_home).await?;
+    worker.child = Some(
+        tokio::process::Command::new(&config.program)
+            .args([
+                "app-server",
+                "--listen",
+                "stdio://",
+                "-c",
+                "cli_auth_credentials_store=\"file\"",
+            ])
+            .env_clear()
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("HOME", worker.resources.home.path())
+            .env("CODEX_HOME", worker.resources.home.path())
+            .current_dir(worker.resources.cwd.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .context("could not start Codex app-server")?,
+    );
+    let child = worker.child.as_mut().context("missing app-server child")?;
     let mut writer = child.stdin.take().context("missing app-server stdin")?;
     let mut reader = BufReader::new(child.stdout.take().context("missing app-server stdout")?);
-    send(&mut writer, json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"cortex_skill_assessment","version":env!("CARGO_PKG_VERSION")}}})).await?;
+    send(&mut writer, json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"cortex_skill_assessment","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}}})).await?;
     response(&mut reader, 1).await?;
     send(&mut writer, json!({"method":"initialized","params":{}})).await?;
     send(
         &mut writer,
-        json!({"id":2,"method":"thread/start","params":thread_params(cwd.path(), &config.model)}),
+        json!({"id":2,"method":"thread/start","params":thread_params(worker.resources.cwd.path(), &config.model)}),
     )
     .await?;
     let started = response(&mut reader, 2).await?;
@@ -160,8 +162,7 @@ where
                 if output.trim().is_empty() {
                     bail!("Codex assessment returned no text");
                 }
-                child.kill().await?;
-                child.wait().await?;
+                worker.stop().await?;
                 return Ok(output);
             }
             _ => {}

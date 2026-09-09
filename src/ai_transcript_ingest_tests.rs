@@ -10,6 +10,9 @@ use super::*;
 use crate::config::StorageConfig;
 use crate::mcp::AuthPolicy;
 
+#[path = "ai_transcript_replay_tests.rs"]
+mod replay_metadata;
+
 fn test_app(token: Option<&str>) -> (Router, tempfile::TempDir) {
     test_app_with(
         token,
@@ -150,6 +153,7 @@ async fn completed_codex_read_is_projected_once_on_replay() {
     let (app, dir) = test_app(Some("secret"));
     let mut record = sample_record();
     record["envelope"]["source"]["provider"] = json!("codex");
+    record["envelope"]["event_kind"] = json!("codex_skill_read");
     record["envelope"]["message"] = json!("{\"cortex_skill_read\":\"limetech-ai-review\"}");
     for _ in 0..2 {
         let response = app
@@ -1102,4 +1106,39 @@ async fn rejects_unknown_fields_in_record() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn forwarded_plain_marker_text_is_not_completed_read_evidence() {
+    let (app, dir) = test_app(Some("secret"));
+    for (index, kind) in ["user", "assistant", "unknown"].iter().enumerate() {
+        let mut record = sample_record();
+        record["envelope"]["source"]["provider"] = json!("codex");
+        record["envelope"]["event_kind"] = json!(kind);
+        record["envelope"]["source_record_id"] = json!(format!("sha256:{index:064x}"));
+        record["envelope"]["message"] = json!(r#"{"cortex_skill_read":"fake"}"#);
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/ai-transcripts")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(Body::from(json!({"records":[record]}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    let conn = rusqlite::Connection::open(dir.path().join("ai-transcript-ingest-test.db")).unwrap();
+    let counts: (i64, i64) = conn
+        .query_row(
+            "SELECT (SELECT count(*) FROM logs), (SELECT count(*) FROM ai_skill_events)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(counts, (3, 0));
 }

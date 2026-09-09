@@ -15,8 +15,12 @@ impl std::fmt::Display for IdempotencyConflict {
 impl std::error::Error for IdempotencyConflict {}
 
 fn envelope_fingerprint(envelope: &EvidenceEnvelope) -> anyhow::Result<String> {
-    let encoded = serde_json::to_vec(envelope)?;
-    Ok(format!("sha256:{:x}", Sha256::digest(encoded)))
+    // Supplemental display metadata can change without a transcript revision.
+    let mut evidence = envelope.clone();
+    evidence.source.title = None;
+    evidence.source.title_provenance = None;
+    let encoded = serde_json::to_vec(&evidence)?;
+    Ok(format!("evidence-v2:sha256:{:x}", Sha256::digest(encoded)))
 }
 
 fn receipt_key(forwarder_identity: &str, source_record_id: &str, shared_bearer: bool) -> String {
@@ -28,6 +32,44 @@ fn receipt_key(forwarder_identity: &str, source_record_id: &str, shared_bearer: 
             Sha256::digest(format!("{forwarder_identity}\0{source_record_id}").as_bytes())
         )
     }
+}
+
+/// Reconstruct only mutable titles from the stored row, then check the old
+/// full-envelope hash. This also preserves timestamp-less exact replays: the
+/// hash, unlike a canonical log timestamp, retains their original `None`.
+fn old_fingerprint_matches(
+    tx: &rusqlite::Transaction<'_>,
+    key: &str,
+    envelope: &EvidenceEnvelope,
+    previous: &str,
+) -> anyhow::Result<bool> {
+    // An exact old hash is sufficient even if bounded log metadata omitted
+    // its source fields. Canonical metadata is needed only for a title change.
+    if previous == format!("sha256:{:x}", Sha256::digest(serde_json::to_vec(envelope)?)) {
+        return Ok(true);
+    }
+    let metadata: Option<String> = tx.query_row(
+        "SELECT l.metadata_json FROM ai_transcript_forward_receipts r
+         JOIN logs l ON l.id = r.log_id WHERE r.source_record_id = ?1",
+        [key],
+        |row| row.get(0),
+    )?;
+    let Some(metadata) = metadata else {
+        return Ok(false);
+    };
+    let metadata: serde_json::Value = serde_json::from_str(&metadata)?;
+    let Some(source) = metadata.get("source") else {
+        return Ok(false);
+    };
+    let source: EvidenceSource = serde_json::from_value(source.clone())?;
+    let mut original = envelope.clone();
+    original.source.title = source.title;
+    original.source.title_provenance = source.title_provenance;
+    Ok(previous
+        == format!(
+            "sha256:{:x}",
+            Sha256::digest(serde_json::to_vec(&original)?)
+        ))
 }
 
 /// Migration-53 receipts have no request fingerprint. Validate an incoming
@@ -86,11 +128,18 @@ fn legacy_receipt_matches(
         return Ok(false);
     };
     let metadata: serde_json::Value = serde_json::from_str(&metadata_json)?;
-    let stored_source = metadata
+    let mut stored_source = metadata
         .get("source")
         .cloned()
         .map(serde_json::from_value::<EvidenceSource>)
         .transpose()?;
+    let mut incoming_source = envelope.source.clone();
+    incoming_source.title = None;
+    incoming_source.title_provenance = None;
+    if let Some(source) = &mut stored_source {
+        source.title = None;
+        source.title_provenance = None;
+    }
     let stored_capabilities = metadata
         .get("capabilities")
         .cloned()
@@ -114,7 +163,7 @@ fn legacy_receipt_matches(
         && source_identity == envelope.source.source_identity
         && source_epoch == envelope.source.source_epoch
         && source_revision == envelope.source.source_revision
-        && stored_source.as_ref() == Some(&envelope.source)
+        && stored_source.as_ref() == Some(&incoming_source)
         && stored_capabilities.as_ref() == Some(&envelope.capabilities)
         && stored_diagnostics.as_deref() == Some(envelope.diagnostics.as_slice())
         && stored_event_kind == envelope.event_kind.as_deref().unwrap_or("unknown")
@@ -203,22 +252,24 @@ fn insert_envelopes_with_identity(
             )
             .optional()?;
         if let Some(previous_fingerprint) = already_accepted {
-            if previous_fingerprint
-                .as_deref()
-                .is_some_and(|previous| previous != request_fingerprint)
-            {
-                return Err(IdempotencyConflict.into());
-            }
-            if previous_fingerprint.is_none() {
-                if !legacy_receipt_matches(&tx, &stored_receipt_key, &envelope)? {
+            if previous_fingerprint.as_deref() != Some(request_fingerprint.as_str()) {
+                // Old hashes included titles. Rebind only after comparing all
+                // immutable evidence against the canonical row, never merely
+                // because the caller reused an existing source-record ID.
+                let matches = match previous_fingerprint.as_deref() {
+                    Some(previous) if previous.starts_with("sha256:") => {
+                        old_fingerprint_matches(&tx, &stored_receipt_key, &envelope, previous)?
+                    }
+                    Some(_) => false,
+                    None => legacy_receipt_matches(&tx, &stored_receipt_key, &envelope)?,
+                };
+                if !matches {
                     return Err(IdempotencyConflict.into());
                 }
-                // Migration-53 receipts predate request fingerprints. Bind an
-                // exact replay only after checking the canonical stored row.
                 tx.execute(
                     "UPDATE ai_transcript_forward_receipts
                      SET request_fingerprint = ?2
-                     WHERE source_record_id = ?1 AND request_fingerprint IS NULL",
+                     WHERE source_record_id = ?1",
                     rusqlite::params![stored_receipt_key, request_fingerprint],
                 )?;
             }
@@ -241,18 +292,21 @@ fn insert_envelopes_with_identity(
             .expect("one transcript envelope must insert one log row");
         let entry = &entries[0];
         if entry.ai_tool.as_deref() == Some("codex") {
-            let events = crate::scanner::skill_events::extract_codex_skill_events(&entry.message)
-                .into_iter()
-                .map(|event| db::SkillEventInsert {
-                    log_id,
-                    ai_tool: "codex".to_string(),
-                    ai_project: entry.ai_project.clone(),
-                    ai_session_id: entry.ai_session_id.clone(),
-                    hostname: entry.hostname.clone(),
-                    timestamp: entry.timestamp.clone(),
-                    event,
-                })
-                .collect::<Vec<_>>();
+            let events = crate::scanner::skill_events::extract_codex_skill_events_with_kind(
+                &entry.message,
+                envelope.event_kind.as_deref(),
+            )
+            .into_iter()
+            .map(|event| db::SkillEventInsert {
+                log_id,
+                ai_tool: "codex".to_string(),
+                ai_project: entry.ai_project.clone(),
+                ai_session_id: entry.ai_session_id.clone(),
+                hostname: entry.hostname.clone(),
+                timestamp: entry.timestamp.clone(),
+                event,
+            })
+            .collect::<Vec<_>>();
             db::insert_skill_events_in_tx(&tx, &events)?;
         }
         tx.execute(

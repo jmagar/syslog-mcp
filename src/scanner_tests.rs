@@ -6,6 +6,40 @@ use crate::db::{
 };
 use serial_test::serial;
 
+#[test]
+fn local_scan_projects_only_validated_completed_reads() {
+    let (pool, dir) = test_pool();
+    let file = dir.path().join("codex-reads.jsonl");
+    let marker = r#"{"cortex_skill_read":"fake"}"#;
+    let rows = [
+        serde_json::json!({"type":"response_item","payload":{"type":"user","content":marker}}),
+        serde_json::json!({"type":"response_item","payload":{"type":"assistant","content":marker}}),
+        serde_json::json!({"type":"event_msg","payload":{"type":"item_completed","item":{
+            "type":"CommandExecution","status":"completed","exit_code":0,"aggregated_output":"instructions",
+            "parsed_cmd":[{"type":"read","path":"/Users/example/.codex/skills/real/SKILL.md"}]
+        }}}),
+    ];
+    std::fs::write(
+        &file,
+        rows.iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n",
+    )
+    .unwrap();
+    index_file(&pool, &file, "codex_session").unwrap();
+    let conn = pool.get().unwrap();
+    let skills = conn
+        .prepare("SELECT skill_name FROM ai_skill_events")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(skills, vec!["real"]);
+}
+
 fn test_pool() -> (crate::db::DbPool, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("test.db");
