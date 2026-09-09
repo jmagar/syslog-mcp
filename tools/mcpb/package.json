@@ -2,7 +2,15 @@
   "name": "cortex-mcpb-build-tools",
   "private": true,
   "version": "1.0.0",
+  "scripts": {
+    "test": "node --test test-tools.cjs"
+  },
   "dependencies": {
     "@anthropic-ai/mcpb": "2.1.2"
+  },
+  "overrides": {
+    "external-editor": {
+      "tmp": "0.2.7"
+    }
   }
 }

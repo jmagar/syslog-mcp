@@ -260,9 +260,11 @@ Cortex indexes local and forwarded transcript data from:
 
 - Claude Code projects under `~/.claude/projects`
 - Codex sessions and worktrees under `~/.codex/sessions` and `~/.codex/worktrees`
-- Gemini chat data under `~/.gemini/tmp`
+- Gemini CLI chat data under `~/.gemini/tmp`
+- Antigravity desktop's redacted transcript projections under `~/.gemini/antigravity/brain/<session>/.system_generated/logs/transcript.jsonl`
+- Antigravity CLI's redacted transcript projections under `~/.gemini/antigravity-cli/brain/<session>/.system_generated/logs/transcript.jsonl`
 
-The scanner supports incremental checkpoints, parse-error records, bounded chunks, broad-path rejection, and safe recovery from changed files. It extracts normalized transcript rows plus dedicated skill, MCP tool-call, and hook events.
+The Antigravity adapter reads only the narrow redacted JSONL projections above; it does not scan conversation databases or other brain artifacts. The scanner supports incremental checkpoints, parse-error records, bounded chunks, broad-path rejection, and safe recovery from changed files. It extracts normalized transcript rows plus dedicated skill, MCP tool-call, and hook events where those lanes are represented by the provider schema, and reports unsupported lanes honestly.
 
 A satellite agent can send already-parsed records to `POST /v1/ai-transcripts`, which prevents transcript collection from depending on the database living on the same host as the AI client.
 
@@ -464,7 +466,7 @@ The CLI supports direct/local operation and HTTP operation. REST-backed mode is 
 
 ### MCP
 
-Cortex exposes one MCP tool named `cortex`. Its required `action` field selects an action from a single authoritative Rust registry. The mechanically generated current count is published in [the live coverage inventory](../../tests/TEST_COVERAGE.md).
+Cortex exposes one MCP tool named `cortex`. Its required `action` field selects an action from a single authoritative Rust registry. The mechanically generated current count is published in [the live coverage inventory](tests/TEST_COVERAGE.md).
 
 The current scope split is:
 
@@ -671,7 +673,7 @@ Cortex uses SQLite with:
 - Online backup support
 - Integrity checks, checkpoints, and vacuum workflows
 
-The current schema history contains 58 sequential migrations. CI derives this denominator from `KNOWN_SCHEMA_VERSION` and the migration registry.
+The current schema history contains 58 sequential migrations. CI derives this denominator from `KNOWN_SCHEMA_VERSION` and the migration registry. Forwarding receipts have a seven-day replay horizon and are removed when their canonical evidence is deleted. Senders retain unacknowledged spool records; retries beyond the horizon are new ingestion attempts.
 
 ### Authoritative and derived data
 
@@ -865,7 +867,7 @@ just validate-plugin
 cargo xtask pre-push
 ```
 
-`just test-live` (also `just live-smoke`) is the canonical fail-closed pull-request subset. It exercises real HTTP JSON-RPC, UDP and TCP syslog ingest, CLI/REST behavior, browser routes, and managed file-tail behavior in a run-owned topology. Run `just live-mcp` for every registered MCP action; the scheduled aggregate combines all authoritative owner profiles. Specialist profiles are documented in [the live qualification guide](../../docs/LIVE_QUALIFICATION.md). Docker collection has separate agent-deployment tests and a mocked Docker HTTP fixture for central pull.
+`just test-live` (also `just live-smoke`) is the canonical fail-closed pull-request subset. It exercises real HTTP JSON-RPC, UDP and TCP syslog ingest, CLI/REST behavior, browser routes, and managed file-tail behavior in a run-owned topology. Run `just live-mcp` for every registered MCP action; the scheduled aggregate combines all authoritative owner profiles. Specialist profiles are documented in [the live qualification guide](docs/LIVE_QUALIFICATION.md). Docker collection has separate agent-deployment tests and a mocked Docker HTTP fixture for central pull.
 
 CI gates include:
 

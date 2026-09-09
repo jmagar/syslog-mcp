@@ -128,7 +128,13 @@ pub fn parse_line(
     line_no: usize,
 ) -> Result<Option<ParsedTranscriptRecord>> {
     let value: Value = serde_json::from_str(line)?;
-    let message = extract_message(&value);
+    let read_summary = super::skill_events::codex_skill_read_summary(&value);
+    let event_kind = if read_summary.is_some() {
+        "codex_skill_read".to_string()
+    } else {
+        super::transcript_event_kind(&value)
+    };
+    let message = read_summary.unwrap_or_else(|| extract_message(&value));
     let mut session_metadata = extract_session_metadata(&value);
     if message.is_empty() && session_metadata == TranscriptSessionMetadata::default() {
         return Ok(None);
@@ -137,7 +143,6 @@ pub fn parse_line(
     let payload = payload(&value);
     let session_id = session_id_from_value(&value);
     let ai_project = extract_project(&value);
-    let event_kind = super::transcript_event_kind(&value);
     Ok(Some(ParsedTranscriptRecord {
         record_key: record_key_from_line(&value, line, line_no),
         timestamp: value

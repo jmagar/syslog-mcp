@@ -73,7 +73,9 @@ use tokio::sync::Semaphore;
 
 use crate::db::{DbPool, SkillEventInsert, insert_skill_events};
 use crate::scanner::read_transcript_lines;
-use crate::scanner::skill_events::{extract_claude_skill_events, extract_codex_skill_events};
+use crate::scanner::skill_events::{
+    extract_claude_skill_events, extract_codex_skill_events_with_kind,
+};
 
 use super::super::models::{SkillBackfillRequest, SkillBackfillResult};
 use super::super::time::parse_optional_timestamp;
@@ -252,7 +254,17 @@ fn run_backfill(
                         }
                     }
                 }
-                "codex" => extract_codex_skill_events(&row.message),
+                "codex" => {
+                    let metadata = row
+                        .metadata_json
+                        .as_deref()
+                        .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok());
+                    let kind = metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.get("event_kind"))
+                        .and_then(serde_json::Value::as_str);
+                    extract_codex_skill_events_with_kind(&row.message, kind)
+                }
                 _ => continue,
             };
             for event in extracted {
