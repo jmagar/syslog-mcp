@@ -47,7 +47,7 @@ nc() {
     [[ "$(cat "$LIVE_RUN_ROOT/candidate")" == false ]]
     touch "$LIVE_RUN_ROOT/loss-sent"
   elif [[ "$payload" == *downtime-udp-recovered* ]]; then
-    [[ "${@: -1}" == 21514 ]]
+    [[ "${@: -1}" == 21514 ]] || return 1
     [[ -f "$LIVE_RUN_ROOT/relay-ready" ]]
     [[ "$(cat "$LIVE_RUN_ROOT/candidate")" == true ]]
     [[ "$mode" == no-recovery ]] || touch "$LIVE_RUN_ROOT/recovered"
@@ -75,7 +75,7 @@ live_ingest_curl_status() { printf 200; }
 live_ingest_case() { :; }
 live_die() { echo "$*" >&2; return 1; }
 live_ingest_downtime
-[[ "$LIVE_SYSLOG_UDP_PORT" == 21514 ]]
+[[ "$LIVE_SYSLOG_UDP_PORT" == 21514 ]] || exit 1
 [[ -f "$LIVE_RUN_ROOT/loss-sent" && -f "$LIVE_RUN_ROOT/recovered" ]]
 jq -e '.udp_ingress_while_down == "stopped" and .udp_recovery == "observed"' \
   "$LIVE_RUN_ROOT/artifacts/downtime-transport.json" >/dev/null
