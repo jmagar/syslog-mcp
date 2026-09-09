@@ -253,6 +253,21 @@ fn read_new_lines_accepts_provider_records_larger_than_64_kib() {
     assert_eq!(checkpoint, 1);
 }
 
+/// Consult a cursor the way a just-restarted agent does: nothing in this
+/// process has read the acknowledged prefix yet, so the check escalates to an
+/// exact digest. This is the strongest form of the check and the one every
+/// rewrite-detection test below wants.
+fn is_current_in_a_fresh_process(path: &Path, position: &JsonlPosition) -> bool {
+    verify_jsonl_position(
+        path,
+        position,
+        &mut Checkpoint::default(),
+        &path.to_string_lossy(),
+        Instant::now(),
+    )
+    .is_some()
+}
+
 #[test]
 fn read_new_lines_emits_a_gap_and_advances_past_an_oversized_record() {
     let dir = tempfile::tempdir().unwrap();
@@ -290,8 +305,9 @@ fn seekable_jsonl_position_reads_only_the_appended_tail() {
         prefix_digest: Some(jsonl_prefix_digest(&path, offset).unwrap()),
         observed_len: offset,
         modified_ns: path.metadata().ok().and_then(|m| file_modified_ns(&m)),
+        digest_offset: None,
     };
-    assert!(jsonl_position_is_current(&path, &position));
+    assert!(is_current_in_a_fresh_process(&path, &position));
 
     let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
     file.write_all(b"tail\n").unwrap();
@@ -318,13 +334,14 @@ fn seekable_jsonl_position_rejects_replacement_truncation_and_prefix_rewrite() {
         prefix_digest: Some(jsonl_prefix_digest(&path, offset).unwrap()),
         observed_len: offset,
         modified_ns: path.metadata().ok().and_then(|m| file_modified_ns(&m)),
+        digest_offset: None,
     };
 
     write_file(&path, "short\n");
-    assert!(!jsonl_position_is_current(&path, &position));
+    assert!(!is_current_in_a_fresh_process(&path, &position));
 
     write_file(&path, "other\nsecond\n");
-    assert!(!jsonl_position_is_current(&path, &position));
+    assert!(!is_current_in_a_fresh_process(&path, &position));
 }
 
 #[test]
@@ -348,6 +365,7 @@ fn seekable_jsonl_position_rejects_a_middle_only_rewrite() {
         prefix_digest: Some(jsonl_prefix_digest(&path, offset).unwrap()),
         observed_len: offset,
         modified_ns: file_modified_ns(&metadata),
+        digest_offset: None,
     };
 
     let rewritten = format!(
@@ -375,7 +393,7 @@ fn seekable_jsonl_position_rejects_a_middle_only_rewrite() {
         position.prefix_guard,
         "the rewrite must remain outside both sampled guard windows"
     );
-    assert!(!jsonl_position_is_current(&path, &position));
+    assert!(!is_current_in_a_fresh_process(&path, &position));
 }
 
 #[test]
@@ -399,6 +417,7 @@ fn seekable_jsonl_position_rejects_a_middle_rewrite_followed_by_append() {
         prefix_digest: Some(jsonl_prefix_digest(&path, offset).unwrap()),
         observed_len: offset,
         modified_ns: file_modified_ns(&metadata),
+        digest_offset: None,
     };
 
     let rewritten_and_appended = format!(
@@ -421,7 +440,7 @@ fn seekable_jsonl_position_rejects_a_middle_rewrite_followed_by_append() {
         position.prefix_digest.as_deref(),
         "the exact digest must cover the unsampled middle"
     );
-    assert!(!jsonl_position_is_current(&path, &position));
+    assert!(!is_current_in_a_fresh_process(&path, &position));
 }
 
 #[test]
@@ -442,7 +461,7 @@ fn seekable_jsonl_position_invalidates_a_legacy_position_without_exact_digest() 
     let position: JsonlPosition = serde_json::from_value(legacy).unwrap();
 
     assert_eq!(position.prefix_digest, None);
-    assert!(!jsonl_position_is_current(&path, &position));
+    assert!(!is_current_in_a_fresh_process(&path, &position));
 }
 
 #[test]
@@ -464,6 +483,7 @@ fn checkpoint_round_trips_through_disk() {
             prefix_digest: Some("sha256:digest".to_string()),
             observed_len: 1234,
             modified_ns: Some(123),
+            digest_offset: Some(1200),
         },
     );
     checkpoint
