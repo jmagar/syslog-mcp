@@ -81,6 +81,17 @@ fn transcript_request(body: String) -> Request<Body> {
         .unwrap()
 }
 
+#[tokio::test]
+async fn live_smoke_transcript_fixture_is_accepted() {
+    let body = include_str!("../tests/live/fixtures/ingest/transcript.json");
+    let (app, _dir) = test_app(Some("secret"));
+    let response = app
+        .oneshot(transcript_request(body.to_string()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
 async fn barrier_transcript_request(
     app: Router,
     barrier: Arc<tokio::sync::Barrier>,
