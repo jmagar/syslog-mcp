@@ -94,6 +94,13 @@ POST = {
 }
 
 
+# Route templates are filled from resources this sweep resolved through the
+# live API, so every ID-bearing case exercises a real resource instead of a
+# literal template. `main` fails closed before the sweep when a resource is not
+# resolvable, so these are never read while unset.
+RESOURCES: dict[str, str] = {}
+
+
 def expanded_path(path: str) -> str:
     if path.endswith("/{id}"):
         return path[:-4] + "/1"
@@ -105,8 +112,12 @@ def expanded_path(path: str) -> str:
     else:
         expanded = path
     # Numeric path parameters are parsed as i64 by their handler, so the literal
-    # template answers 400 and the semantics under test are never reached.
-    return expanded.replace("{repository_id}", "1")
+    # template answers 400 and the semantics under test are never reached. A run
+    # key is an opaque, length-prefixed identity containing reserved characters,
+    # so it is percent-encoded as a single path segment.
+    return expanded.replace("{repository_id}", RESOURCES["repository_id"]).replace(
+        "{run_key}", urllib.parse.quote(RESOURCES["run_key"], safe="")
+    )
 
 
 def evidence(status: int, body: bytes, headers: dict[str, str]) -> dict:
@@ -205,9 +216,16 @@ CONTRACTS = {
     "GET /api/agent-observatory/repositories": ("object", "as_of pagination repositories stream_cursor"),
     "GET /api/agent-observatory/runs": ("object", "as_of pagination runs stream_cursor"),
     "GET /api/agent-observatory/runs/{run_key}/events": ("object", "as_of events pagination run_key stream_cursor"),
+    # Telemetry answers with the span page and the metric page as a two-element
+    # array — the handler returns the service tuple directly — so it has no
+    # top-level keys for this table to require and its shape is asserted by the
+    # semantic postcondition below instead. This is the shipped response, not
+    # the object that docs/contracts/agent-observatory.openapi.json describes.
+    "GET /api/agent-observatory/runs/{run_key}/telemetry": ("array", ""),
     "GET /api/agent-observatory/worktrees": ("object", "as_of pagination stream_cursor worktrees"),
     "GET /api/agent-runs": ("object", "as_of pagination runs stream_cursor"),
     "GET /api/agent-runs/{run_key}/events": ("object", "as_of events pagination run_key stream_cursor"),
+    "GET /api/agent-runs/{run_key}/telemetry": ("array", ""),
     "GET /api/recurring-error-comparison": ("object", "baseline_from baseline_to candidate_cap candidate_rows candidate_window_truncated comparisons focal_from focal_to privacy_policy results_truncated"),
     "GET /api/repositories": ("object", "as_of pagination repositories stream_cursor"),
     "GET /api/repositories/{repository_id}/worktrees": ("object", "as_of pagination stream_cursor worktrees"),
@@ -230,7 +248,8 @@ CONTRACTS = {key: (kind, set(fields.split())) for key, (kind, fields) in CONTRAC
 
 
 def semantic_postconditions(method: str, path: str, parsed: object, fixture_host: str,
-                            fixture_signature: str, integrity_job_id: str) -> tuple[bool, list[str]]:
+                            fixture_signature: str, integrity_job_id: str,
+                            run_key: str) -> tuple[bool, list[str]]:
     checks: list[tuple[str, bool]] = []
     if isinstance(parsed, dict):
         for key, value in parsed.items():
@@ -246,6 +265,29 @@ def semantic_postconditions(method: str, path: str, parsed: object, fixture_host
         checks.append(("result:object", isinstance(parsed.get("result"), dict)))
     elif route == "GET /api/db/integrity":
         checks.append(("ok:true", parsed.get("ok") is True))
+    elif route in {"GET /api/agent-observatory/runs/{run_key}/events",
+                   "GET /api/agent-runs/{run_key}/events"}:
+        # The run key was resolved from a projected run, so an empty page here
+        # would mean the endpoint answered about a different run than the one
+        # requested — which is exactly what the literal `{run_key}` template
+        # used to hide behind a well-formed empty envelope.
+        checks.append(("run_key:requested", parsed.get("run_key") == run_key))
+        checks.append(("events:projected", bool(parsed.get("events"))))
+    elif route in {"GET /api/agent-observatory/runs/{run_key}/telemetry",
+                   "GET /api/agent-runs/{run_key}/telemetry"}:
+        # This endpoint answers 404 for an unknown run, unlike its `events`
+        # sibling, so reaching a two-page body is itself proof that the run
+        # resolved. Assert the pair and both page envelopes: the array shape
+        # carries no top-level keys for the generic contract to require.
+        pages = parsed if isinstance(parsed, list) else []
+        checks.append(("telemetry:span_and_metric_pages", len(pages) == 2))
+        checks.append(("telemetry:page_envelopes", bool(pages) and all(
+            isinstance(page, dict)
+            and {"items", "pagination", "as_of", "stream_cursor"}.issubset(page)
+            and isinstance(page.get("items"), list)
+            and isinstance(page.get("pagination"), dict)
+            and isinstance(page["pagination"].get("truncated"), bool)
+            for page in pages)))
     elif route == "GET /api/db/integrity/jobs/{id}":
         checks.append(("job_id:requested", str(parsed.get("job_id")) == integrity_job_id))
         checks.append(("status:known", parsed.get("status") in {"queued", "running", "done"}))
@@ -270,6 +312,35 @@ def semantic_postconditions(method: str, path: str, parsed: object, fixture_host
                        and bool(parsed.get("capabilities"))))
     failed = [name for name, passed in checks if not passed]
     return not failed, [name for name, _ in checks]
+
+
+def resolve_resource(base: str, token: str, path: str, extract, description: str,
+                     deadline_secs: float = 120.0) -> str:
+    """Resolve one route prerequisite from the live API, bounded by a deadline.
+
+    The Agent Observatory projector and the Git reconcile worker are background
+    workers with their own cursors and poll intervals, so the runs and
+    repositories their fixtures cause become readable some time after the
+    fixture itself lands. Polling to a deadline keeps the sweep deterministic
+    without encoding a worker's timing as a fixed sleep, and fails closed so a
+    surface can never be qualified against a resource that never appeared.
+    """
+    deadline = time.monotonic() + deadline_secs
+    while True:
+        status, payload, _ = request(base, "GET", path, token, None)
+        if status == 200:
+            try:
+                resolved = extract(json.loads(payload))
+            except (KeyError, IndexError, TypeError, StopIteration, json.JSONDecodeError):
+                resolved = None
+            if resolved:
+                return resolved
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"{description} was not resolvable before the surface sweep: "
+                f"GET {path} status={status}"
+            )
+        time.sleep(0.5)
 
 
 def main() -> int:
@@ -319,6 +390,20 @@ def main() -> int:
     POST["/api/errors/unack"]["signature_hash"] = fixture_signature
     # Create route prerequisites through the live API so ID-bearing cases use
     # real resources and authorization is evaluated before domain lookup.
+    # The Agent Observatory resources are projected from fixtures this suite
+    # already ingests: a run comes from the transcript lanes, a repository from
+    # the run-owned Git tree the MCP fixtures create inside the candidate.
+    RESOURCES["run_key"] = resolve_resource(
+        base, read_token, "/api/agent-observatory/runs?limit=5",
+        lambda body: next(run["run_key"] for run in body["runs"] if run.get("run_key")),
+        "an Agent Observatory run",
+    )
+    RESOURCES["repository_id"] = resolve_resource(
+        base, read_token, "/api/repositories?limit=5",
+        lambda body: next(str(repo["id"]) for repo in body["repositories"] if repo.get("id")),
+        "an Agent Observatory repository",
+    )
+    QUERY["/api/agent-observatory/worktrees"]["repository_id"] = RESOURCES["repository_id"]
     job_status, job_payload, _ = request(base, "POST", "/api/db/integrity/background?quick=true", read_token, admin_token)
     try:
         integrity_job_id = str(json.loads(job_payload)["job_id"]) if job_status == 200 else "__missing__"
@@ -372,8 +457,9 @@ def main() -> int:
         contract_key = f"{method} {raw_path}"
         expected_kind, required_keys = CONTRACTS.get(contract_key, (None, set()))
         postconditions_ok, postconditions = semantic_postconditions(
-            method, raw_path, parsed, fixture_host, fixture_signature, integrity_job_id
-        ) if isinstance(parsed, dict) else (True, [])
+            method, raw_path, parsed, fixture_host, fixture_signature, integrity_job_id,
+            RESOURCES["run_key"]
+        ) if isinstance(parsed, (dict, list)) else (True, [])
         positive_ok = (contract_key in CONTRACTS and status == expected_status
                        and observed["json_kind"] == expected_kind
                        and required_keys.issubset(observed["ordered_top_level_keys"])

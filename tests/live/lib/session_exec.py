@@ -22,7 +22,13 @@ environment = {
     "LIVE_RUN_ID": os.environ["LIVE_RUN_ID"],
     "LIVE_RUN_ROOT": os.environ["LIVE_RUN_ROOT"],
 }
-for name in ("DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH", "DOCKER_CONFIG"):
+# DOCKER_CONFIG is part of the Docker client contract, not a convenience: the
+# `compose` subcommand is a CLI plugin discovered under it (default
+# $HOME/.docker/cli-plugins). This rebuilt environment rewrites HOME, so
+# dropping DOCKER_CONFIG makes `docker compose` resolve to no plugin and the
+# arguments are then parsed by `docker` itself ("unknown shorthand flag: 'f'").
+for name in ("DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH",
+             "DOCKER_CONFIG"):
     if name in os.environ:
         environment[name] = os.environ[name]
 os.execvpe(command[0], command, environment)

@@ -8,6 +8,16 @@ services:
       CORTEX_NOTIFICATIONS_APPRISE_URL: "http://oracle:8080"
       CORTEX_NOTIFICATIONS_APPRISE_URLS: "json://oracle.invalid"
       CORTEX_INVENTORY_GRAPH_PROJECTION_ENABLED: "true"
+      # The Agent Observatory read surfaces are only qualified when the
+      # projector is running: with it off no run, repository, or worktree ever
+      # exists, so every observatory endpoint answers from an empty database
+      # and `runs/{run_key}/telemetry` cannot answer anything but 404.
+      CORTEX_AGENT_OBSERVATORY_ENABLED: "true"
+      # Discovery is pointed at a container-owned directory the fixtures create
+      # after this container starts. A bind mount would be host-owned and Git
+      # would refuse it as dubious ownership under the container's UID.
+      CORTEX_AGENT_OBSERVATORY_GIT_ROOTS: /tmp/cortex-observatory-repos
+      CORTEX_AGENT_OBSERVATORY_GIT_RECONCILE_INTERVAL_SECS: "5"
       # A live assessment is intentionally denied by this guard during fixture
       # setup; the denial itself is a real, deterministic llm_invocations row.
       CORTEX_LLM_ENABLED: "false"
