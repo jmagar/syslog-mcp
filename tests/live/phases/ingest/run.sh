@@ -148,6 +148,10 @@ live_ingest_downtime() {
   docker start "$candidate" >/dev/null; live_wait_until 30 downtime-health _live_http_health_ready; live_wait_until 30 downtime-mcp _live_mcp_ready
   docker start "$udp_redirector" >/dev/null
   live_wait_until 30 downtime-udp-ready live_ingest_udp_relay_ready "$udp_redirector"
+  # Docker allocates a new ephemeral host port when this relay restarts.
+  # The pre-outage binding is no longer an ingress endpoint.
+  LIVE_SYSLOG_UDP_PORT="$(live_topology_port "" "$LIVE_COMPOSE_PROJECT" udp-redirector 11514 udp)"
+  export LIVE_SYSLOG_UDP_PORT
   udp_recovered="$(live_ingest_marker downtime-udp-recovered 73)"
   printf '<134>1 2026-08-27T12:10:02Z retry udp 73 ID73 - %s\n' "$udp_recovered" | nc -u -w 1 127.0.0.1 "$LIVE_SYSLOG_UDP_PORT"
   live_ingest_wait_marker "$udp_recovered" downtime-udp-recovered 73
