@@ -67,13 +67,22 @@ runs:
           exit 0
         fi
         packages="build-essential pkg-config libssl-dev libdbus-1-dev ripgrep"
+        # The hosted image ships vendor apt repos (Chrome, Microsoft) that this
+        # build never installs from, and apt-get update exits non-zero when any
+        # one index fails. An outage over there must not decide whether our
+        # dependencies install: apt-get install stays the gate and still fails
+        # loudly when a package is genuinely unavailable.
+        update_indexes() {
+          "$@" apt-get update && return 0
+          echo "::warning::apt-get update reported index errors; continuing with the indexes that resolved."
+        }
         if command -v apt-get >/dev/null 2>&1; then
           if [ "$(id -u)" = "0" ]; then
-            apt-get update
+            update_indexes
             # shellcheck disable=SC2086
             apt-get install -y $packages
           elif command -v sudo >/dev/null 2>&1; then
-            sudo apt-get update
+            update_indexes sudo
             # shellcheck disable=SC2086
             sudo apt-get install -y $packages
           else

@@ -125,7 +125,11 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install identity scan prerequisites
-        run: sudo apt-get update && sudo apt-get install -y ripgrep
+        run: |
+          # A vendor apt repo outage on the hosted image must not gate this
+          # scan; apt-get install still fails if ripgrep is unavailable.
+          sudo apt-get update || echo "::warning::apt-get update reported index errors; continuing with the indexes that resolved."
+          sudo apt-get install -y ripgrep
 
       - name: Check public identity strings
         run: |
