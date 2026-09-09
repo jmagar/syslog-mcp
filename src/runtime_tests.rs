@@ -468,6 +468,48 @@ async fn spawn_maintenance_tasks_constructs_expected_handles_and_shutdowns_clean
 }
 
 #[tokio::test]
+async fn maintenance_shutdown_stops_syslog_monitor_and_listeners_cooperatively() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = test_config(tmp.path(), loopback_mcp());
+    // TCP and UDP can each bind their own ephemeral port; the exact port is
+    // irrelevant to this lifecycle assertion and avoids test-host collisions.
+    config.receiver.host = "127.0.0.1".into();
+    config.receiver.port = 0;
+    let runtime = RuntimeCore::for_server(config).await.expect("runtime");
+    let mut handles = runtime.spawn_maintenance_tasks();
+    runtime
+        .start_syslog(&mut handles)
+        .await
+        .expect("syslog supervisors start");
+
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while runtime.observability.udp_listener_state()
+            != crate::observability::ListenerState::Alive
+            || runtime.observability.tcp_listener_state()
+                != crate::observability::ListenerState::Alive
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("both listener supervisors report alive");
+
+    assert!(
+        handles.shutdown(Duration::from_millis(250)).await,
+        "graceful shutdown must not spend its timeout aborting syslog tasks"
+    );
+    assert_eq!(
+        runtime.observability.udp_listener_state(),
+        crate::observability::ListenerState::Down
+    );
+    assert_eq!(
+        runtime.observability.tcp_listener_state(),
+        crate::observability::ListenerState::Down
+    );
+    runtime.shutdown(Duration::from_secs(1)).await;
+}
+
+#[tokio::test]
 async fn shutdown_timeout_aborts_and_joins_non_cooperative_tasks() {
     let progress = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let task_progress = Arc::clone(&progress);

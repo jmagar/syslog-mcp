@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use parking_lot::Mutex;
+use tokio_util::sync::CancellationToken;
 
 use super::*;
 
@@ -18,6 +19,7 @@ async fn supervisor_restarts_listener_after_panic() {
         "test_listener",
         Arc::clone(&obs),
         |o, s| o.set_udp_listener_state(s),
+        CancellationToken::new(),
         move || {
             let attempts = Arc::clone(&attempts_in);
             async move {
@@ -60,6 +62,7 @@ async fn supervisor_marks_listener_down_while_failing() {
         "test_listener",
         Arc::clone(&obs),
         |o, s| o.set_tcp_listener_state(s),
+        CancellationToken::new(),
         move || {
             let attempts = Arc::clone(&attempts_in);
             async move {
@@ -115,6 +118,7 @@ async fn supervisor_resets_backoff_after_stable_run() {
         "test_listener",
         Arc::clone(&obs),
         |o, s| o.set_udp_listener_state(s),
+        CancellationToken::new(),
         move || {
             let attempts = Arc::clone(&attempts_in);
             let exits = Arc::clone(&exits_in);
@@ -224,4 +228,125 @@ async fn start_listeners_wires_udp_and_tcp_supervisors_on_ephemeral_loopback_por
     handles.udp.abort();
     handles.tcp.abort();
     ingest.shutdown(Duration::from_secs(1)).await;
+}
+
+#[tokio::test]
+async fn listener_supervisors_stop_cleanly_when_runtime_shutdown_is_cancelled() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = StorageConfig::for_test(dir.path().join("receiver-shutdown.db"));
+    let pool = Arc::new(db::init_pool(&storage).unwrap());
+    let storage_state = Arc::new(Mutex::new(None));
+    let observability = Arc::new(RuntimeObservability::default());
+    let config = ReceiverConfig {
+        host: "127.0.0.1".to_string(),
+        port: 0,
+        max_message_size: 1024,
+        max_tcp_connections: 4,
+        tcp_idle_timeout_secs: 1,
+        batch_size: 10,
+        flush_interval: 10,
+        write_channel_capacity: 16,
+        allowed_source_cidrs: Vec::new(),
+    };
+    let ingest = ingest::start_writer_from_receiver_config(
+        &config,
+        storage,
+        pool,
+        storage_state,
+        crate::receiver::enrichment::EnrichmentConfig::default(),
+        Arc::clone(&observability),
+    );
+    let shutdown = CancellationToken::new();
+    let handles = start_listeners_with_shutdown(
+        config,
+        ingest.clone(),
+        Arc::clone(&observability),
+        shutdown.clone(),
+    )
+    .await
+    .expect("listeners start");
+
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while observability.udp_listener_state() != ListenerState::Alive
+            || observability.tcp_listener_state() != ListenerState::Alive
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("listener supervisors report alive");
+
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_millis(250), async {
+        handles.udp.await.expect("UDP supervisor stops cleanly");
+        handles.tcp.await.expect("TCP supervisor stops cleanly");
+    })
+    .await
+    .expect("cancellation must not wait for listener receive/accept");
+    assert_eq!(observability.udp_listener_state(), ListenerState::Down);
+    assert_eq!(observability.tcp_listener_state(), ListenerState::Down);
+    ingest.shutdown(Duration::from_secs(1)).await;
+}
+
+async fn assert_supervisor_releases_bound_socket(abort_supervisor: bool) {
+    let observability = Arc::new(RuntimeObservability::default());
+    let shutdown = CancellationToken::new();
+    let (bound_tx, bound_rx) = tokio::sync::oneshot::channel();
+    let bound_tx = Arc::new(Mutex::new(Some(bound_tx)));
+    let supervisor = tokio::spawn(supervise_listener(
+        "socket_shutdown_test",
+        observability,
+        |obs, state| obs.set_udp_listener_state(state),
+        shutdown.clone(),
+        move || {
+            let bound_tx = Arc::clone(&bound_tx);
+            async move {
+                let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
+                bound_tx
+                    .lock()
+                    .take()
+                    .unwrap()
+                    .send(socket.local_addr()?)
+                    .unwrap();
+                let mut buffer = [0u8; 1];
+                socket.recv_from(&mut buffer).await?;
+                Ok(())
+            }
+        },
+    ));
+    let address = tokio::time::timeout(Duration::from_secs(2), bound_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(tokio::net::UdpSocket::bind(address).await.is_err());
+    if abort_supervisor {
+        supervisor.abort();
+        assert!(supervisor.await.unwrap_err().is_cancelled());
+    } else {
+        shutdown.cancel();
+        tokio::time::timeout(Duration::from_secs(2), supervisor)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if tokio::net::UdpSocket::bind(address).await.is_ok() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("stopping the supervisor must release the actual listener socket");
+}
+
+#[tokio::test]
+async fn supervisor_cancellation_releases_bound_socket() {
+    assert_supervisor_releases_bound_socket(false).await;
+}
+
+#[tokio::test]
+async fn supervisor_abort_releases_bound_socket() {
+    assert_supervisor_releases_bound_socket(true).await;
 }
