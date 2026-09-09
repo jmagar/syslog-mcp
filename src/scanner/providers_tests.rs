@@ -164,6 +164,25 @@ fn antigravity_transcript_projections_have_narrow_roots() {
 }
 
 #[test]
+fn temporary_ancestor_does_not_change_transcript_provider() {
+    for variant in ["antigravity", "antigravity-cli"] {
+        let path = format!("/tmp/host/.gemini/{variant}/brain/session/transcript.jsonl");
+        assert_eq!(
+            provider_for_transcript_layout(Path::new(&path)),
+            Some(Provider::Antigravity)
+        );
+    }
+    assert_eq!(
+        provider_for_transcript_layout(Path::new("/tmp/host/.gemini/other/session.json")),
+        None
+    );
+    assert_eq!(
+        provider_for_transcript_layout(Path::new("/tmp/host/.gemini/tmp/run/session.json")),
+        Some(Provider::Gemini)
+    );
+}
+
+#[test]
 fn empty_install_runtime_json_does_not_promote_static_adapter_support() {
     let db = tempfile::tempdir().unwrap();
     let pool = init_pool(&StorageConfig::for_test(db.path().join("test.db"))).unwrap();

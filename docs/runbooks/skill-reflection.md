@@ -37,15 +37,16 @@ requalified before deployment. Experimental API support is enabled explicitly.
 Provider errors, disconnects, interactive requests, unexpected tool items,
 oversized output and unsuccessful turn completion are failures, not reports.
 
-## Tootie usage
+## Server usage
 
-The Unraid plugin is not required. Run the CLI against the container's local
-database rather than its HTTP mode:
+The Unraid plugin is not required. Replace `CORTEX_HOST` below with your
+server's SSH alias. Run the CLI against the container's local database rather
+than its HTTP mode:
 
 ```sh
-ssh tootie 'docker exec -e CORTEX_USE_HTTP=false cortex cortex sessions skillincidents --since 7d --limit 5 --json'
-ssh tootie 'docker exec -e CORTEX_USE_HTTP=false cortex cortex assess skill SKILL_NAME --since 7d --limit 1'
-ssh tootie 'docker exec -e CORTEX_USE_HTTP=false cortex cortex sessions llminvocations --action skill_assess --limit 5 --json'
+ssh CORTEX_HOST 'docker exec -e CORTEX_USE_HTTP=false cortex cortex sessions skillincidents --since 7d --limit 5 --json'
+ssh CORTEX_HOST 'docker exec -e CORTEX_USE_HTTP=false cortex cortex assess skill SKILL_NAME --since 7d --limit 1'
+ssh CORTEX_HOST 'docker exec -e CORTEX_USE_HTTP=false cortex cortex sessions llminvocations --action skill_assess --limit 5 --json'
 ```
 
 An empty incident result is not an all-clear. Check skill-event coverage before
@@ -144,7 +145,7 @@ is fully caught up; compare the agent checkpoint against complete local lines.
 
 ## Rollback
 
-The tootie deployment uses a dedicated Compose override. To restore the prior
+For deployments using a dedicated Compose override, to restore the prior
 image, retain the override under a non-default filename and run Compose with
 the original `docker-compose.yml` explicitly. No schema migration is included
 in this change. A database rollback is not needed merely to restore the prior
