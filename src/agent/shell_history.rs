@@ -55,7 +55,7 @@ impl ShellHistoryForwardConfig {
             atuin_db_path: atuin_db_path.filter(|p| p.exists()),
             target,
             token,
-            hostname: crate::scanner::local_hostname(),
+            hostname: crate::hostname::local_hostname(),
             checkpoint_path,
             poll_interval: Duration::from_secs(20),
         }

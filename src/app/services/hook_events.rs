@@ -68,7 +68,7 @@ impl CortexService {
     /// deduplication should eventually be content-aware (compare against
     /// the latest existing row per identity) rather than timestamp-based.
     pub async fn collect_hook_config_inventory(&self) -> ServiceResult<usize> {
-        let hostname = crate::scanner::local_hostname();
+        let hostname = crate::hostname::local_hostname();
         let timestamp = crate::app::time::rfc3339_z(chrono::Utc::now());
         self.run_db("collect_hook_config_inventory", move |pool| {
             crate::hook_config::collect_and_store(pool, &hostname, &timestamp)
