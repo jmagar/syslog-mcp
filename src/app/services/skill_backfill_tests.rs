@@ -6,6 +6,34 @@ use serial_test::serial;
 use std::path::Path;
 use std::sync::Arc;
 
+#[tokio::test]
+#[serial(skill_backfill_guard)]
+async fn backfill_requires_persisted_completed_read_provenance() {
+    let (service, _dir) = test_service();
+    let pool = service.pool_for_test();
+    {
+        let conn = pool.get().unwrap();
+        for kind in ["user", "assistant", "unknown", "codex_skill_read"] {
+            conn.execute("INSERT INTO logs (timestamp, hostname, severity, message, raw, source_ip, ai_tool, metadata_json)
+                VALUES ('2026-06-01T00:00:00.000Z', 'devhost', 'info', ?1, '', 'transcript://codex_session', 'codex', ?2)",
+                rusqlite::params![r#"{"cortex_skill_read":"test"}"#, serde_json::json!({"event_kind":kind}).to_string()]).unwrap();
+        }
+    }
+    let result = service
+        .backfill_skill_events(SkillBackfillRequest {
+            since: None,
+            limit: Some(100),
+            dry_run: false,
+        })
+        .await
+        .unwrap();
+    assert_eq!(result.scanned, 4);
+    assert_eq!(result.inserted, 1);
+    let conn = pool.get().unwrap();
+    let kind: String = conn.query_row("SELECT json_extract(l.metadata_json, '$.event_kind') FROM ai_skill_events s JOIN logs l ON l.id=s.log_id", [], |row| row.get(0)).unwrap();
+    assert_eq!(kind, "codex_skill_read");
+}
+
 // All tests below share the process-wide `backfill_guard()` singleton
 // semaphore, so they must not run concurrently with each other (a parallel
 // test run would otherwise race on the same permit and produce spurious

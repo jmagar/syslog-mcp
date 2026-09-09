@@ -1,0 +1,183 @@
+//! Bounded, text-only assessment over Codex app-server's stdio protocol.
+//! The caller owns timeout, concurrency, rate limits and audit via LlmRunner.
+use anyhow::{Context, Result, bail};
+use serde_json::{Value, json};
+use std::{path::PathBuf, process::Stdio};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+
+const MAX_FRAME: u64 = 2 * 1024 * 1024;
+const MAX_OUTPUT: usize = 512 * 1024;
+
+#[path = "codex_assessment_worker.rs"]
+mod worker;
+
+#[derive(Clone)]
+pub(crate) struct CodexAssessConfig {
+    pub program: String,
+    pub model: Option<String>,
+    pub source_home: PathBuf,
+}
+
+impl CodexAssessConfig {
+    pub fn from_env(model: Option<String>) -> Self {
+        Self {
+            program: std::env::var("CORTEX_CODEX_CMD").unwrap_or_else(|_| "codex".into()),
+            model: model.or_else(|| std::env::var("CORTEX_CODEX_MODEL").ok()),
+            source_home: std::env::var_os("CORTEX_CODEX_HOME")
+                .or_else(|| std::env::var_os("CODEX_HOME"))
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".codex")
+                }),
+        }
+    }
+}
+
+fn thread_params(cwd: &std::path::Path, model: &Option<String>) -> Value {
+    json!({
+        "cwd": cwd, "model": model, "ephemeral": true, "environments": [],
+        "approvalPolicy": "never", "sandbox": "read-only",
+        "developerInstructions": "Analyze only the supplied passive evidence. Return Markdown. Do not use tools, access files, browse, execute commands or change any state.",
+        "config": {"features.shell_tool": false, "web_search": "disabled"}
+    })
+}
+
+async fn send(writer: &mut tokio::process::ChildStdin, value: Value) -> Result<()> {
+    writer
+        .write_all(serde_json::to_string(&value)?.as_bytes())
+        .await?;
+    writer.write_all(b"\n").await?;
+    writer.flush().await?;
+    Ok(())
+}
+
+async fn receive<R: tokio::io::AsyncBufRead + Unpin>(reader: &mut R) -> Result<Value> {
+    let mut bytes = Vec::new();
+    let n = reader
+        .take(MAX_FRAME + 1)
+        .read_until(b'\n', &mut bytes)
+        .await?;
+    if n == 0 {
+        bail!("Codex app-server disconnected before assessment completed");
+    }
+    if n as u64 > MAX_FRAME {
+        bail!("Codex app-server frame exceeds assessment limit");
+    }
+    let value: Value = serde_json::from_slice(&bytes).context("invalid Codex app-server frame")?;
+    if value.get("error").is_some() {
+        // Avoid putting provider response content or echoed prompts in the audit error.
+        bail!("Codex app-server rejected the assessment request");
+    }
+    if value.get("method").is_some() && value.get("id").is_some() {
+        bail!("Codex app-server requested an interactive operation during text-only assessment");
+    }
+    if matches!(
+        value.get("method").and_then(Value::as_str),
+        Some("item/started" | "item/completed")
+    ) && !matches!(
+        value.pointer("/params/item/type").and_then(Value::as_str),
+        Some("userMessage" | "agentMessage" | "reasoning")
+    ) {
+        bail!("Codex app-server emitted an unexpected item during text-only assessment");
+    }
+    Ok(value)
+}
+
+async fn response(reader: &mut BufReader<tokio::process::ChildStdout>, id: u64) -> Result<Value> {
+    loop {
+        let value = receive(reader).await?;
+        if value.get("id").and_then(Value::as_u64) == Some(id) {
+            return value
+                .get("result")
+                .cloned()
+                .context("missing app-server result");
+        }
+    }
+}
+
+pub(crate) async fn run<F>(
+    prompt: &str,
+    config: &CodexAssessConfig,
+    mut on_delta: F,
+) -> Result<String>
+where
+    F: FnMut(&str) -> Result<()> + Send,
+{
+    let mut worker = worker::Worker::prepare(&config.source_home).await?;
+    worker.child = Some(
+        tokio::process::Command::new(&config.program)
+            .args([
+                "app-server",
+                "--listen",
+                "stdio://",
+                "-c",
+                "cli_auth_credentials_store=\"file\"",
+            ])
+            .env_clear()
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("HOME", worker.resources.home.path())
+            .env("CODEX_HOME", worker.resources.home.path())
+            .current_dir(worker.resources.cwd.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .context("could not start Codex app-server")?,
+    );
+    let child = worker.child.as_mut().context("missing app-server child")?;
+    let mut writer = child.stdin.take().context("missing app-server stdin")?;
+    let mut reader = BufReader::new(child.stdout.take().context("missing app-server stdout")?);
+    send(&mut writer, json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"cortex_skill_assessment","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}}})).await?;
+    response(&mut reader, 1).await?;
+    send(&mut writer, json!({"method":"initialized","params":{}})).await?;
+    send(
+        &mut writer,
+        json!({"id":2,"method":"thread/start","params":thread_params(worker.resources.cwd.path(), &config.model)}),
+    )
+    .await?;
+    let started = response(&mut reader, 2).await?;
+    let thread_id = started
+        .pointer("/thread/id")
+        .and_then(Value::as_str)
+        .context("app-server did not return a thread ID")?;
+    send(&mut writer, json!({"id":3,"method":"turn/start","params":{"threadId":thread_id,"input":[{"type":"text","text":prompt}]}})).await?;
+    let mut output = String::new();
+    loop {
+        let value = receive(&mut reader).await?;
+        match value.get("method").and_then(Value::as_str) {
+            Some("item/agentMessage/delta") => {
+                let delta = value
+                    .pointer("/params/delta")
+                    .and_then(Value::as_str)
+                    .context("missing assessment delta")?;
+                append_delta(&mut output, delta)?;
+                on_delta(delta)?;
+            }
+            Some("turn/completed") => {
+                if value.pointer("/params/turn/status").and_then(Value::as_str) != Some("completed")
+                {
+                    bail!("Codex assessment turn did not complete successfully");
+                }
+                if output.trim().is_empty() {
+                    bail!("Codex assessment returned no text");
+                }
+                worker.stop().await?;
+                return Ok(output);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn append_delta(output: &mut String, delta: &str) -> Result<()> {
+    if output.len().saturating_add(delta.len()) > MAX_OUTPUT {
+        bail!("Codex assessment output exceeds limit");
+    }
+    output.push_str(delta);
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "codex_assessment_tests.rs"]
+mod tests;

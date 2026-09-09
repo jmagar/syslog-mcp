@@ -5,8 +5,9 @@
 //!   (top-level or `message.*` nesting — a third `payload.*` candidate was
 //!   deliberately NOT added: no observed transcript sample confirms that
 //!   shape, so it would be speculative).
-//! - Codex: `<skill><name>...</name></skill>` tags embedded in transcript
-//!   message text (see `CODEX_SKILL_TAG` in this module).
+//! - Codex: native skill headers in transcript content, including truncated
+//!   bodies, and separately typed successful command-read evidence. A JSON
+//!   marker in ordinary message text is never command-execution evidence.
 //!
 //! Both extractors short-circuit on a cheap substring check before doing any
 //! real parsing/regex work (eng review Fix 1), so the common no-skill-event
@@ -21,6 +22,7 @@
 use std::sync::LazyLock;
 
 use regex::Regex;
+use sha2::{Digest, Sha256};
 
 const MAX_SKILL_FIELD_CHARS: usize = 256;
 
@@ -28,6 +30,7 @@ const MAX_SKILL_FIELD_CHARS: usize = 256;
 pub enum SkillEventKind {
     ClaudeAttribution,
     CodexSkillBlock,
+    CodexSkillRead,
 }
 
 impl SkillEventKind {
@@ -35,6 +38,7 @@ impl SkillEventKind {
         match self {
             Self::ClaudeAttribution => "claude_attribution",
             Self::CodexSkillBlock => "codex_skill_block",
+            Self::CodexSkillRead => "codex_skill_read",
         }
     }
 }
@@ -154,25 +158,60 @@ pub fn extract_claude_skill_events(value: &serde_json::Value) -> Vec<ExtractedSk
     Vec::new()
 }
 
-/// Matches `<skill> <name> ... </name> </skill>` with optional whitespace
-/// around every tag boundary. `(?s)` lets `.` cross newlines (skill names are
-/// short but transcripts can wrap). Non-greedy `.*?` keeps each match scoped
-/// to one tag pair even when multiple `<skill>` blocks appear in one message.
+/// Matches legacy name-only blocks or a complete native name/path header.
+/// A truncated body is allowed; a name cannot cross an XML tag boundary.
 static CODEX_SKILL_TAG: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)<skill>\s*<name>\s*(.*?)\s*</name>\s*</skill>").expect("static regex")
+    // Current Codex emits a path and the entire skill body after the name.
+    // The forwarding byte budget can truncate that body, so require the
+    // complete structured header, not the closing tag beyond the budget.
+    // Keep the historical name-only form and reject ordinary catalog paths.
+    Regex::new(r"(?s)<skill>\s*<name>\s*([^<]*?)\s*</name>\s*(?:</skill>|<path>[^<>\r\n]+/SKILL\.md</path>)")
+        .expect("static regex")
 });
 
 /// Extract Codex skill-invocation events from transcript message text. Scans
-/// for ALL `<skill><name>...</name></skill>` occurrences (a single row can
-/// invoke multiple skills), de-duplicating identical skill names within the
-/// row. Deliberately narrow — matches only the literal tag pair, never prose
-/// like "use the rust skill".
+/// for native skill headers (one row may contain several), de-duplicating
+/// names within the row. Does not treat a command-read marker in plain text
+/// as structured evidence; that requires separate parser provenance.
 ///
 /// Eng review Fix 1: short-circuits on a cheap substring check before
 /// touching the regex engine at all — the overwhelming majority of
 /// transcript rows contain no skill tag, so this bounds the common case to
 /// one `str::contains` call instead of a full regex scan.
+#[cfg(test)]
 pub fn extract_codex_skill_events(text: &str) -> Vec<ExtractedSkillEvent> {
+    extract_codex_skill_events_with_kind(text, None)
+}
+
+/// The event kind is parser provenance, carried separately from message text
+/// in forwarded envelopes and persisted metadata. Legacy marker-only records
+/// cannot prove a read; recover them from the original native source instead.
+pub fn extract_codex_skill_events_with_kind(
+    text: &str,
+    event_kind: Option<&str>,
+) -> Vec<ExtractedSkillEvent> {
+    if event_kind == Some("codex_skill_read") && text.starts_with("{\"cortex_skill_read\":") {
+        let name = serde_json::from_str::<serde_json::Value>(text)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("cortex_skill_read")
+                    .and_then(|name| name.as_str())
+                    .map(str::to_owned)
+            });
+        return name
+            .and_then(|skill_name| {
+                ExtractedSkillEvent {
+                    skill_name,
+                    skill_plugin: None,
+                    event_kind: SkillEventKind::CodexSkillRead,
+                    evidence_kind: SkillEvidenceKind::StructuredJsonField,
+                }
+                .normalized()
+            })
+            .into_iter()
+            .collect();
+    }
     if !text.contains("<skill>") {
         return Vec::new();
     }
@@ -194,6 +233,77 @@ pub fn extract_codex_skill_events(text: &str) -> Vec<ExtractedSkillEvent> {
         }
     }
     events
+}
+
+/// Native Codex command-completion evidence, not a path guessed from shell
+/// text. Restrict this to a single parsed read with a successful completion:
+/// a multi-command shell's final exit code cannot prove each read succeeded.
+pub(crate) fn codex_skill_read_summary(value: &serde_json::Value) -> Option<String> {
+    if value.get("type")?.as_str()? != "event_msg"
+        || value.pointer("/payload/type")?.as_str()? != "item_completed"
+    {
+        return None;
+    }
+    let item = value.pointer("/payload/item")?;
+    if item.get("type")?.as_str()? != "CommandExecution"
+        || item.get("status")?.as_str()? != "completed"
+        || item.get("exit_code")?.as_i64()? != 0
+        || item.get("aggregated_output")?.as_str()?.trim().is_empty()
+    {
+        return None;
+    }
+    let commands = item.get("parsed_cmd")?.as_array()?;
+    if commands.len() != 1 || commands[0].get("type")?.as_str()? != "read" {
+        return None;
+    }
+    let path = commands[0].get("path")?.as_str()?;
+    let directory = path.strip_suffix("/SKILL.md")?;
+    let name = directory.rsplit('/').next()?;
+    if name.is_empty()
+        || name.len() > MAX_SKILL_FIELD_CHARS
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_-.:".contains(&byte))
+    {
+        return None;
+    }
+    // These versioned installation layouts establish plugin identity without
+    // consulting mutable files. Arbitrary project paths instead receive an
+    // unresolved digest identity: no private path or guessed plugin escapes.
+    let parts = path.split('/').collect::<Vec<_>>();
+    let plugin = parts.len().checked_sub(9).and_then(|start| {
+        let parts = &parts[start..];
+        (matches!(parts[0], ".codex" | ".claude")
+            && parts[1] == "plugins"
+            && parts[2] == "cache"
+            && parts[6] == "skills"
+            && parts[8] == "SKILL.md"
+            && parts[3..8]
+                .iter()
+                .all(|part| !part.is_empty() && *part != "." && *part != "..")
+            && parts[4]
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"_-.".contains(&byte)))
+        .then_some(parts[4])
+    });
+    let user_skill = parts.len().checked_sub(4).is_some_and(|start| {
+        let parts = &parts[start..];
+        matches!(parts[0], ".codex" | ".claude")
+            && parts[1] == "skills"
+            && parts[2] == name
+            && parts[3] == "SKILL.md"
+    });
+    let name = match plugin {
+        Some(plugin) if plugin.len() + 1 + name.len() <= MAX_SKILL_FIELD_CHARS => {
+            format!("{plugin}:{name}")
+        }
+        None if user_skill => name.to_owned(),
+        _ => format!(
+            "unresolved-skill-read-{:x}",
+            Sha256::digest(path.as_bytes())
+        ),
+    };
+    Some(serde_json::json!({"cortex_skill_read": name}).to_string())
 }
 
 #[cfg(test)]

@@ -1,0 +1,27 @@
+{
+  "records": [{"envelope": {
+    "version": 1,
+    "source_record_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "source": {
+      "provider": "codex",
+      "adapter_version": "live-smoke-v1",
+      "source_identity": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_epoch": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_revision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "locator": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "native_session_id": "live-smoke-transcript"
+    },
+    "timestamp": "2026-08-27T12:00:00Z",
+    "hostname": "live-smoke-transcript",
+    "ai_project": "live-smoke-transcript",
+    "ai_session_id": "live-smoke-transcript",
+    "message": "live-smoke-transcript",
+    "capabilities": {
+      "transcript": "observed",
+      "mcp_events": "not_observed",
+      "skill_events": "not_observed",
+      "hook_events": "not_observed"
+    },
+    "diagnostics": []
+  }}]
+}

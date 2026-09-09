@@ -16,6 +16,7 @@ pub mod api;
 pub mod app;
 pub mod artifact_evidence;
 pub(crate) mod assessment;
+pub(crate) mod codex_assessment;
 pub mod color_policy;
 pub mod command_log;
 pub mod compose;
