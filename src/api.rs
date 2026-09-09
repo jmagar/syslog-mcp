@@ -254,6 +254,7 @@ pub fn router(state: ApiState) -> anyhow::Result<Router> {
         .route("/api/capabilities", get(capabilities))
         .route("/api/streams/logs", get(log_stream))
         .route("/api/streams/sessions", get(session_stream))
+        .route("/api/streams/evidence", get(evidence_stream))
         .merge(investigation::routes())
         // --- surface parity routes ---
         .route("/api/source-ips", get(source_ips))
@@ -669,6 +670,20 @@ async fn session_stream(
         request.cursor = last_event_id(&headers);
     }
     crate::stream::session_stream(state.service, auth, request, state.cursor_keys)
+        .await
+        .into_response()
+}
+
+async fn evidence_stream(
+    State(state): State<ApiState>,
+    Extension(auth): Extension<AuthContext>,
+    headers: HeaderMap,
+    Query(mut request): Query<crate::stream::EvidenceStreamRequest>,
+) -> impl IntoResponse {
+    if request.cursor.is_none() {
+        request.cursor = last_event_id(&headers);
+    }
+    crate::stream::evidence_stream(state.service, auth, request, state.cursor_keys)
         .await
         .into_response()
 }

@@ -910,7 +910,7 @@ pub(crate) async fn run_mcp_investigate(
 pub(crate) async fn run_ai_assess(mode: &CliMode, args: SessionsAssessArgs) -> Result<()> {
     let service = match mode {
         CliMode::Http(_) => {
-            bail!("ai assess spawns Gemini CLI on the local host; omit --http")
+            bail!("ai assess runs the LLM selected by CORTEX_LLM on the local host; omit --http")
         }
         CliMode::Local(service) => service,
     };
@@ -930,9 +930,9 @@ pub(crate) async fn run_ai_assess(mode: &CliMode, args: SessionsAssessArgs) -> R
     };
     if dry_run {
         // GH issue #94: preview the prompt/evidence bundle via
-        // `LlmRunner::dry_run` without invoking Gemini. Writes a
+        // `LlmRunner::dry_run` without invoking the selected LLM. Writes a
         // "dry_run"-status audit row but spawns no subprocess.
-        let outcome = service.dry_run_gemini_assess(req).await?;
+        let outcome = service.dry_run_assess(req).await?;
         if json {
             println!("{}", serde_json::to_string_pretty(&outcome)?);
         } else {
@@ -953,12 +953,12 @@ pub(crate) async fn run_ai_assess(mode: &CliMode, args: SessionsAssessArgs) -> R
         return Ok(());
     }
     if json {
-        let response = service.run_gemini_assess(req).await?;
+        let response = service.run_assess(req).await?;
         println!("{}", serde_json::to_string_pretty(&response)?);
     } else {
         let mut streamed = false;
         let response = service
-            .run_gemini_assess_with_delta(req, |delta| {
+            .run_assess_with_delta(req, |delta| {
                 streamed = true;
                 print!("{delta}");
                 std::io::stdout().flush()?;
@@ -1090,14 +1090,14 @@ pub(crate) async fn run_ai_llm_invocations(
 /// Resolves the highest-priority (or all, with `--all`) matching skill
 /// incident via `CortexService::run_skill_assessment_with_delta`, which
 /// itself sources evidence from `investigate_ai_skill_incidents` (PR 3) and
-/// runs the guarded Gemini assessment through `LlmRunner` (PR 1). LLM
+/// runs the guarded LLM assessment through `LlmRunner` (PR 1). LLM
 /// assessment is local-only — `--http` is rejected unless `--no-llm` is
 /// also passed (mirrors `run_ai_assess`'s guard exactly).
 pub(crate) async fn run_assess_skill(mode: &CliMode, args: AssessSkillArgs) -> Result<()> {
     let run_llm = !args.no_llm;
     if run_llm && let CliMode::Http(_) = mode {
         bail!(
-            "cortex assess skill spawns Gemini CLI on the local host; omit --http or pass --no-llm"
+            "cortex assess skill runs the LLM selected by CORTEX_LLM on the local host; omit --http or pass --no-llm"
         );
     }
     let req = SkillAssessRequest {
@@ -1183,14 +1183,14 @@ pub(crate) async fn run_assess_skill(mode: &CliMode, args: AssessSkillArgs) -> R
 /// assessment. Resolves the highest-priority (or all, with `--all`)
 /// matching MCP incident via `CortexService::run_mcp_assessment_with_delta`,
 /// which itself sources evidence from `investigate_ai_mcp_incidents` and
-/// runs the guarded Gemini assessment through `LlmRunner`. LLM assessment
+/// runs the guarded LLM assessment through `LlmRunner`. LLM assessment
 /// is local-only — `--http` is rejected unless `--no-llm` is also passed
 /// (mirrors `run_assess_skill`'s guard exactly).
 pub(crate) async fn run_assess_mcp(mode: &CliMode, args: AssessMcpArgs) -> Result<()> {
     let run_llm = !args.no_llm;
     if run_llm && let CliMode::Http(_) = mode {
         bail!(
-            "cortex assess mcp spawns Gemini CLI on the local host; omit --http or pass --no-llm"
+            "cortex assess mcp runs the LLM selected by CORTEX_LLM on the local host; omit --http or pass --no-llm"
         );
     }
     // The bare positional `target` resolves to `mcp_server` unless a
@@ -1289,7 +1289,7 @@ pub(crate) async fn run_assess_hooks(mode: &CliMode, args: AssessHooksArgs) -> R
     let run_llm = !args.no_llm;
     if run_llm && let CliMode::Http(_) = mode {
         bail!(
-            "cortex assess hooks spawns Gemini CLI on the local host; omit --http or pass --no-llm"
+            "cortex assess hooks runs the LLM selected by CORTEX_LLM on the local host; omit --http or pass --no-llm"
         );
     }
 
@@ -1391,7 +1391,7 @@ pub(crate) async fn run_assess_hooks(mode: &CliMode, args: AssessHooksArgs) -> R
 
 /// `cortex assess abuse` — thin UX wrapper around the existing
 /// abuse-incident assessment pipeline (`list_ai_incidents` +
-/// `run_gemini_assess_with_delta`, itself already `LlmRunner`-guarded).
+/// `run_assess_with_delta`, itself already `LlmRunner`-guarded).
 /// Auto-picks the top-priority matching incident when `--incident-id` is
 /// omitted. LLM assessment is local-only, mirroring `run_assess_skill`'s
 /// and `run_ai_assess`'s guard exactly.
@@ -1400,7 +1400,7 @@ pub(crate) async fn run_assess_abuse(mode: &CliMode, args: AssessAbuseArgs) -> R
     let service = match mode {
         CliMode::Http(_) if run_llm => {
             bail!(
-                "cortex assess abuse spawns Gemini CLI on the local host; omit --http or pass --no-llm"
+                "cortex assess abuse runs the LLM selected by CORTEX_LLM on the local host; omit --http or pass --no-llm"
             )
         }
         CliMode::Http(_) => {
@@ -1423,6 +1423,9 @@ pub(crate) async fn run_assess_abuse(mode: &CliMode, args: AssessAbuseArgs) -> R
     let mut streamed = false;
     let response = service
         .assess_top_abuse_incident_with_delta(req, run_llm, |delta| {
+            if args.json {
+                return Ok(());
+            }
             streamed = true;
             print!("{delta}");
             std::io::stdout().flush()?;

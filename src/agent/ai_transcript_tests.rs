@@ -1,5 +1,7 @@
 use super::*;
 use std::io::Write;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn write_file(path: &Path, content: &str) {
     let mut file = fs::File::create(path).unwrap();
@@ -238,6 +240,67 @@ async fn scan_and_forward_sends_new_lines_and_advances_checkpoint() {
         .await
         .unwrap();
     assert_eq!(sent_again, 0);
+}
+
+#[tokio::test]
+async fn scan_and_forward_retries_without_event_kind_for_legacy_server() {
+    let dir = tempfile::tempdir().unwrap();
+    let transcript_path = dir.path().join("session.jsonl");
+    write_file(
+        &transcript_path,
+        &format!(
+            "{}\n",
+            serde_json::json!({
+                "type": "user",
+                "timestamp": "2026-07-09T00:00:00Z",
+                "sessionId": "sess-legacy",
+                "message": {"role": "user", "content": "compatibility proof"}
+            })
+        ),
+    );
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&calls);
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/v1/ai-transcripts"))
+        .respond_with(move |request: &wiremock::Request| {
+            let call = observed.fetch_add(1, Ordering::SeqCst);
+            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+            if call == 0 {
+                assert!(body["records"][0].get("event_kind").is_some());
+                wiremock::ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                    "error": "invalid_payload",
+                    "message": "unknown field `event_kind`"
+                }))
+            } else {
+                assert!(body["records"][0].get("event_kind").is_none());
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"accepted": 1}))
+            }
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    let config = AiTranscriptForwardConfig {
+        roots: vec![dir.path().to_path_buf()],
+        target: server.uri(),
+        token: Some("test-token".to_string()),
+        hostname: "test-host".to_string(),
+        checkpoint_path: dir.path().join("checkpoint.json"),
+        poll_interval: Duration::from_secs(15),
+    };
+    let mut checkpoint = Checkpoint::default();
+    assert_eq!(
+        scan_and_forward(&config, &reqwest::Client::new(), &mut checkpoint)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        checkpoint.files[&transcript_path.to_string_lossy().to_string()],
+        1
+    );
 }
 
 #[tokio::test]

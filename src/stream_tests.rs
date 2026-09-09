@@ -22,6 +22,34 @@ fn cursor_round_trip_binds_principal_filters_and_watermark() {
     assert_eq!(decoded.issued_at, 1234);
 }
 
+#[tokio::test]
+async fn disconnected_client_releases_stream_capacity_immediately() {
+    let semaphore = std::sync::Arc::new(Semaphore::new(1));
+    let permit = semaphore.clone().acquire_owned().await.unwrap();
+    let lease = client_lease(permit, Duration::from_secs(60));
+    assert_eq!(semaphore.available_permits(), 0);
+    drop(lease);
+    assert_eq!(semaphore.available_permits(), 1);
+}
+
+#[tokio::test]
+async fn connected_client_lease_still_expires_at_its_hard_deadline() {
+    let semaphore = std::sync::Arc::new(Semaphore::new(1));
+    let permit = semaphore.clone().acquire_owned().await.unwrap();
+    let lease = client_lease(permit, Duration::from_millis(1));
+    assert_eq!(semaphore.available_permits(), 0);
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert_eq!(semaphore.available_permits(), 1);
+    drop(lease);
+}
+
+#[test]
+fn sparse_scoped_history_behind_global_watermark_is_not_truncated() {
+    assert!(!history_is_truncated(49, 500, 102_000, 102_744));
+    assert!(history_is_truncated(500, 500, 102_000, 102_744));
+    assert!(!history_is_truncated(500, 500, 102_744, 102_744));
+}
+
 #[test]
 fn malformed_and_oversized_cursors_fail_closed() {
     assert!(matches!(
@@ -93,6 +121,59 @@ fn cursor_is_not_part_of_filter_lineage() {
     first.cursor = Some("resume-token".into());
     first.cursor = None;
     assert_eq!(fingerprint(&first).unwrap(), expected);
+}
+
+#[tokio::test]
+async fn evidence_stream_requires_a_bounded_git_scope() {
+    let (service, _pool, _dir) = service();
+    let result = evidence_stream(
+        service,
+        auth("alice"),
+        EvidenceStreamRequest {
+            branch: None,
+            worktree: None,
+            kinds: vec![],
+            since: None,
+            until: None,
+            include_payload: false,
+            history_limit: Some(10),
+            cursor: None,
+        },
+        test_cursor_keys(),
+    )
+    .await;
+    assert!(matches!(
+        result,
+        Err(StreamError::Invalid("branch or worktree is required"))
+    ));
+}
+
+#[test]
+fn scoped_evidence_serialization_redacts_payload_strings() {
+    let row = crate::db::agent_observatory::ObservatoryEventRow {
+        id: 1,
+        event_key: "e".into(),
+        run_key: "r".into(),
+        actor_key: None,
+        worktree_id: None,
+        commit_sha: None,
+        observed_at: "2026-08-31T00:00:00Z".into(),
+        ingested_at: "2026-08-31T00:00:01Z".into(),
+        kind: "transcript".into(),
+        source_kind: "transcript".into(),
+        source_id: "s".into(),
+        source_log_id: None,
+        provider_sequence: None,
+        trace_id: None,
+        span_id: None,
+        severity: "info".into(),
+        title: "title".into(),
+        summary: "sk-super-secret-canary".into(),
+        payload_json: Some("{\"token\":\"sk-super-secret-canary\"}".into()),
+        content_scrubbed: false,
+    };
+    let payload = scoped_event_json(&row);
+    assert!(!payload.contains("sk-super-secret-canary"));
 }
 
 #[test]

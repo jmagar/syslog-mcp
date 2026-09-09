@@ -70,17 +70,17 @@ Compose diagnostics are non-mutating and are validated only for redacted shape,
 so the smoke test can pass on either Docker-backed or non-Docker deployments.
 When seeding is enabled, the smoke scripts import
 `tests/fixtures/ai-session-smoke.jsonl` and assert that `sessions`,
-`search_sessions`, `abuse`, `abuse_incidents`, `abuse_investigate`, `ai_correlate`, and `project_context` can retrieve real AI transcript
+`search_sessions`, `evidence_scope`, `abuse`, `abuse_incidents`, `abuse_investigate`, `ai_correlate`, and `project_context` can retrieve real AI transcript
 rows, not just empty response envelopes.
 `scripts/smoke-ai-mcp.sh` additionally seeds a temporary transcript and calls
-the HTTP MCP endpoint for `search_sessions`, `abuse`, `abuse_incidents`, `abuse_investigate`, `usage_blocks`,
+the HTTP MCP endpoint for `search_sessions`, `evidence_scope`, `abuse`, `abuse_incidents`, `abuse_investigate`, `usage_blocks`,
 `project_context`, `list_ai_tools`, and `list_ai_projects`.
 The AI smoke scripts resolve `CORTEX_BIN` first, then `cortex` on `PATH`, then
 the repo-local debug binary at `target/debug/cortex`, so repo-local builds do
 not require an installed shell binary.
 
 Action registry covered by live/script references: `search`, `filter`, `tail`, `errors`,
-`hosts`, `map`, `host_state`, `fleet_state`, `correlate_state`, `topic_correlate`, `sessions`, `search_sessions`, `abuse`, `abuse_incidents`, `abuse_investigate`, `ai_correlate`, `usage_blocks`, `project_context`,
+`hosts`, `map`, `host_state`, `fleet_state`, `correlate_state`, `topic_correlate`, `sessions`, `search_sessions`, `evidence_scope`, `abuse`, `abuse_incidents`, `abuse_investigate`, `ai_correlate`, `usage_blocks`, `project_context`,
 `list_ai_tools`, `list_ai_projects`, `correlate`, `stats`, `status`, `apps`,
 `source_ips`, `timeline`, `patterns`, `context`, `get`, `ingest_rate`,
 `silent_hosts`, `clock_skew`, `anomalies`, `compare`, `compose_status`,
@@ -198,7 +198,7 @@ curl -s -X POST http://localhost:3100/mcp \
 ## Testing checklist
 
 - [ ] **All actions return expected shape** -- cortex search, cortex tail, cortex errors, cortex hosts, cortex host_state, cortex sessions, cortex correlate, cortex stats, cortex status, cortex help
-- [ ] **AI session analytics return expected shape and seeded rows** -- cortex search_sessions, cortex abuse, cortex sessions_correlate, cortex usage_blocks, cortex project_context, cortex list_ai_tools, cortex list_ai_projects
+- [ ] **AI session analytics and scoped lifecycle evidence return expected shape and seeded rows** -- cortex search_sessions, cortex evidence_scope, cortex abuse, cortex sessions_correlate, cortex usage_blocks, cortex project_context, cortex list_ai_tools, cortex list_ai_projects
 - [ ] **Auth: valid token** -- 200 with correct Bearer token
 - [ ] **Auth: invalid token** -- 401 Unauthorized
 - [ ] **Auth: no token when required** -- 401 Unauthorized

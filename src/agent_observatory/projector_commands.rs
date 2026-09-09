@@ -328,6 +328,7 @@ pub fn project_command_log(pool: &DbPool, row: &LogEntry) -> Result<CommandProje
     project_command_log_inner(pool, row, None)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn project_command_log_with_cursor(
     pool: &DbPool,
     row: &LogEntry,

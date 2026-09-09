@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::ffi::CString;
 use std::fs;
 use std::future::Future;
@@ -35,6 +35,7 @@ pub const OPTIONAL_ENV_KEYS: &[&str] = &[
     "CORTEX_AGENT_SHELL_HISTORY_FORWARD",
     "CORTEX_AGENT_SHELL_HISTORY_CHECKPOINT",
     "CORTEX_AGENT_AUTO_UPDATE",
+    "CORTEX_AGENT_ALLOW_TRUSTED_OVERLAY_HTTP",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,38 +133,44 @@ pub struct HeartbeatAgentConfig {
     /// server's `/v1/shell-history` endpoint, on a fixed interval.
     pub shell_history_forward: bool,
     pub shell_history_checkpoint_path: PathBuf,
+    pub allow_trusted_overlay_http: bool,
 }
 
 impl HeartbeatAgentConfig {
     pub fn from_env(host_id_path: PathBuf) -> Self {
-        let target = crate::env::var("CORTEX_HEARTBEAT_TARGET")
-            .ok()
-            .or_else(|| crate::env::var("CORTEX_URL").ok())
+        Self::from_env_with_fallback(host_id_path, &BTreeMap::new())
+    }
+
+    pub fn from_env_with_fallback(
+        host_id_path: PathBuf,
+        fallback: &BTreeMap<String, String>,
+    ) -> Self {
+        let get = |key: &str| {
+            crate::env::var(key)
+                .ok()
+                .or_else(|| fallback.get(key).cloned())
+        };
+        let target = get("CORTEX_HEARTBEAT_TARGET")
+            .or_else(|| get("CORTEX_URL"))
             .or_else(|| Some(DEFAULT_TARGET.to_string()));
-        let token = crate::env::var("CORTEX_HEARTBEAT_TOKEN")
-            .ok()
-            .or_else(|| crate::env::var("CORTEX_TOKEN").ok());
-        let docker = crate::env::var("CORTEX_AGENT_DOCKER")
-            .ok()
+        let token = get("CORTEX_HEARTBEAT_TOKEN").or_else(|| crate::env::var("CORTEX_TOKEN").ok());
+        let docker = get("CORTEX_AGENT_DOCKER")
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
             .unwrap_or(false);
-        let docker_url = crate::env::var("CORTEX_AGENT_DOCKER_URL")
-            .unwrap_or_else(|_| DEFAULT_DOCKER_URL.to_string());
-        let journald = crate::env::var("CORTEX_AGENT_JOURNALD")
-            .ok()
+        let docker_url =
+            get("CORTEX_AGENT_DOCKER_URL").unwrap_or_else(|| DEFAULT_DOCKER_URL.to_string());
+        let journald = get("CORTEX_AGENT_JOURNALD")
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
             .unwrap_or(false);
-        let syslog_file = crate::env::var("CORTEX_AGENT_SYSLOG_FILE")
-            .ok()
+        let syslog_file = get("CORTEX_AGENT_SYSLOG_FILE")
             .filter(|v| !v.trim().is_empty())
             .map(PathBuf::from);
-        let file_tails = crate::env::var("CORTEX_AGENT_FILE_TAILS")
-            .ok()
+        let file_tails = get("CORTEX_AGENT_FILE_TAILS")
             .map(|spec| crate::agent::syslog_file::parse_file_tails(&spec))
             .unwrap_or_default();
-        let syslog_target = crate::env::var("CORTEX_SYSLOG_TARGET").ok();
-        let current_transcript_forward = crate::env::var(AI_TRANSCRIPT_FORWARD_ENV).ok();
-        let legacy_transcript_forward = crate::env::var(AI_TRANSCRIPT_FORWARD_LEGACY_ENV).ok();
+        let syslog_target = get("CORTEX_SYSLOG_TARGET");
+        let current_transcript_forward = get(AI_TRANSCRIPT_FORWARD_ENV);
+        let legacy_transcript_forward = get(AI_TRANSCRIPT_FORWARD_LEGACY_ENV);
         let transcript_forward = resolve_ai_transcript_forward_env(
             current_transcript_forward.as_deref(),
             legacy_transcript_forward.as_deref(),
@@ -185,39 +192,35 @@ impl HeartbeatAgentConfig {
             }
         }
         let ai_transcripts = transcript_forward.enabled;
-        let ai_transcript_checkpoint_path =
-            crate::env::var("CORTEX_AGENT_AI_TRANSCRIPT_CHECKPOINT")
-                .ok()
-                .map(PathBuf::from)
-                .unwrap_or_else(|| {
-                    crate::setup::cortex_home_dir()
-                        .unwrap_or_else(|_| PathBuf::from("."))
-                        .join("ai-transcript-forward-checkpoint.json")
-                });
-        let agent_command_forward = crate::env::var("CORTEX_AGENT_COMMAND_FORWARD")
-            .ok()
+        let ai_transcript_checkpoint_path = get("CORTEX_AGENT_AI_TRANSCRIPT_CHECKPOINT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                crate::setup::cortex_home_dir()
+                    .unwrap_or_else(|_| PathBuf::from("."))
+                    .join("ai-transcript-forward-checkpoint.json")
+            });
+        let agent_command_forward = get("CORTEX_AGENT_COMMAND_FORWARD")
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
             .unwrap_or(false);
-        let agent_command_spool_path = crate::env::var("CORTEX_AGENT_COMMAND_SPOOL")
-            .ok()
+        let agent_command_spool_path = get("CORTEX_AGENT_COMMAND_SPOOL")
             .map(PathBuf::from)
             .unwrap_or_else(|| {
                 crate::setup::default_agent_command_spool_path()
                     .unwrap_or_else(|_| PathBuf::from("agent-command.jsonl"))
             });
-        let shell_history_forward = crate::env::var("CORTEX_AGENT_SHELL_HISTORY_FORWARD")
-            .ok()
+        let shell_history_forward = get("CORTEX_AGENT_SHELL_HISTORY_FORWARD")
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
             .unwrap_or(false);
-        let shell_history_checkpoint_path =
-            crate::env::var("CORTEX_AGENT_SHELL_HISTORY_CHECKPOINT")
-                .ok()
-                .map(PathBuf::from)
-                .unwrap_or_else(|| {
-                    crate::setup::cortex_home_dir()
-                        .unwrap_or_else(|_| PathBuf::from("."))
-                        .join("shell-history-forward-checkpoint.json")
-                });
+        let shell_history_checkpoint_path = get("CORTEX_AGENT_SHELL_HISTORY_CHECKPOINT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                crate::setup::cortex_home_dir()
+                    .unwrap_or_else(|_| PathBuf::from("."))
+                    .join("shell-history-forward-checkpoint.json")
+            });
+        let allow_trusted_overlay_http = get("CORTEX_AGENT_ALLOW_TRUSTED_OVERLAY_HTTP")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
         Self {
             target,
             token,
@@ -241,6 +244,7 @@ impl HeartbeatAgentConfig {
             agent_command_spool_path,
             shell_history_forward,
             shell_history_checkpoint_path,
+            allow_trusted_overlay_http,
         }
     }
 }
@@ -1396,6 +1400,9 @@ pub fn backoff_duration(attempt: u32) -> Duration {
 
 pub async fn run_agent(config: HeartbeatAgentConfig) -> Result<()> {
     let host_id = load_or_create_host_id(&config.host_id_path)?;
+    if let Some(target) = config.target.as_deref() {
+        validate_ingest_transport(target, config.allow_trusted_overlay_http)?;
+    }
 
     // If we are running immediately after a self-update, confirm it settled or
     // roll back to the previous binary. May re-exec and not return.
@@ -1411,6 +1418,7 @@ pub async fn run_agent(config: HeartbeatAgentConfig) -> Result<()> {
     let mut update_confirmed = false;
 
     // Spawn Docker / journald / file-tail / AI-transcript forwarding streams as a background task.
+    let mut streams_task = None;
     if config.docker
         || config.journald
         || config.syslog_file.is_some()
@@ -1459,12 +1467,13 @@ pub async fn run_agent(config: HeartbeatAgentConfig) -> Result<()> {
             shell_history_token: config.token.clone(),
             shell_history_checkpoint_path: config.shell_history_checkpoint_path.clone(),
         };
-        tokio::spawn(crate::agent::run_agent_streams(streams));
+        streams_task = Some(tokio::spawn(crate::agent::run_agent_streams(streams)));
     }
 
     let collector = HeartbeatCollector::for_platform(std::env::consts::OS);
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .context("failed to build heartbeat reqwest::Client")?;
     let update_client = crate::agent::self_update::build_update_client()?;
@@ -1478,6 +1487,19 @@ pub async fn run_agent(config: HeartbeatAgentConfig) -> Result<()> {
 
     loop {
         cadence.tick().await;
+        if streams_task
+            .as_ref()
+            .is_some_and(tokio::task::JoinHandle::is_finished)
+        {
+            let task = streams_task
+                .take()
+                .expect("finished stream task was present");
+            match task.await {
+                Ok(Ok(())) => bail!("agent stream supervisor exited unexpectedly"),
+                Ok(Err(error)) => return Err(error.context("agent stream supervisor failed")),
+                Err(error) => return Err(anyhow!("agent stream supervisor panicked: {error}")),
+            }
+        }
         let mut payload = collector
             .collect(
                 host_id.clone(),
@@ -1605,6 +1627,31 @@ pub async fn run_agent(config: HeartbeatAgentConfig) -> Result<()> {
 
         sequence += 1;
     }
+}
+
+fn validate_ingest_transport(target: &str, allow_trusted_overlay_http: bool) -> Result<()> {
+    let url = reqwest::Url::parse(target).context("invalid heartbeat target URL")?;
+    if url.scheme() != "http" {
+        return Ok(());
+    }
+    let loopback = match url.host() {
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        Some(url::Host::Domain(name)) => name.eq_ignore_ascii_case("localhost"),
+        None => false,
+    };
+    if !loopback && !allow_trusted_overlay_http {
+        bail!(
+            "non-loopback HTTP heartbeat ingest requires CORTEX_AGENT_ALLOW_TRUSTED_OVERLAY_HTTP=true"
+        );
+    }
+    if !loopback {
+        tracing::warn!(
+            host = url.host_str().unwrap_or("<unknown>"),
+            "trusted-overlay plaintext heartbeat ingest is explicitly enabled"
+        );
+    }
+    Ok(())
 }
 
 fn set_update_retry_cooldown(state: &Mutex<Option<(String, Instant)>>, version: &str) {
@@ -1761,6 +1808,20 @@ fn hostname() -> String {
         && !hostname.is_empty()
     {
         return hostname;
+    }
+    #[cfg(unix)]
+    {
+        let mut buffer = [0_u8; 256];
+        if unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) } == 0 {
+            let end = buffer
+                .iter()
+                .position(|byte| *byte == 0)
+                .unwrap_or(buffer.len());
+            let name = String::from_utf8_lossy(&buffer[..end]).trim().to_string();
+            if !name.is_empty() {
+                return name;
+            }
+        }
     }
     match std::fs::read_to_string("/proc/sys/kernel/hostname") {
         Ok(name) => {

@@ -231,6 +231,30 @@ fn release_please_opens_prs_and_fixes_up_regex_carriers() {
 }
 
 #[test]
+fn release_builds_and_publishes_exact_macos_arm64_agent_assets() {
+    let release = include_str!("../.github/workflows/release.yml");
+    let macos = workflow_job_block(release, "cortex-macos-arm64");
+    assert!(
+        macos.contains("runs-on: macos-15")
+            && macos.contains("targets: aarch64-apple-darwin")
+            && macos.contains("--target aarch64-apple-darwin"),
+        "macOS release job must compile the required Apple Silicon denominator"
+    );
+    assert!(
+        macos.contains("cp cortex cortex-macos-arm64")
+            && macos.contains("shasum -a 256 cortex-macos-arm64")
+            && macos.contains("cortex-macos-arm64.sha256"),
+        "macOS release job must produce the exact binary/checksum pair used by update routing"
+    );
+    assert!(
+        release.contains("needs: [cortex-linux, cortex-windows, cortex-macos-arm64]")
+            && release.contains("dist/cortex-macos-arm64")
+            && release.contains("dist/cortex-macos-arm64.sha256"),
+        "publication must wait for and attach both exact macOS assets"
+    );
+}
+
+#[test]
 fn release_please_config_and_manifest_agree_with_components_toml() {
     let config = include_str!("../release-please-config.json");
     let manifest = include_str!("../.release-please-manifest.json");

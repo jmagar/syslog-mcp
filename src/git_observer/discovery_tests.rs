@@ -71,7 +71,7 @@ fn explicit_symlink_root_is_canonicalized_but_nested_symlink_is_skipped() {
         result.warnings,
         vec![DiscoveryWarning {
             kind: DiscoveryWarningKind::SymlinkSkipped,
-            path: root.join("nested-link"),
+            path: canonical(&root).join("nested-link"),
         }]
     );
 }
@@ -116,11 +116,11 @@ fn depth_limit_is_inclusive_and_reports_each_untraversed_directory() {
         vec![
             DiscoveryWarning {
                 kind: DiscoveryWarningKind::DepthLimitReached { max_depth: 3 },
-                path: root.join("one/two/too-deep"),
+                path: canonical(&root.join("one/two/too-deep")),
             },
             DiscoveryWarning {
                 kind: DiscoveryWarningKind::DepthLimitReached { max_depth: 3 },
-                path: root.join("other/middle/also-too-deep"),
+                path: canonical(&root.join("other/middle/also-too-deep")),
             },
         ]
     );
@@ -204,7 +204,7 @@ fn permission_denied_directory_becomes_warning_without_losing_other_repositories
             kind: DiscoveryWarningKind::ReadDirectoryFailed {
                 error_kind: ErrorKind::PermissionDenied,
             },
-            path: blocked,
+            path: canonical(&blocked),
         }]
     );
 }
@@ -228,7 +228,7 @@ fn symlinked_git_marker_is_not_accepted_as_repository() {
         result.warnings,
         vec![DiscoveryWarning {
             kind: DiscoveryWarningKind::SymlinkSkipped,
-            path: repository.join(".git"),
+            path: canonical(&repository).join(".git"),
         }]
     );
 }

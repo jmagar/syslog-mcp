@@ -51,6 +51,7 @@ to them by default.
 | GET | `/api/integration-profile` | read | (none) | `CortexIntegrationProfileV1` | 200, 401 | Y | Runtime identity conforming to `contracts/integration-profile.schema.json`; stable server ID, mounted auth modes/generation, route support, and SSE resume support are reported together. |
 | GET | `/api/streams/logs` | read | query: `cursor?`, `host?`, `app?`, `severity?`; or `Last-Event-ID` | SSE snapshot, log events, typed control events | 200, 400, 401, 403, 410, 429, 503 | Y | Durable ascending `logs.id` replay. Cursors bind principal and filter lineage. Batches are capped at 100 items/128 KiB and individual messages at 64 KiB. |
 | GET | `/api/streams/sessions` | read | query: `project`, `tool`, `session_id`, `host` (all REQUIRED), `cursor?`; or `Last-Event-ID` | SSE snapshot, session events, typed control events | 200, 400, 401, 403, 410, 429, 503 | Y | Same durable envelope and bounds as log streaming, restricted to one rendered-session identity. Retention gaps and cursor expiry require explicit resync. |
+| GET | `/api/streams/evidence` | read | query: exact `branch?` or absolute `worktree?` (at least one REQUIRED), `kinds?`, `since?`, `until?`, `include_payload?`, `history_limit?`, `cursor?`; or `Last-Event-ID` | SSE snapshot, historical and live evidence events, typed gap/truncation controls | 200, 400, 401, 403, 410, 429, 503 | Y | Agent Observatory projection scoped to the selected Git identity. Opaque cursors bind principal and filters; payload strings are scrubbed before emission. |
 
 ### Artifact ecosystem evidence (2) — W16
 
@@ -132,7 +133,7 @@ subsystem).
 
 `cortex assess skill` / `cortex assess abuse` / `cortex assess hooks` are
 CLI-only in this phase (no REST route) — see README "Skill, abuse, and hook
-assessment". LLM assessment spawns Gemini on the local host via `LlmRunner`
+assessment". LLM assessment runs the provider selected by `CORTEX_LLM` locally via `LlmRunner`
 and is never exposed over MCP or REST; this mirrors the existing
 `cortex sessions assess` (no `/api/sessions/assess` route either).
 

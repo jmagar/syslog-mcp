@@ -4,34 +4,28 @@ use crate::app::llm_runner::{
 };
 
 impl CortexService {
-    pub async fn run_gemini_assess(&self, req: AiAssessRequest) -> ServiceResult<AiAssessResponse> {
-        self.run_gemini_assess_with_delta(req, |_| Ok(())).await
+    pub async fn run_assess(&self, req: AiAssessRequest) -> ServiceResult<AiAssessResponse> {
+        self.run_assess_with_delta(req, |_| Ok(())).await
     }
 
     /// Build the assessment prompt, evidence bundle, and `LlmInvocationSpec`
-    /// that both `run_gemini_assess_with_delta` and `dry_run_gemini_assess`
+    /// that both `run_assess_with_delta` and `dry_run_assess`
     /// feed into `LlmRunner` — the only difference between the run and
     /// dry-run paths is `LlmRunner::run` vs `LlmRunner::dry_run`, so
     /// everything up to that point lives here to keep the two callers in
     /// lockstep. Returns the spec plus the summary the run path echoes back
     /// in `AiAssessResponse` (`spec.evidence_counts.truncated` carries the
     /// truncation flag the summary omits), and the resolved
-    /// `GeminiAssessConfig` the run path needs to drive the subprocess.
+    /// `LlmBackend` the run path needs to drive the subprocess.
     ///
-    /// Eng review fix (Fix 1): `GeminiAssessConfig::from_env` is passed
+    /// Eng review fix (Fix 1): `LlmBackend::from_env` is passed
     /// `LlmRunner`'s own resolved timeout instead of independently
     /// re-reading `CORTEX_LLM_COMPLETION_TIMEOUT_SECS`.
     async fn build_assess_spec(
         &self,
         req: &AiAssessRequest,
-    ) -> ServiceResult<(
-        LlmInvocationSpec,
-        AiAssessEvidenceSummary,
-        GeminiAssessConfig,
-    )> {
+    ) -> ServiceResult<(LlmInvocationSpec, AiAssessEvidenceSummary, LlmBackend)> {
         let incident_id = req.incident_id.clone();
-        let gemini_config =
-            GeminiAssessConfig::from_env(req.model.clone(), self.llm().timeout_secs());
         let invest_req = AiInvestigateRequest {
             incident_id: Some(incident_id.clone()),
             project: req.project.clone(),
@@ -58,6 +52,11 @@ impl CortexService {
             )));
         }
 
+        let backend = self
+            .llm()
+            .backend(req.model.clone())
+            .map_err(|error| ServiceError::InvalidInput(error.to_string()))?;
+
         let evidence_json = serde_json::to_string_pretty(&matching)
             .map_err(|e| ServiceError::Internal(anyhow::anyhow!("json serialize failed: {e}")))?;
         let prompt = build_assessment_prompt(&evidence_json);
@@ -81,33 +80,30 @@ impl CortexService {
                 truncated: invest_resp.truncated,
             },
             prompt,
-            provider: "gemini-cli".to_string(),
-            model: gemini_config.model.clone(),
-            program: gemini_config.program.clone(),
+            provider: backend.provider().to_string(),
+            model: backend.model(),
+            program: backend.program(),
             extra_metadata: serde_json::json!({}),
         };
 
-        Ok((spec, evidence_summary, gemini_config))
+        Ok((spec, evidence_summary, backend))
     }
 
-    /// Preview the prompt/evidence bundle that `run_gemini_assess` would
-    /// send to Gemini, WITHOUT invoking the LLM — routes through
+    /// Preview the prompt/evidence bundle that `run_assess` would
+    /// send to the selected LLM, WITHOUT invoking the LLM — routes through
     /// `LlmRunner::dry_run` (GH issue #94's acceptance criterion for a
     /// dry-run/preview mode). Still writes an audit row (status
     /// "dry_run"), same as `LlmRunner::dry_run` does for every other
-    /// caller, but never spawns the Gemini subprocess.
-    pub async fn dry_run_gemini_assess(
-        &self,
-        req: AiAssessRequest,
-    ) -> ServiceResult<LlmDryRunOutcome> {
-        let (spec, _summary, _gemini_config) = self.build_assess_spec(&req).await?;
+    /// caller, but never spawns a provider subprocess.
+    pub async fn dry_run_assess(&self, req: AiAssessRequest) -> ServiceResult<LlmDryRunOutcome> {
+        let (spec, _summary, _backend) = self.build_assess_spec(&req).await?;
         self.llm()
             .dry_run(&spec)
             .await
             .map_err(|err| ServiceError::Internal(anyhow::anyhow!(err)))
     }
 
-    pub async fn run_gemini_assess_with_delta<F>(
+    pub async fn run_assess_with_delta<F>(
         &self,
         req: AiAssessRequest,
         mut on_delta: F,
@@ -115,12 +111,12 @@ impl CortexService {
     where
         F: FnMut(&str) -> anyhow::Result<()> + Send,
     {
-        let (spec, evidence_summary, gemini_config) = self.build_assess_spec(&req).await?;
+        let (spec, evidence_summary, backend) = self.build_assess_spec(&req).await?;
         let incident_id = spec.incident_id.clone().unwrap_or_default();
         let prompt_preview = spec.prompt.chars().take(500).collect::<String>();
 
         let assessment =
-            super::run_gemini_with_delta(self.llm(), spec, &gemini_config, &mut on_delta).await?;
+            super::run_llm_with_delta(self.llm(), spec, &backend, &mut on_delta).await?;
 
         Ok(AiAssessResponse {
             incident_id,
@@ -133,7 +129,7 @@ impl CortexService {
     /// UX wrapper for `cortex assess abuse`: auto-picks the top-priority
     /// matching abuse incident when `req.incident_id` is `None`, otherwise
     /// assesses the explicitly supplied incident id. Delegates the LLM
-    /// path entirely to `run_gemini_assess_with_delta` (already
+    /// path entirely to `run_assess_with_delta` (already
     /// `LlmRunner`-guarded) — this function adds no new LLM call site.
     pub async fn assess_top_abuse_incident_with_delta<F>(
         &self,
@@ -190,11 +186,11 @@ impl CortexService {
         let assessed = if run_llm {
             // Already LlmRunner-guarded end to end (PR 1 Task 6) — no
             // additional spec/audit wiring needed here.
-            self.run_gemini_assess_with_delta(assess_req, &mut on_delta)
+            self.run_assess_with_delta(assess_req, &mut on_delta)
                 .await?
         } else {
             // Deterministic-only: reuse investigate_ai_incidents directly
-            // rather than touching run_gemini_assess_with_delta at all, so
+            // rather than touching run_assess_with_delta at all, so
             // LlmRunner::run is never called. Build a minimal
             // AiAssessResponse shape with an empty assessment string so
             // callers (MCP/REST, --no-llm) get a consistent response type.

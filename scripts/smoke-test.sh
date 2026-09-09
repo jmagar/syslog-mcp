@@ -11,7 +11,7 @@
 #
 # Action inventory reference:
 #   mcp_call search, mcp_call filter, mcp_call tail, mcp_call errors, mcp_call hosts, mcp_call map, mcp_call host_state, mcp_call fleet_state, mcp_call correlate_state,
-#   mcp_call sessions, mcp_call search_sessions, mcp_call abuse, mcp_call ai_correlate,
+#   mcp_call sessions, mcp_call search_sessions, mcp_call evidence_scope, mcp_call abuse, mcp_call ai_correlate,
 #   mcp_call usage_blocks, mcp_call project_context, mcp_call list_ai_tools, mcp_call list_ai_projects,
 #   mcp_call correlate, mcp_call stats, mcp_call status, mcp_call apps,
 #   mcp_call source_ips, mcp_call timeline, mcp_call patterns, mcp_call context,

@@ -73,6 +73,97 @@ pub fn list_observatory_repositories(
         .context("list observatory repositories")
 }
 
+/// Historical and follow-safe evidence projection for one branch/worktree.
+/// The keyset watermark is the durable `agent_run_events.id`; callers can
+/// replay a bounded page and then poll with `after_id` without a race window.
+pub fn scoped_evidence_events(
+    pool: &DbPool,
+    query: &EvidenceScopeQuery,
+    after_id: i64,
+    limit: usize,
+) -> Result<EvidenceScopePage> {
+    let conn = pool.get()?;
+    let mut values = vec![Value::Integer(after_id)];
+    let mut sql = "SELECT DISTINCT e.id,e.event_key,r.run_key,aa.actor_key,e.worktree_id,g.sha,e.observed_at,e.ingested_at,e.event_kind,e.source_kind,e.source_id,e.source_log_id,e.provider_sequence,e.trace_id,e.span_id,e.severity,e.title,e.summary,".to_string();
+    sql.push_str(if query.include_payload {
+        "e.payload_json"
+    } else {
+        "NULL"
+    });
+    sql.push_str(",e.content_scrubbed FROM agent_run_events e JOIN agent_runs r ON r.id=e.run_id LEFT JOIN agent_run_actors aa ON aa.id=e.actor_id LEFT JOIN git_commits g ON g.id=e.commit_id LEFT JOIN repository_worktrees w ON w.id=e.worktree_id WHERE e.id>?1");
+    if let Some(branch) = &query.branch {
+        values.push(Value::Text(branch.clone()));
+        let p = values.len();
+        sql.push_str(&format!(" AND (r.primary_branch=?{p} OR w.branch_name=?{p} OR EXISTS (SELECT 1 FROM agent_run_worktrees rw JOIN repository_worktrees wx ON wx.id=rw.worktree_id WHERE rw.run_id=r.id AND wx.branch_name=?{p}) OR instr(e.summary, ?{p})>0 OR instr(e.payload_json, ?{p})>0)"));
+    }
+    if let Some(worktree) = &query.worktree {
+        values.push(Value::Text(worktree.clone()));
+        let p = values.len();
+        sql.push_str(&format!(" AND (w.path=?{p} OR EXISTS (SELECT 1 FROM agent_run_worktrees rw JOIN repository_worktrees wx ON wx.id=rw.worktree_id WHERE rw.run_id=r.id AND wx.path=?{p}) OR instr(e.summary, ?{p})>0 OR instr(e.payload_json, ?{p})>0)"));
+    }
+    if let Some(since) = &query.since {
+        values.push(Value::Text(since.clone()));
+        sql.push_str(&format!(" AND e.observed_at>=?{}", values.len()));
+    }
+    if let Some(until) = &query.until {
+        values.push(Value::Text(until.clone()));
+        sql.push_str(&format!(" AND e.observed_at<=?{}", values.len()));
+    }
+    if !query.kinds.is_empty() {
+        let placeholders = query
+            .kinds
+            .iter()
+            .map(|kind| {
+                values.push(Value::Text(kind.clone()));
+                format!("?{}", values.len())
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        sql.push_str(&format!(" AND e.event_kind IN ({placeholders})"));
+    }
+    values.push(Value::Integer(bounded_limit(limit, 500) as i64));
+    sql.push_str(&format!(" ORDER BY e.id ASC LIMIT ?{}", values.len()));
+    let mut stmt = conn.prepare(&sql)?;
+    let items = stmt
+        .query_map(params_from_iter(values), |r| {
+            Ok(ObservatoryEventRow {
+                id: r.get(0)?,
+                event_key: r.get(1)?,
+                run_key: r.get(2)?,
+                actor_key: r.get(3)?,
+                worktree_id: r.get(4)?,
+                commit_sha: r.get(5)?,
+                observed_at: r.get(6)?,
+                ingested_at: r.get(7)?,
+                kind: r.get(8)?,
+                source_kind: r.get(9)?,
+                source_id: r.get(10)?,
+                source_log_id: r.get(11)?,
+                provider_sequence: r.get(12)?,
+                trace_id: r.get(13)?,
+                span_id: r.get(14)?,
+                severity: r.get(15)?,
+                title: r.get(16)?,
+                summary: r.get(17)?,
+                payload_json: r.get(18)?,
+                content_scrubbed: r.get(19)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let bounds: (Option<i64>, i64) = conn.query_row(
+        "SELECT MIN(id),COALESCE(MAX(id),0) FROM agent_run_events",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let next_after = items.last().map_or(after_id, |row| row.id);
+    Ok(EvidenceScopePage {
+        items,
+        minimum_watermark: bounds.0,
+        high_watermark: bounds.1,
+        next_after,
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn list_observatory_worktrees(
     pool: &DbPool,

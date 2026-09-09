@@ -2,6 +2,7 @@ use super::*;
 
 fn base_args() -> HeartbeatAgentArgs {
     HeartbeatAgentArgs {
+        env_file: None,
         target: None,
         token: None,
         interval_secs: 30,
@@ -25,6 +26,7 @@ fn base_args() -> HeartbeatAgentArgs {
 #[test]
 fn into_config_maps_explicit_cli_flags() {
     let config = HeartbeatAgentArgs {
+        env_file: None,
         target: Some("http://cortex.example".to_string()),
         token: Some("secret".to_string()),
         interval_secs: 7,
@@ -63,6 +65,26 @@ fn into_config_maps_explicit_cli_flags() {
     assert!(config.ai_transcripts);
     assert!(config.agent_command_forward);
     assert!(config.shell_history_forward);
+}
+
+#[cfg(unix)]
+#[test]
+fn env_file_is_loaded_without_shell_and_process_values_win() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("agent.env");
+    std::fs::write(
+        &path,
+        "CORTEX_HEARTBEAT_TARGET=https://from-file.example\nCORTEX_AGENT_DOCKER=true\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let mut args = base_args();
+    args.env_file = Some(path.to_string_lossy().into_owned());
+    args.target = Some("https://cli.example".into());
+    let config = args.into_config().unwrap();
+    assert_eq!(config.target.as_deref(), Some("https://cli.example"));
+    assert!(config.docker);
 }
 
 #[test]

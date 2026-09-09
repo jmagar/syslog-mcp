@@ -32,6 +32,23 @@ pub struct AgentEventQuery {
     pub until: Option<String>,
     pub include_payload: bool,
 }
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceScopeQuery {
+    pub branch: Option<String>,
+    pub worktree: Option<String>,
+    pub kinds: Vec<String>,
+    pub since: Option<String>,
+    pub until: Option<String>,
+    pub include_payload: bool,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EvidenceScopePage {
+    pub items: Vec<ObservatoryEventRow>,
+    pub minimum_watermark: Option<i64>,
+    pub high_watermark: i64,
+    pub next_after: i64,
+}
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct TelemetryQuery {
     pub trace_id: Option<String>,

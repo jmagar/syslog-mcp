@@ -144,7 +144,9 @@ fn projection_cycle_counts_an_oversized_first_row() {
     let cycle = run_projection_cycle(
         &pool,
         ProjectionLimits {
-            page_rows: 500,
+            // Log backfill may use a wider page than the 500-row source
+            // tables; the cycle must clamp those readers independently.
+            page_rows: 2_000,
             page_bytes: 1,
         },
     );
@@ -160,7 +162,7 @@ fn projection_cycle_counts_an_oversized_first_row() {
     let drained = run_projection_cycle(
         &pool,
         ProjectionLimits {
-            page_rows: 500,
+            page_rows: 2_000,
             page_bytes: 1,
         },
     );

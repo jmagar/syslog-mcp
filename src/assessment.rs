@@ -4,10 +4,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tempfile::TempDir;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Child;
 
-const DEFAULT_GEMINI_MODEL: &str = "gemini-3.1-flash-lite-preview";
+pub(crate) const DEFAULT_GEMINI_MODEL: &str = "gemini-3.1-flash-lite-preview";
 const STDERR_TAIL_LIMIT: usize = 4096;
 const GEMINI_STDIN_PROMPT_STUB: &str = "Read the assessment instructions and evidence from stdin.";
 const GEMINI_AUTH_FILES: &[&str] = &[
@@ -56,6 +56,7 @@ impl GeminiAssessConfig {
     /// disagree, silently producing an effective timeout of
     /// `min(both)`. Setting the legacy env var now only logs a deprecation
     /// warning; it no longer takes effect on this path.
+    #[cfg(test)]
     pub(crate) fn from_env(model_override: Option<String>, timeout_secs: u64) -> Self {
         if non_empty_env("CORTEX_LLM_COMPLETION_TIMEOUT_SECS").is_some() {
             tracing::warn!(
@@ -66,9 +67,7 @@ impl GeminiAssessConfig {
         }
         Self {
             program: env_or_default("CORTEX_HEADLESS_GEMINI_CMD", "gemini"),
-            model: model_override
-                .or_else(|| non_empty_env("CORTEX_HEADLESS_GEMINI_MODEL"))
-                .unwrap_or_else(|| DEFAULT_GEMINI_MODEL.to_string()),
+            model: model_override.unwrap_or_else(|| DEFAULT_GEMINI_MODEL.to_string()),
             source_home: non_empty_env("CORTEX_HEADLESS_GEMINI_HOME").map(PathBuf::from),
             timeout_secs: timeout_secs.max(1),
         }
@@ -129,6 +128,7 @@ pub(crate) fn build_assessment_prompt(evidence_json: &str) -> String {
 pub(crate) async fn run_gemini_assessment<F>(
     prompt: &str,
     config: &GeminiAssessConfig,
+    max_output_bytes: usize,
     mut on_delta: F,
 ) -> Result<String>
 where
@@ -163,11 +163,11 @@ where
     let stderr_task = tokio::spawn(async move { read_bounded_stderr(stderr).await });
 
     let timeout = std::time::Duration::from_secs(config.timeout_secs);
-    let mut parser = GeminiStreamState::default();
-    let mut lines = BufReader::new(stdout).lines();
+    let mut parser = GeminiStreamState::new(max_output_bytes);
+    let mut stdout = BufReader::new(stdout);
     let stream_result = tokio::time::timeout(timeout, async {
         loop {
-            match lines.next_line().await {
+            match gemini_stream::read_frame(&mut stdout).await {
                 Ok(Some(line)) => parser.handle_line(&line, &mut on_delta)?,
                 Ok(None) => break Ok(()),
                 Err(err) => break Err(anyhow!("failed to read Gemini stdout: {err}")),
@@ -390,6 +390,7 @@ async fn read_bounded_stderr(stderr: tokio::process::ChildStderr) -> std::io::Re
 mod gemini_stream;
 use gemini_stream::GeminiStreamState;
 
+#[cfg(test)]
 fn env_or_default(var_name: &str, default_program: &str) -> String {
     non_empty_env(var_name).unwrap_or_else(|| default_program.to_string())
 }

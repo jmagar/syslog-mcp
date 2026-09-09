@@ -1840,7 +1840,7 @@ async fn run_gemini_assess_rejects_missing_incident_before_gemini() {
     let (service, _pool, _dir) = test_service();
 
     let err = service
-        .run_gemini_assess_with_delta(
+        .run_assess_with_delta(
             AiAssessRequest {
                 incident_id: "missing-incident".into(),
                 model: Some("gemini-test-model".into()),
@@ -1869,6 +1869,7 @@ async fn run_gemini_assess_rejects_missing_incident_before_gemini() {
 #[tokio::test]
 #[serial]
 async fn ai_assess_writes_llm_invocation_audit_row_via_runner() {
+    let _provider = EnvGuard::set("CORTEX_LLM", "gemini");
     let (service, pool, _dir) = test_service();
 
     // Seed AI-transcript log rows containing an abuse term so
@@ -1948,7 +1949,7 @@ async fn ai_assess_writes_llm_invocation_audit_row_via_runner() {
     );
 
     let response = service
-        .run_gemini_assess(AiAssessRequest {
+        .run_assess(AiAssessRequest {
             incident_id: incident_id.clone(),
             model: None,
             project: None,
@@ -1977,11 +1978,11 @@ async fn ai_assess_writes_llm_invocation_audit_row_via_runner() {
 
 // Eng review fix (code-simplicity-reviewer, GH issue #94): `LlmRunner::dry_run`
 // was fully implemented and unit-tested but had zero CLI/MCP/REST callers.
-// `dry_run_gemini_assess` wires it into `cortex sessions assess --dry-run`.
+// `dry_run_assess` wires it into `cortex sessions assess --dry-run`.
 // This test proves the dry-run path short-circuits before any subprocess
 // spawn: deliberately do NOT set CORTEX_HEADLESS_GEMINI_CMD/HOME (unlike
 // the sibling `ai_assess_writes_llm_invocation_audit_row_via_runner` test
-// above) — if `dry_run_gemini_assess` ever tried to spawn Gemini, it would
+// above) — if `dry_run_assess` ever tried to spawn Gemini, it would
 // fail loudly (missing binary) rather than silently succeed, since no fake
 // script is on PATH here.
 #[tokio::test]
@@ -2026,11 +2027,11 @@ async fn ai_assess_dry_run_previews_without_spawning_gemini_subprocess() {
         .unwrap();
     let incident_id = listed.evidence[0].incident.incident_id.clone();
 
-    // No CORTEX_HEADLESS_GEMINI_CMD/HOME set — if dry_run_gemini_assess
+    // No CORTEX_HEADLESS_GEMINI_CMD/HOME set — if dry_run_assess
     // spawned a real subprocess it would fail to find `gemini` on PATH
     // (or hang), not silently pass.
     let outcome = service
-        .dry_run_gemini_assess(AiAssessRequest {
+        .dry_run_assess(AiAssessRequest {
             incident_id: incident_id.clone(),
             model: None,
             project: None,

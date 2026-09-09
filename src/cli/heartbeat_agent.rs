@@ -18,7 +18,13 @@ impl HeartbeatAgentArgs {
             .host_id_path
             .map(PathBuf::from)
             .unwrap_or_else(default_host_id_path);
-        let mut config = HeartbeatAgentConfig::from_env(host_id_path);
+        let file_values = match self.env_file.as_deref() {
+            Some(path) => cortex::setup::heartbeat_agent_env::load_private_agent_env(
+                std::path::Path::new(path),
+            )?,
+            None => Default::default(),
+        };
+        let mut config = HeartbeatAgentConfig::from_env_with_fallback(host_id_path, &file_values);
         if let Some(target) = self.target {
             config.target = Some(target);
         }

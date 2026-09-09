@@ -36,7 +36,7 @@ protected endpoint still requires transport auth when configured.
 
 ## Current Action Index
 
-The live registry currently contains 56 actions (this snapshot may lag
+The live registry currently contains 59 actions (this snapshot may lag
 `src/mcp/actions.rs::ACTION_SPECS`, the authoritative source):
 
 | Action | Scope | Cost | Purpose |
@@ -56,6 +56,7 @@ The live registry currently contains 56 actions (this snapshot may lag
 | `apps` | `cortex:read` | cheap | Distinct application names with counts |
 | `sessions` | `cortex:read` | cheap | AI transcript session inventory |
 | `search_sessions` | `cortex:read` | cheap | FTS5 search over AI transcript sessions |
+| `evidence_scope` | `cortex:read` | moderate | Historical Agent Observatory evidence for a Git branch or worktree |
 | `abuse` | `cortex:read` | moderate | Abuse-term hits with same-session context |
 | `abuse_incidents` | `cortex:read` | moderate | Grouped abuse incident candidates |
 | `abuse_investigate` | `cortex:read` | expensive | Evidence bundles for abuse incidents |

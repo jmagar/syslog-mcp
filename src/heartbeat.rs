@@ -32,7 +32,7 @@ use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use tokio::sync::Semaphore;
+use tokio::sync::{Mutex, Semaphore};
 use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::db::DbPool;
@@ -53,6 +53,7 @@ pub struct HeartbeatState {
     release_client: reqwest::Client,
     release_base_url: String,
     release_downloads: Arc<Semaphore>,
+    release_availability: Arc<Mutex<HashMap<String, ReleaseAvailability>>>,
 }
 
 impl HeartbeatState {
@@ -71,6 +72,7 @@ impl HeartbeatState {
             release_base_url: "https://github.com/dinglebear-ai/cortex/releases/download"
                 .to_string(),
             release_downloads: Arc::new(Semaphore::new(2)),
+            release_availability: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -127,13 +129,17 @@ impl AgentReleaseInfo {
         if !platform_release_available(os, arch) {
             return None;
         }
-        if os.eq_ignore_ascii_case("windows") {
+        if !platform_self_servable(os, arch) {
+            let canonical_os = canonical_os(os)?;
+            let canonical_arch = canonical_arch(os, arch)?;
             let base = format!(
-                "/v1/agent/release?os=windows&arch={arch}&version={}&kind=",
+                "/v1/agent/release?os={canonical_os}&arch={canonical_arch}&version={}&kind=",
                 self.version
             );
             return Some(AgentUpdateDirective {
                 version: self.version.to_string(),
+                os: canonical_os.to_string(),
+                arch: canonical_arch.to_string(),
                 path: format!("{base}binary"),
                 sha256: None,
                 checksum_path: Some(format!("{base}checksum")),
@@ -143,6 +149,8 @@ impl AgentReleaseInfo {
         let sha256 = self.sha256.as_ref()?;
         Some(AgentUpdateDirective {
             version: self.version.to_string(),
+            os: canonical_os(os)?.to_string(),
+            arch: canonical_arch(os, arch)?.to_string(),
             path: format!("/v1/agent/binary?os={os}&arch={arch}"),
             sha256: Some(sha256.clone()),
             checksum_path: None,
@@ -151,11 +159,34 @@ impl AgentReleaseInfo {
     }
 }
 
+fn canonical_os(os: &str) -> Option<&'static str> {
+    if os.eq_ignore_ascii_case("linux") {
+        Some("linux")
+    } else if os.eq_ignore_ascii_case("windows") {
+        Some("windows")
+    } else if os.eq_ignore_ascii_case("macos") {
+        Some("macos")
+    } else {
+        None
+    }
+}
+
+fn canonical_arch(os: &str, arch: &str) -> Option<&'static str> {
+    if os.eq_ignore_ascii_case("macos") && matches!(arch, "aarch64" | "arm64") {
+        Some("aarch64")
+    } else if matches!(arch, "x86_64" | "amd64") {
+        Some("x86_64")
+    } else {
+        None
+    }
+}
+
 /// True for the platform whose binary the server can hand out from its own
 /// running image (linux on a 64-bit x86 host).
 fn platform_release_available(os: &str, arch: &str) -> bool {
-    matches!(arch, "x86_64" | "amd64")
-        && (os.eq_ignore_ascii_case("linux") || os.eq_ignore_ascii_case("windows"))
+    (matches!(arch, "x86_64" | "amd64")
+        && (os.eq_ignore_ascii_case("linux") || os.eq_ignore_ascii_case("windows")))
+        || (os.eq_ignore_ascii_case("macos") && matches!(arch, "aarch64" | "arm64"))
 }
 
 fn platform_self_servable(os: &str, arch: &str) -> bool {
@@ -167,6 +198,8 @@ fn platform_self_servable(os: &str, arch: &str) -> bool {
 #[derive(Debug, Clone, Serialize)]
 pub struct AgentUpdateDirective {
     pub version: String,
+    pub os: String,
+    pub arch: String,
     pub path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
@@ -187,6 +220,98 @@ pub fn router(state: HeartbeatState) -> Router {
 
 const MAX_RELEASE_BINARY_BYTES: usize = 128 * 1024 * 1024;
 const MAX_RELEASE_CHECKSUM_BYTES: usize = 4096;
+const RELEASE_AVAILABLE_TTL: Duration = Duration::from_secs(300);
+const RELEASE_MISSING_TTL: Duration = Duration::from_secs(30);
+
+#[derive(Clone, Copy)]
+struct ReleaseAvailability {
+    available: bool,
+    expires: Instant,
+}
+
+fn release_asset(os: &str, arch: &str, kind: &str) -> Option<(&'static str, usize, &'static str)> {
+    let stem = if os.eq_ignore_ascii_case("windows") && matches!(arch, "x86_64" | "amd64") {
+        "cortex-windows-x86_64.exe"
+    } else if os.eq_ignore_ascii_case("macos") && matches!(arch, "aarch64" | "arm64") {
+        "cortex-macos-arm64"
+    } else {
+        return None;
+    };
+    match kind {
+        "binary" => Some((stem, MAX_RELEASE_BINARY_BYTES, "application/octet-stream")),
+        "checksum" => Some((
+            if stem == "cortex-windows-x86_64.exe" {
+                "cortex-windows-x86_64.exe.sha256"
+            } else {
+                "cortex-macos-arm64.sha256"
+            },
+            MAX_RELEASE_CHECKSUM_BYTES,
+            "text/plain; charset=utf-8",
+        )),
+        _ => None,
+    }
+}
+
+impl HeartbeatState {
+    async fn release_assets_available(&self, os: &str, arch: &str) -> bool {
+        if platform_self_servable(os, arch) {
+            return self.release.sha256.is_some() && self.release.exe_path.is_some();
+        }
+        if release_asset(os, arch, "binary").is_none() {
+            return false;
+        }
+        let key = format!(
+            "{}:{}:{}",
+            os.to_ascii_lowercase(),
+            arch.to_ascii_lowercase(),
+            self.release.version
+        );
+        let now = Instant::now();
+        if let Some(cached) = self.release_availability.lock().await.get(&key).copied()
+            && cached.expires > now
+        {
+            return cached.available;
+        }
+        let mut available = true;
+        for kind in ["binary", "checksum"] {
+            let Some((asset, _, _)) = release_asset(os, arch, kind) else {
+                available = false;
+                break;
+            };
+            let url = format!(
+                "{}/v{}/{asset}",
+                self.release_base_url.trim_end_matches('/'),
+                self.release.version
+            );
+            match self.release_client.head(&url).send().await {
+                Ok(response) if response.status().is_success() => {}
+                Ok(response) => {
+                    tracing::info!(%url, status = %response.status(), "release asset not currently available");
+                    available = false;
+                    break;
+                }
+                Err(error) => {
+                    tracing::warn!(%url, %error, "release asset availability check failed");
+                    available = false;
+                    break;
+                }
+            }
+        }
+        let ttl = if available {
+            RELEASE_AVAILABLE_TTL
+        } else {
+            RELEASE_MISSING_TTL
+        };
+        self.release_availability.lock().await.insert(
+            key,
+            ReleaseAvailability {
+                available,
+                expires: now + ttl,
+            },
+        );
+        available
+    }
+}
 
 /// Proxy a platform release artifact through the authenticated Cortex server.
 /// This keeps the server as the fleet's update coordinator while allowing the
@@ -211,25 +336,16 @@ async fn agent_release_handler(
         )
             .into_response();
     }
-    if !os.eq_ignore_ascii_case("windows") || !matches!(arch, "x86_64" | "amd64") {
+    if release_asset(os, arch, "binary").is_none() {
         return (
             StatusCode::NOT_FOUND,
             Json(json!({"error": "unsupported_platform", "os": os, "arch": arch})),
         )
             .into_response();
     }
-    let (asset, max_bytes, content_type) = match kind {
-        "binary" => (
-            "cortex-windows-x86_64.exe",
-            MAX_RELEASE_BINARY_BYTES,
-            "application/vnd.microsoft.portable-executable",
-        ),
-        "checksum" => (
-            "cortex-windows-x86_64.exe.sha256",
-            MAX_RELEASE_CHECKSUM_BYTES,
-            "text/plain; charset=utf-8",
-        ),
-        _ => {
+    let (asset, max_bytes, content_type) = match release_asset(os, arch, kind) {
+        Some(descriptor) => descriptor,
+        None => {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(json!({"error": "invalid_release_kind"})),
@@ -251,14 +367,23 @@ async fn agent_release_handler(
                 .unwrap_or_else(|_| StatusCode::SERVICE_UNAVAILABLE.into_response());
         }
     };
-    let response = match state
-        .release_client
-        .get(&url)
-        .send()
-        .await
-        .and_then(|r| r.error_for_status())
-    {
-        Ok(response) => response,
+    let response = match state.release_client.get(&url).send().await {
+        Ok(response) if response.status().is_success() => response,
+        Ok(response) => {
+            let status = response.status();
+            let retry_after = response.headers().get(header::RETRY_AFTER).cloned();
+            let mut builder = Response::builder().status(if status == StatusCode::NOT_FOUND {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::BAD_GATEWAY
+            });
+            if let Some(value) = retry_after {
+                builder = builder.header(header::RETRY_AFTER, value);
+            }
+            return builder
+                .body(Body::from("release artifact unavailable"))
+                .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response());
+        }
         Err(error) => {
             tracing::warn!(error = %error, %url, "agent release artifact unavailable");
             return (
@@ -428,10 +553,23 @@ async fn heartbeat_handler(
     match result {
         Ok(mut response) => {
             response.server_version = Some(state.release.version.to_string());
-            response.agent_update =
-                state
-                    .release
-                    .directive_for(&agent_os, &agent_arch, &agent_version);
+            if agent_version == state.release.version {
+                response.agent_update_status = Some("current".to_string());
+                response.agent_update = None;
+            } else if !platform_release_available(&agent_os, &agent_arch) {
+                response.agent_update_status = Some("unsupported_platform".to_string());
+                response.agent_update = None;
+            } else if state.release_assets_available(&agent_os, &agent_arch).await {
+                response.agent_update_status =
+                    Some("available_checksum_integrity_only".to_string());
+                response.agent_update =
+                    state
+                        .release
+                        .directive_for(&agent_os, &agent_arch, &agent_version);
+            } else {
+                response.agent_update_status = Some("release_assets_unavailable".to_string());
+                response.agent_update = None;
+            }
             (StatusCode::ACCEPTED, Json(response)).into_response()
         }
         // Losing the race for the write lock or a reserved writer connection is
@@ -658,6 +796,7 @@ fn write_heartbeat(
             received_at,
             server_version: None,
             agent_update: None,
+            agent_update_status: None,
         });
     } else {
         tx.last_insert_rowid()
@@ -706,6 +845,7 @@ fn write_heartbeat(
         received_at,
         server_version: None,
         agent_update: None,
+        agent_update_status: None,
     })
 }
 
@@ -870,6 +1010,10 @@ struct HeartbeatIngestResponse {
     /// Present only when the agent should self-update to match the server.
     #[serde(skip_serializing_if = "Option::is_none")]
     agent_update: Option<AgentUpdateDirective>,
+    /// Evidence state for update routing. The checksum-only state deliberately
+    /// does not claim signed provenance or attestation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_update_status: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

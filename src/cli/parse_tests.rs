@@ -154,6 +154,7 @@ fn parse_routes_heartbeat_agent_defaults() {
     assert_eq!(
         parse_command(vec!["heartbeat".to_string(), "agent".to_string()]).unwrap(),
         CliCommand::Heartbeat(HeartbeatCommand::Agent(HeartbeatAgentArgs {
+            env_file: None,
             target: None,
             token: None,
             interval_secs: 30,
@@ -200,6 +201,7 @@ fn parse_routes_heartbeat_agent_flags() {
         ])
         .unwrap(),
         CliCommand::Heartbeat(HeartbeatCommand::Agent(HeartbeatAgentArgs {
+            env_file: None,
             target: Some("http://127.0.0.1:3100".to_string()),
             token: Some("secret".to_string()),
             interval_secs: 15,

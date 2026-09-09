@@ -2,7 +2,7 @@ name: release
 
 # Triggered when release-please merges a release PR and pushes the resulting
 # version tag (e.g. v1.16.1) — see .github/workflows/release-please.yml.
-# Builds cortex for Linux + Windows, packages with SHA256 checksums, and
+# Builds cortex for Linux, Windows, and macOS arm64, packages with SHA256 checksums, and
 # attaches the artifacts to the GitHub Release release-please already created
 # for that tag.
 #
@@ -107,9 +107,45 @@ jobs:
             .cache/cargo/release/cortex-windows-x86_64.exe.sha256
           if-no-files-found: error
 
+  cortex-macos-arm64:
+    name: build cortex (macos arm64)
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: release-cortex-macos-arm64
+          cache-directories: .cache/cargo
+
+      - name: cargo build --release --locked --bin cortex
+        run: cargo build --release --locked --bin cortex --target aarch64-apple-darwin
+
+      - name: Package exact managed-agent asset
+        run: |
+          set -euo pipefail
+          cd .cache/cargo/aarch64-apple-darwin/release
+          cp cortex cortex-macos-arm64
+          chmod 755 cortex-macos-arm64
+          shasum -a 256 cortex-macos-arm64 > cortex-macos-arm64.sha256
+          test "$(awk '{print $2}' cortex-macos-arm64.sha256)" = "cortex-macos-arm64"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cortex-macos-arm64
+          path: |
+            .cache/cargo/aarch64-apple-darwin/release/cortex-macos-arm64
+            .cache/cargo/aarch64-apple-darwin/release/cortex-macos-arm64.sha256
+          if-no-files-found: error
+
   publish:
     name: publish github release
-    needs: [cortex-linux, cortex-windows]
+    needs: [cortex-linux, cortex-windows, cortex-macos-arm64]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     # Tag pushes publish automatically. workflow_dispatch stays dry-run unless
@@ -142,6 +178,8 @@ jobs:
             dist/cortex-windows-x86_64.zip.sha256
             dist/cortex-windows-x86_64.exe
             dist/cortex-windows-x86_64.exe.sha256
+            dist/cortex-macos-arm64
+            dist/cortex-macos-arm64.sha256
           fail_on_unmatched_files: true
 
   npm:

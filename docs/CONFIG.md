@@ -224,27 +224,53 @@ The plain JSON API is **always on**: it is mounted under `/api/*` on the same HT
 | `CORTEX_API_TOKEN` | yes | (none) | **yes** | Bearer token for `/api/*` routes — required at startup |
 | `CORTEX_API_ADMIN_TOKEN` | for REST admin mutations | (none) | **yes** | Extra token sent as `X-Cortex-Admin-Token` for admin REST mutations, including `/api/file-tails`, `/api/sessions/prune-checkpoints`, `/api/db/integrity/background`, `/api/db/checkpoint`, `/api/db/vacuum`, and `/api/db/backup`. The normal API bearer is still required. |
 
-### Headless Gemini assessment (`CORTEX_HEADLESS_*`, `CORTEX_LLM_*`)
+### Shared LLM selection (`CORTEX_LLM`)
 
-`cortex sessions assess` is local-only and starts the Gemini CLI in an isolated
-temporary HOME. It copies Gemini auth files from the configured source HOME,
-installs the bundled `frustration-assessment` skill into that isolated
-HOME, disables MCP servers/hooks/context-file loading, and parses Gemini's
-`stream-json` output so only assistant text is emitted.
+Every skill, MCP, hook and abuse assessment uses the same `CORTEX_LLM`
+selector, including dry-run metadata. The selector and provider installation
+settings are captured during configuration loading, so values in the managed
+`~/.cortex/.env` work without exporting them. Process environment values override
+managed-file values. Set it to `codex` (the default, using
+Codex app-server) or `gemini` (Gemini CLI). Pin a model for all operations
+with `provider/MODEL`, for example `codex/gpt-5.5` or
+`gemini/gemini-3.1-flash-lite-preview`.
+
+A model in `CORTEX_LLM` takes precedence over `--model`. With a provider-only
+selector, the existing `--model` flag remains available; otherwise Codex uses
+its server default and Gemini uses `gemini-3.1-flash-lite-preview`.
+Empty, malformed or unsupported selectors fail without switching providers.
+`--no-llm` bypasses provider selection and needs no provider credentials.
+The old `CORTEX_CODEX_MODEL` and `CORTEX_HEADLESS_GEMINI_MODEL` variables
+are ignored; move model selection into `CORTEX_LLM`.
+
+Both providers run locally with isolated temporary homes. Codex links only the
+authoritative `auth.json` into its isolated home, so the provider persists OAuth
+refreshes directly rather than losing them in a disposable copy. Cortex never
+copies credentials back over a newer login. On Windows this requires Developer
+Mode or permission to create file symlinks. Codex starts an ephemeral app-server
+task with no environments or dynamic tools, disables shell and web tools, and
+rejects unexpected tool activity. This requires an app-server version supporting
+`thread/start.environments`; use a compatible Codex installation. Gemini copies
+its auth files, disables MCP servers, hooks and
+context-file loading, and parses streamed assistant text. Installation and
+authentication locations can still be configured separately:
 
 | Variable | Required | Default | Sensitive | Description |
 | --- | --- | --- | --- | --- |
+| `CORTEX_LLM` | no | `codex` | no | Shared provider and optional model: `codex[/MODEL]` or `gemini[/MODEL]` |
+| `CORTEX_CODEX_CMD` | no | `codex` | no | Codex executable path or command name |
+| `CORTEX_CODEX_HOME` | no | `$CODEX_HOME` or `$HOME/.codex` | maybe | Absolute source directory containing Codex `auth.json` |
 | `CORTEX_HEADLESS_GEMINI_CMD` | no | `gemini` | no | Gemini CLI executable path or command name |
-| `CORTEX_HEADLESS_GEMINI_MODEL` | no | `gemini-3.1-flash-lite-preview` | no | Default model for `cortex sessions assess`; `--model` on the CLI overrides this |
-| `CORTEX_HEADLESS_GEMINI_HOME` | no | `$HOME` | maybe | Source home containing `.gemini` auth files to copy into the isolated runtime HOME |
-| `CORTEX_LLM_COMPLETION_TIMEOUT_SECS` | no | — | no | **Deprecated, no longer takes effect.** Previously an independent timeout for the Gemini assessment subprocess; now superseded end-to-end by `[llm].timeout_secs`. Setting this var logs a `tracing::warn!` deprecation notice at call time but has no effect. |
+| `CORTEX_HEADLESS_GEMINI_HOME` | no | `$HOME` | maybe | Absolute source home containing `.gemini` auth files |
+| `CORTEX_LLM_COMPLETION_TIMEOUT_SECS` | no | — | no | **Deprecated, ignored.** Use `[llm].timeout_secs` for the shared invocation timeout. |
 
 ### LLM invocation guard (`CORTEX_LLM_*`, `[llm]`)
 
-Shared by every LLM-backed assessment feature (`ai_assess` today). `LlmRunner`
+Shared by every LLM-backed assessment feature (`ai_assess`, `skill_assess`,
+`mcp_assess` and `hook_assess`). `LlmRunner`
 (`src/app/llm_runner.rs`) enforces global/per-action concurrency limits,
 per-action rate limits, a consecutive-failure circuit breaker, a per-invocation
-timeout, prompt/output byte caps, a global + per-action kill switch, and writes
+timeout, prompt/output byte caps (enforced before streaming provider output), a global + per-action kill switch, and writes
 every invocation attempt — including denials — to the `llm_invocations` audit
 table (see the `llm_invocations` MCP action / `GET /api/sessions/llm-invocations`
 / `cortex sessions llminvocations`).

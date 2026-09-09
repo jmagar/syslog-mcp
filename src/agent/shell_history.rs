@@ -73,10 +73,16 @@ struct Checkpoint {
 }
 
 fn load_checkpoint(path: &std::path::Path) -> Checkpoint {
-    std::fs::read(path)
+    match std::fs::read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
+    {
+        Some(value) => value,
+        None => std::fs::read(path.with_extension("json.bak"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default(),
+    }
 }
 
 fn save_checkpoint(path: &std::path::Path, checkpoint: &Checkpoint) -> Result<()> {
@@ -85,7 +91,7 @@ fn save_checkpoint(path: &std::path::Path, checkpoint: &Checkpoint) -> Result<()
             .with_context(|| format!("failed to create checkpoint dir {}", parent.display()))?;
     }
     let bytes = serde_json::to_vec(checkpoint)?;
-    std::fs::write(path, bytes)
+    crate::setup::heartbeat_agent_env::atomic_checkpoint_write(path, &bytes)
         .with_context(|| format!("failed to write checkpoint file {}", path.display()))
 }
 

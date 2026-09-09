@@ -78,6 +78,23 @@ pub struct SessionStreamRequest {
     pub cursor: Option<String>,
 }
 
+/// A resumable historical + live evidence stream scoped to a Git branch or
+/// absolute worktree path projected by Agent Observatory.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceStreamRequest {
+    pub branch: Option<String>,
+    pub worktree: Option<String>,
+    #[serde(default)]
+    pub kinds: Vec<String>,
+    pub since: Option<String>,
+    pub until: Option<String>,
+    #[serde(default)]
+    pub include_payload: bool,
+    pub history_limit: Option<usize>,
+    pub cursor: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StreamCursor {
     version: u8,
@@ -114,12 +131,18 @@ struct ClientLease(std::sync::Arc<std::sync::Mutex<Option<OwnedSemaphorePermit>>
 
 fn client_lease(permit: OwnedSemaphorePermit, duration: Duration) -> ClientLease {
     let lease = ClientLease(std::sync::Arc::new(std::sync::Mutex::new(Some(permit))));
-    let expiry = lease.clone();
+    let expiry = std::sync::Arc::downgrade(&lease.0);
     tokio::spawn(async move {
         tokio::time::sleep(duration).await;
-        let _ = expiry.0.lock().expect("client lease mutex poisoned").take();
+        if let Some(expiry) = expiry.upgrade() {
+            let _ = expiry.lock().expect("client lease mutex poisoned").take();
+        }
     });
     lease
+}
+
+fn history_is_truncated(returned: usize, limit: usize, position: i64, high: i64) -> bool {
+    returned >= limit && position < high
 }
 
 pub async fn log_stream(
@@ -195,6 +218,148 @@ pub async fn session_stream(
         },
     )
     .await
+}
+
+pub async fn evidence_stream(
+    service: CortexService,
+    auth: AuthContext,
+    request: EvidenceStreamRequest,
+    cursor_keys: CursorKeys,
+) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>, StreamError> {
+    require_read_scope(&auth)?;
+    if request.branch.as_deref().is_none_or(str::is_empty)
+        && request.worktree.as_deref().is_none_or(str::is_empty)
+    {
+        return Err(StreamError::Invalid("branch or worktree is required"));
+    }
+    if request.branch.as_ref().is_some_and(|v| v.len() > 512)
+        || request.worktree.as_ref().is_some_and(|v| v.len() > 4096)
+        || request.kinds.len() > 32
+    {
+        return Err(StreamError::Invalid(
+            "evidence stream filters exceed bounds",
+        ));
+    }
+    let mut bound = request.clone();
+    bound.cursor = None;
+    let filters = fingerprint(&bound)?;
+    let principal = principal_key(&auth);
+    let decoded = request
+        .cursor
+        .as_deref()
+        .map(|value| decode_cursor_with_keys(value, &cursor_keys))
+        .transpose()?;
+    if let Some(cursor) = &decoded {
+        if cursor.principal != principal {
+            return Err(StreamError::Forbidden(
+                "cursor belongs to another principal",
+            ));
+        }
+        if cursor.filters != filters {
+            return Err(StreamError::Invalid("cursor does not match stream filters"));
+        }
+        let age = Utc::now().timestamp() - cursor.issued_at;
+        if !(-CURSOR_CLOCK_SKEW_SECS..=CURSOR_TTL_SECS).contains(&age) {
+            return Err(StreamError::Expired);
+        }
+    }
+    let permit = CLIENTS
+        .get_or_init(|| std::sync::Arc::new(Semaphore::new(MAX_CLIENTS)))
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| StreamError::Overloaded)?;
+    let issued_at = decoded
+        .as_ref()
+        .map_or_else(|| Utc::now().timestamp(), |c| c.issued_at);
+    let start = decoded.as_ref().map_or(0, |c| c.position);
+    let history_limit = request.history_limit.unwrap_or(500).clamp(1, 500);
+    let query = crate::db::agent_observatory::EvidenceScopeQuery {
+        branch: request.branch,
+        worktree: request.worktree,
+        kinds: request.kinds,
+        since: request.since,
+        until: request.until,
+        include_payload: request.include_payload,
+    };
+    let initial = service
+        .scoped_evidence(query.clone(), start, history_limit)
+        .await
+        .map_err(StreamError::Service)?;
+    if decoded.is_some()
+        && initial
+            .minimum_watermark
+            .is_some_and(|minimum| start < minimum.saturating_sub(1))
+    {
+        return Err(StreamError::Gap {
+            minimum: initial.minimum_watermark.unwrap(),
+            requested: start,
+        });
+    }
+    let deadline = tokio::time::Instant::now() + MAX_CONNECTION_DURATION;
+    let lease = client_lease(permit, MAX_CONNECTION_DURATION);
+    let stream = async_stream::stream! {
+        let _lease = lease;
+        let mut position = start;
+        let snapshot_high = initial.high_watermark;
+        let cursor = encode_cursor_with_keys(position, &principal, &filters, issued_at, &cursor_keys);
+        yield Ok(Event::default().event("snapshot").data(serde_json::json!({
+            "kind":"snapshot","scope":{"branch":query.branch,"worktree":query.worktree},
+            "highWatermark":snapshot_high,"historicalCount":initial.items.len(),"cursor":cursor
+        }).to_string()));
+        let initial_count = initial.items.len();
+        for row in initial.items {
+            position = row.id;
+            let cursor = encode_cursor_with_keys(position, &principal, &filters, issued_at, &cursor_keys);
+            yield Ok(Event::default().event("evidence").id(cursor).data(scoped_event_json(&row)));
+        }
+        if history_is_truncated(initial_count, history_limit, position, snapshot_high) {
+            yield Ok(control_event("history_truncated", serde_json::json!({
+                "resync":true,"returnedThrough":position,"snapshotHigh":snapshot_high,
+                "instruction":"request bounded historical pages before following live events"
+            })));
+            position = snapshot_high;
+        }
+        loop {
+            if tokio::time::Instant::now() >= deadline { break; }
+            if Utc::now().timestamp() - issued_at > CURSOR_TTL_SECS {
+                yield Ok(control_event("token_expired", serde_json::json!({"resync":true}))); break;
+            }
+            match service.scoped_evidence(query.clone(), position, 100).await {
+                Ok(page) => {
+                    if page.items.is_empty() {
+                        tokio::select! { _ = tokio::time::sleep(POLL_INTERVAL) => {}, _ = tokio::time::sleep_until(deadline) => break }
+                    } else {
+                        for row in page.items {
+                            position = row.id;
+                            let cursor = encode_cursor_with_keys(position, &principal, &filters, issued_at, &cursor_keys);
+                            yield Ok(Event::default().event("evidence").id(cursor).data(scoped_event_json(&row)));
+                        }
+                    }
+                }
+                Err(_) => { yield Ok(control_event("overload", serde_json::json!({"retryAfterMs":1000,"resync":false}))); break; }
+            }
+        }
+    };
+    Ok(Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(10))
+            .text("keepalive"),
+    ))
+}
+
+fn scoped_event_json(row: &crate::db::agent_observatory::ObservatoryEventRow) -> String {
+    let mut value = serde_json::to_value(row).unwrap_or_else(|_| serde_json::json!({"id":row.id}));
+    // `payload_json` is JSON encoded inside a string. Redact its leaf values
+    // before the outer tree walk so quoting cannot hide secret prefixes.
+    if let Some(payload) = value.get_mut("payload_json")
+        && let Some(encoded) = payload.as_str()
+        && let Ok(mut parsed) = serde_json::from_str::<serde_json::Value>(encoded)
+    {
+        crate::assessment::redact_json_value_strings(&mut parsed);
+        *payload = serde_json::Value::String(parsed.to_string());
+    }
+    crate::assessment::redact_json_value_strings(&mut value);
+    serde_json::json!({"contractVersion":"1.0.0","kind":"evidence","event":value}).to_string()
 }
 
 async fn build_stream(

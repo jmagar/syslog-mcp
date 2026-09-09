@@ -22,6 +22,8 @@
 //!
 //! Gated by `CORTEX_AGENT_AUTO_UPDATE` (default on) in the caller.
 
+use std::fs::{File, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -41,12 +43,16 @@ const FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(10);
 const CHUNK_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_AGENT_BINARY_BYTES: usize = 128 * 1024 * 1024;
 const MARKER_FILE: &str = ".cortex-update-state.json";
+const RETAIN_BACKUPS: usize = 2;
 
 /// Server-issued update directive, deserialized from the heartbeat `202` body.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AgentUpdateDirective {
     /// Target version the agent should converge to (the server's own version).
     pub version: String,
+    /// Exact target platform. A directive for another platform fails closed.
+    pub os: String,
+    pub arch: String,
     /// Path on the server to download the matching binary from, resolved
     /// relative to the agent's configured heartbeat target.
     pub path: String,
@@ -114,6 +120,37 @@ fn join_url(base: &str, path: &str) -> Result<String> {
 /// (upgrade or downgrade) converges the agent toward the server.
 pub fn update_needed(directive: &AgentUpdateDirective) -> bool {
     directive.version != env!("CARGO_PKG_VERSION")
+        && !is_semver_downgrade(env!("CARGO_PKG_VERSION"), &directive.version)
+}
+
+fn numeric_semver(version: &str) -> Option<(u64, u64, u64)> {
+    let core = version
+        .strip_prefix('v')
+        .unwrap_or(version)
+        .split(['-', '+'])
+        .next()?;
+    let mut parts = core.split('.');
+    let result = (
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+    );
+    (parts.next().is_none()).then_some(result)
+}
+
+fn is_semver_downgrade(current: &str, target: &str) -> bool {
+    matches!((numeric_semver(current), numeric_semver(target)), (Some(current), Some(target)) if target < current)
+}
+
+fn directive_matches_platform(directive: &AgentUpdateDirective) -> bool {
+    let os_matches = directive.os.eq_ignore_ascii_case(std::env::consts::OS);
+    let arch_matches = if std::env::consts::OS == "macos" {
+        matches!(directive.arch.as_str(), "aarch64" | "arm64")
+            && std::env::consts::ARCH == "aarch64"
+    } else {
+        matches!(directive.arch.as_str(), "x86_64" | "amd64") && std::env::consts::ARCH == "x86_64"
+    };
+    os_matches && arch_matches
 }
 
 pub fn build_update_client() -> Result<reqwest::Client> {
@@ -204,6 +241,15 @@ pub async fn maybe_update(
     if !update_needed(directive) {
         return Ok(());
     }
+    if !directive_matches_platform(directive) {
+        bail!(
+            "agent update platform mismatch: directive {}/{} does not match {}/{}",
+            directive.os,
+            directive.arch,
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        );
+    }
 
     let current = env!("CARGO_PKG_VERSION");
     let exe = std::env::current_exe().context("resolve current_exe")?;
@@ -212,6 +258,10 @@ pub async fn maybe_update(
         .parent()
         .ok_or_else(|| anyhow!("current_exe has no parent dir"))?
         .to_path_buf();
+    let _lifecycle_lock =
+        crate::setup::heartbeat_agent_env::acquire_heartbeat_agent_lifecycle_lock()
+            .context("acquire shared heartbeat-agent lifecycle lock")?;
+    prune_update_artifacts(&dir)?;
 
     tracing::warn!(
         from = current,
@@ -275,11 +325,9 @@ pub async fn maybe_update(
 
     // 3. Stage into the same directory (atomic rename requires same filesystem).
     let tmp_suffix = if cfg!(windows) { ".tmp.exe" } else { ".tmp" };
-    let tmp = dir.join(format!(
-        ".cortex-update-{}{}",
-        directive.version, tmp_suffix
-    ));
-    std::fs::write(&tmp, &bytes).with_context(|| format!("write staged binary {tmp:?}"))?;
+    ensure_disk_capacity(&dir, bytes.len().saturating_mul(2))?;
+    let tmp = unique_staging_path(&dir, &directive.version, tmp_suffix);
+    write_staged_exclusive(&tmp, &bytes)?;
     set_executable(&tmp)?;
 
     // 4. Pre-swap validation: the new binary must run and self-report the
@@ -323,6 +371,81 @@ fn ensure_binary_still_present(exe: &Path) -> Result<()> {
             "current binary no longer exists at {exe:?} (likely replaced by something \
              other than self-update, e.g. a concurrent rebuild); skipping this update cycle"
         );
+    }
+    Ok(())
+}
+
+fn unique_staging_path(dir: &Path, version: &str, suffix: &str) -> PathBuf {
+    dir.join(format!(
+        ".cortex-update-{version}-{}-{}{suffix}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ))
+}
+
+fn write_staged_exclusive(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut file = options
+        .open(path)
+        .with_context(|| format!("create staged binary {path:?}"))?;
+    file.write_all(bytes)
+        .with_context(|| format!("write staged binary {path:?}"))?;
+    file.sync_all()
+        .with_context(|| format!("fsync staged binary {path:?}"))?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn ensure_disk_capacity(dir: &Path, required: usize) -> Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let path = CString::new(dir.as_os_str().as_bytes()).context("update directory contains NUL")?;
+    let mut stats = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    if unsafe { libc::statvfs(path.as_ptr(), stats.as_mut_ptr()) } != 0 {
+        return Err(std::io::Error::last_os_error()).context("inspect free space for agent update");
+    }
+    let stats = unsafe { stats.assume_init() };
+    let available = u128::from(stats.f_bavail) * u128::from(stats.f_frsize);
+    if available < required as u128 {
+        bail!(
+            "insufficient disk for agent update: need {required} bytes for stage and backup, have {available}"
+        );
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_disk_capacity(_dir: &Path, _required: usize) -> Result<()> {
+    Ok(())
+}
+
+fn prune_update_artifacts(dir: &Path) -> Result<()> {
+    let mut backups = Vec::new();
+    for entry in std::fs::read_dir(dir).with_context(|| format!("read update directory {dir:?}"))? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with(".cortex-update-")
+            && (name.ends_with(".tmp") || name.ends_with(".tmp.exe"))
+        {
+            let _ = std::fs::remove_file(entry.path());
+        } else if name.starts_with("cortex.bak-") {
+            backups.push((entry.metadata()?.modified().ok(), entry.path()));
+        }
+    }
+    backups.sort_by_key(|(modified, _)| *modified);
+    let remove_count = backups.len().saturating_sub(RETAIN_BACKUPS);
+    for (_, path) in backups.into_iter().take(remove_count) {
+        let _ = std::fs::remove_file(path);
     }
     Ok(())
 }
@@ -453,6 +576,11 @@ fn set_executable(_path: &Path) -> Result<()> {
 fn install_and_restart(staged: &Path, exe: &Path, _fallback: Option<&Path>) -> Result<()> {
     use std::os::unix::process::CommandExt;
     std::fs::rename(staged, exe).with_context(|| format!("swap new binary into {exe:?}"))?;
+    if let Some(parent) = exe.parent() {
+        File::open(parent)
+            .and_then(|dir| dir.sync_all())
+            .with_context(|| format!("fsync agent binary directory {parent:?}"))?;
+    }
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     // `exec` only returns on failure.
     let error = crate::env::command(exe).args(args).exec();
@@ -560,7 +688,27 @@ fn install_and_restart(_staged: &Path, _exe: &Path, _fallback: Option<&Path>) ->
 fn write_marker(exe: &Path, marker: &UpdateMarker) -> Result<()> {
     let path = marker_path(exe);
     let json = serde_json::to_string(marker).context("serialize update marker")?;
-    std::fs::write(&path, json).with_context(|| format!("write update marker {path:?}"))
+    let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
+    let result = (|| {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW).mode(0o600);
+        }
+        let mut file = options
+            .open(&tmp)
+            .with_context(|| format!("create update marker {tmp:?}"))?;
+        file.write_all(json.as_bytes())
+            .context("write update marker")?;
+        file.sync_all().context("fsync update marker")?;
+        std::fs::rename(&tmp, &path).with_context(|| format!("publish update marker {path:?}"))
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
 }
 
 fn read_marker(path: &Path) -> Option<UpdateMarker> {

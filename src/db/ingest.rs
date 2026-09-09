@@ -52,7 +52,41 @@ where
 {
     let mut conn = crate::db::write_conn(pool)?;
     let tx = conn.transaction()?;
-    insert_logs_batch_in_tx_with_ids(&tx, entries, None)?;
+    // Remote transcript ingestion bypasses the local scanner's projection
+    // transaction. Persist recoverable skill evidence with its source log;
+    // otherwise a successful forward silently leaves reflection queries empty.
+    let projects_remote_skills = entries.iter().any(|entry| {
+        let entry = entry.borrow();
+        entry.source_ip.starts_with("agent-ai-transcript://")
+            && entry.ai_tool.as_deref() == Some("codex")
+            && entry.message.contains("<skill>")
+    });
+    if projects_remote_skills {
+        let ids = insert_logs_batch_in_tx(&tx, entries)?;
+        let mut skills = Vec::new();
+        for (entry, log_id) in entries.iter().zip(ids) {
+            let entry = entry.borrow();
+            if !entry.source_ip.starts_with("agent-ai-transcript://")
+                || entry.ai_tool.as_deref() != Some("codex")
+            {
+                continue;
+            }
+            for event in crate::scanner::skill_events::extract_codex_skill_events(&entry.message) {
+                skills.push(super::SkillEventInsert {
+                    log_id,
+                    ai_tool: "codex".to_string(),
+                    ai_project: entry.ai_project.clone(),
+                    ai_session_id: entry.ai_session_id.clone(),
+                    hostname: entry.hostname.clone(),
+                    timestamp: entry.timestamp.clone(),
+                    event,
+                });
+            }
+        }
+        super::insert_skill_events_in_tx(&tx, &skills)?;
+    } else {
+        insert_logs_batch_in_tx_with_ids(&tx, entries, None)?;
+    }
     tx.commit()?;
     if !entries.is_empty() {
         super::agent_observatory::notify_projection_work();

@@ -542,6 +542,38 @@ impl Default for EnrichmentConfigToml {
     }
 }
 
+/// Environment settings captured while managed configuration overlays are active.
+/// Kept out of TOML/JSON: CORTEX_LLM remains the single provider/model selector.
+#[derive(Debug, Clone, Default)]
+pub struct LlmEnvironment {
+    pub(crate) values: HashMap<String, std::ffi::OsString>,
+}
+
+impl LlmEnvironment {
+    pub(crate) fn capture() -> Self {
+        let values = [
+            "CORTEX_LLM",
+            "CORTEX_CODEX_CMD",
+            "CORTEX_CODEX_HOME",
+            "CORTEX_HEADLESS_GEMINI_CMD",
+            "CORTEX_HEADLESS_GEMINI_HOME",
+            "CODEX_HOME",
+            "HOME",
+        ]
+        .into_iter()
+        .filter_map(|key| {
+            // config_env_var applies plugin/process/managed precedence. Preserve
+            // non-Unicode process values rather than silently choosing defaults.
+            config_env_var(key)
+                .map(std::ffi::OsString::from)
+                .or_else(|| crate::env::var_os(key))
+                .map(|value| (key.to_owned(), value))
+        })
+        .collect();
+        Self { values }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // LLM invocation guard configuration
 //
@@ -552,6 +584,9 @@ impl Default for EnrichmentConfigToml {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LlmConfig {
+    /// Snapshot of managed/process LLM settings; not another configuration knob.
+    #[serde(skip)]
+    pub environment: Option<LlmEnvironment>,
     /// Global kill switch. When false, every `LlmRunner::run` call is
     /// denied immediately (still audited with status "disabled").
     /// Default: true. Env override: `CORTEX_LLM_ENABLED`.
@@ -572,17 +607,15 @@ pub struct LlmConfig {
     /// How long an open circuit stays open before allowing another
     /// attempt (seconds). Default: 300.
     pub cooldown_secs: u64,
-    /// Per-invocation timeout (seconds). Default: 120. Mirrors the
-    /// pre-existing `CORTEX_LLM_COMPLETION_TIMEOUT_SECS` env var read by
-    /// `GeminiAssessConfig::from_env` in `src/assessment.rs` — this is
-    /// threaded through instead of that struct re-reading the env var
-    /// independently (see the "timeout duplication" eng review fix).
+    /// Per-invocation timeout for every provider (seconds). Default: 120.
+    /// The deprecated `CORTEX_LLM_COMPLETION_TIMEOUT_SECS` is ignored.
     pub timeout_secs: u64,
     /// Max prompt+evidence size in bytes. Requests over this are rejected
     /// before spawning any process. Default: 1_048_576 (1 MiB).
     pub max_prompt_bytes: usize,
-    /// Max captured output size in bytes; output beyond this is
-    /// truncated. Default: 262_144 (256 KiB).
+    /// Max captured output size in bytes. Streaming adapters reject excess
+    /// before emitting it; the runner also caps returned output defensively.
+    /// Default: 262_144 (256 KiB).
     pub max_output_bytes: usize,
     /// Whether ANY background (non-interactive, non-CLI/MCP/REST-request)
     /// code path may invoke an LLM. Default: false. There must be no code
@@ -600,6 +633,7 @@ pub struct LlmConfig {
 impl Default for LlmConfig {
     fn default() -> Self {
         Self {
+            environment: None,
             enabled: true,
             max_concurrent: 1,
             max_per_action_concurrent: 1,
@@ -1524,6 +1558,7 @@ impl Config {
         }
 
         // [llm] env overrides.
+        config.llm.environment = Some(LlmEnvironment::capture());
         env_override_bool("CORTEX_LLM_ENABLED", &mut config.llm.enabled)?;
 
         // [mcp.auth] env overrides.
@@ -2123,6 +2158,12 @@ pub(crate) fn validate_agent_observatory_config(
                 "agent_observatory.{name} must be greater than zero"
             ));
         }
+    }
+    if config.projector_page_rows > crate::agent_observatory::AGENT_OBSERVATORY_LOG_PAGE_MAX {
+        return Err(anyhow::anyhow!(
+            "agent_observatory.projector_page_rows must be at most {}",
+            crate::agent_observatory::AGENT_OBSERVATORY_LOG_PAGE_MAX
+        ));
     }
     if config.stale_after_secs <= config.active_window_secs {
         return Err(anyhow::anyhow!(

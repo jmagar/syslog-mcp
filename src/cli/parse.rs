@@ -201,6 +201,7 @@ fn parse_heartbeat(args: &[String]) -> Result<CliCommand> {
 
 fn parse_heartbeat_agent(args: &[String]) -> Result<CliCommand> {
     let mut out = super::HeartbeatAgentArgs {
+        env_file: None,
         target: None,
         token: None,
         interval_secs: cortex::heartbeat_agent::DEFAULT_INTERVAL_SECS,
@@ -222,6 +223,10 @@ fn parse_heartbeat_agent(args: &[String]) -> Result<CliCommand> {
     let mut i = 0usize;
     while i < args.len() {
         match args[i].as_str() {
+            "--env-file" => {
+                i += 1;
+                out.env_file = Some(required_value(args, i, "--env-file")?);
+            }
             "--target" => {
                 i += 1;
                 out.target = Some(required_value(args, i, "--target")?);
@@ -273,6 +278,7 @@ fn parse_heartbeat_agent(args: &[String]) -> Result<CliCommand> {
                     other,
                     &[
                         "--target",
+                        "--env-file",
                         "--token",
                         "--interval-secs",
                         "--probe-deadline-ms",

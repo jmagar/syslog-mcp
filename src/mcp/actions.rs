@@ -72,6 +72,7 @@ pub(super) enum ActionHandler {
     ListApps,
     ListSessions,
     SearchSessions,
+    EvidenceScope,
     SearchAbuse,
     AbuseIncidents,
     AbuseInvestigate,
@@ -378,6 +379,17 @@ pub(super) const ACTION_SPECS: &[ActionSpec] = &[
         "Full-text search over AI transcript sessions",
         Cheap,
         SearchSessions
+    ),
+    action_spec!(
+        "evidence_scope",
+        Read,
+        "Historical Agent Observatory evidence for one Git branch or worktree; use /api/streams/evidence to follow new matches",
+        Moderate,
+        EvidenceScope,
+        exact: {
+            allowed: &["branch", "worktree", "kinds", "since", "until", "include_payload", "after_id", "limit"],
+            required: &[]
+        }
     ),
     action_spec!(
         "abuse",

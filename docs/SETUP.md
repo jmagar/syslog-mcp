@@ -208,6 +208,155 @@ Plain `http://` remote Docker endpoints require `allow_insecure_http = true`. Us
 
 For Docker ingest integration testing, keep the default smoke test focused on UDP/TCP syslog, REST/CLI parity, and file-tail ingest. Host-local agent Docker streaming is covered by agent deployment tests. For the legacy central pull path, start cortex with `CORTEX_DOCKER_INGEST_ENABLED=true` against a disposable Docker-compatible HTTP fixture, emit a unique marker from a short-lived container, then verify it with `search` or `tail`. Container stdout/stderr rows should report `source_ip` as `docker://<host>/<container>/<stream>`. Container lifecycle events such as `create`, `start`, `restart`, `die`, `stop`, `destroy`, `rename`, and `oom` should report `source_ip` as `docker-event://<host>/<container>/<action>`.
 
+## 10. macOS heartbeat agent
+
+This is the authoritative operator contract for the macOS heartbeat agent.
+Shorter examples elsewhere link here instead of duplicating lifecycle rules.
+
+### Lifecycle commands and service identity
+
+Run as the macOS user whose sessions are collected; do not use `sudo`:
+
+```bash
+cortex setup heartbeatagent install
+cortex setup heartbeatagent check
+cortex setup heartbeatagent remove
+```
+
+The installer manages one per-user LaunchAgent:
+
+| Item | Contract |
+| --- | --- |
+| launchd label | `ai.dinglebear.cortex-heartbeat-agent` |
+| launchd domain | `gui/$UID` |
+| plist | `~/Library/LaunchAgents/ai.dinglebear.cortex-heartbeat-agent.plist` |
+| private environment | `~/.cortex/heartbeat-agent.env` |
+| stable service binary | `~/.local/lib/cortex/heartbeat-agent/cortex` |
+| identity/checkpoints | retained under `~/.cortex/` |
+| stdout/stderr | `~/.cortex/logs/heartbeat-agent.log` and `heartbeat-agent.error.log`; normal log rotates at 10 MiB |
+| lifecycle lock | `~/.cortex/heartbeat-agent.lifecycle.lock` |
+| migration journal | `~/.cortex/heartbeat-agent-migration.json` |
+
+`install` validates configuration, stages the executable at the stable
+Cortex-managed binary path reported by `check`, writes private state
+atomically, bootstraps launchd, and verifies that the job is running. Re-running
+it is an idempotent repair/upgrade. The plist never targets a Cargo build,
+Homebrew Cellar version, temporary directory, or the invoking binary's path.
+
+`check` is read-only. It checks ownership/modes, exact generated content,
+managed-binary integrity, launchd registration and process state, recovery
+state, and delivery freshness. Installation health and delivery health are
+separate: a loaded process can still fail authentication or delivery.
+
+```bash
+cortex setup heartbeatagent check --json
+```
+
+`remove` boots out only the exact label in `gui/$UID`, then removes the plist
+and managed service binary. It retains the environment, stable host ID,
+checkpoints, lifecycle recovery records, and logs under `~/.cortex/` for replay
+prevention and diagnosis. Delete retained state manually only for an intentional
+identity/checkpoint reset; reinstalling after that can resend old records.
+
+### GUI login and SSH semantics
+
+A LaunchAgent belongs to an active Aqua login, not merely a Unix account. An
+SSH session for the same user can manage `gui/$UID` only while that GUI session
+exists. If it is absent, lifecycle commands fail with an instruction to log in
+at the Mac; they never report false success. The service starts at GUI login
+and is not promised before first login, at the FileVault screen, or after
+logout.
+
+### Environment, precedence, paths, and security
+
+The managed environment is a strict data file, not a shell script. It permits
+only documented `KEY=VALUE` assignments: no `export`, expansion, substitution,
+duplicate recognized keys, NUL/newline values, or shell fragments. Unknown
+non-sensitive keys are warned about and ignored; unknown token, secret, password,
+loader, proxy, TLS, and certificate variables are rejected. Setup copies only
+the heartbeat-agent allowlist. Explicit process values override values in
+`~/.cortex/.env`; the generated `~/.cortex/heartbeat-agent.env` is launchd's
+sole environment source.
+
+Private configuration, tokens, checkpoints, journal, and plist are mode `0600`
+inside directories mode `0700`; the executable is mode `0755` and atomically
+staged in its user-owned directory. Managed files are not group/world writable.
+`check` rejects wrong ownership, symlinks in managed
+paths, and unsafe modes. Tokens never belong in the plist or command arguments.
+
+- `CORTEX_HEARTBEAT_TOKEN` is the agent ingest credential. Setup may derive it
+  from managed `CORTEX_TOKEN`; it must match the server ingest token.
+- `CORTEX_TOKEN` protects static MCP, OTLP, heartbeat, and forwarding ingest.
+- `CORTEX_API_TOKEN` is only for REST queries that prove delivered data is
+  visible. It is not an ingest credential.
+
+Prefer HTTPS. Plain HTTP is acceptable only on a trusted, access-controlled
+overlay such as private Tailscale; the bearer is otherwise observable on the
+path. A trusted overlay does not make shared Wi-Fi or a public listener safe.
+
+### Capability matrix
+
+Capabilities are explicit and default off unless stated otherwise:
+
+| Capability | macOS support | Configuration and notes |
+| --- | --- | --- |
+| Heartbeat/system telemetry | yes, always | `CORTEX_HEARTBEAT_TARGET` plus ingest token |
+| Claude/Codex/Gemini transcripts | yes | `CORTEX_AGENT_AI_TRANSCRIPT_FORWARD=true`; reads the current user's configured roots |
+| Docker logs | conditional | `CORTEX_AGENT_DOCKER=true`; configure a supported Docker Desktop/OrbStack Unix socket with `CORTEX_AGENT_DOCKER_URL` |
+| Shell history | opt-in | `CORTEX_AGENT_SHELL_HISTORY_FORWARD=true`; history may contain secrets |
+| Agent command spool | opt-in | `CORTEX_AGENT_COMMAND_FORWARD=true`; path via `CORTEX_AGENT_COMMAND_SPOOL` |
+| File tails/syslog files | opt-in | `CORTEX_AGENT_FILE_TAILS` / `CORTEX_AGENT_SYSLOG_FILE`; macOS file access must permit reads |
+| journald | unavailable | macOS has no systemd journal; enabling `CORTEX_AGENT_JOURNALD` is rejected, not ignored |
+| Auto-update | limited | `CORTEX_AGENT_AUTO_UPDATE`; subject to the publication boundary below |
+
+Full Disk Access may be required for privacy-protected transcript, history, or
+tail paths. Grant it to the stable managed binary, not a transient terminal.
+Docker setup never weakens socket permissions or exposes unauthenticated TCP.
+
+### Exact legacy migration and rollback
+
+The legacy exact assignment `CORTEX_AGENT_AI_TRANSCRIPTS` migrates to
+`CORTEX_AGENT_AI_TRANSCRIPT_FORWARD`. Only assignment lines are rewritten;
+comments and longer keys are preserved. Equal old/new values collapse to the
+canonical key. Conflicts stop for operator resolution. Boot out and remove the
+old Python job `ai.dinglebear.cortex-transcript-forwarder` and
+`~/Library/LaunchAgents/ai.dinglebear.cortex-transcript-forwarder.plist` only
+after the canonical agent passes installation and delivery checks. During
+install Cortex inventories that exact legacy job, stops it before canonical
+bootstrap, and records whether it was loaded in the migration journal. It
+restores the exact legacy job if canonical startup fails and retains the legacy
+plist until live delivery is proven. It does not glob or stop similarly named
+jobs. Never run both: duplicates and competing checkpoints make evidence
+ambiguous.
+
+To roll back, run `remove`, restore the previous private environment if needed,
+install the prior known-good Cortex binary, then run `install` and `check`.
+Retained identity/checkpoints make this a service rollback, not a data reset.
+
+### Lock, journal, and interrupted-operation recovery
+
+Lifecycle operations use `~/.cortex/heartbeat-agent.lifecycle.lock`; concurrent same-user
+operations fail instead of interleaving binary, plist, environment, and launchd
+changes. Migration state is journaled in
+`~/.cortex/heartbeat-agent-migration.json`, and files use atomic replacement. The
+next command detects an interrupted transaction and either safely recovers or
+stops with manual instructions. Never delete a live lock. Treat one as stale
+only after confirming its recorded process is gone, and retain the journal
+until `check` reports consistency.
+
+### Delivery proof, publication, and auto-update boundary
+
+Passing installation phases is not end-to-end proof. Emit a unique marker for
+each enabled source, observe a successful forwarding batch, then query the
+server using `CORTEX_API_TOKEN` and verify marker, host ID, source kind, and
+timestamp. Backlog movement does not prove the newest event arrived.
+
+Setup installs the binary already present or an artifact supplied by the
+release workflow; it does not publish releases. Auto-update is unavailable or
+must fail closed without a macOS artifact and integrity-verifiable digest or
+signature. HTTPS alone does not prove artifact provenance. Do not claim
+auto-update until publication and the integrity chain are independently proven.
+
 ## Troubleshooting
 
 ### "Connection refused" on health check

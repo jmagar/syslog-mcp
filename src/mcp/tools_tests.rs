@@ -1374,6 +1374,7 @@ fn sample_args_for_action(action: &str) -> Option<serde_json::Value> {
             json!({"action": action, "reference_time": "2026-01-01T00:00:00Z"})
         }
         "search_sessions" => json!({"action": action, "query": "schema"}),
+        "evidence_scope" => json!({"action": action, "branch": "codex/schema-test"}),
         "ai_correlate" => json!({"action": action, "project": "/tmp/project"}),
         "topic_correlate" => json!({"action": action, "topic": "schema-test"}),
         "project_context" => json!({"action": action, "project": "/tmp/project"}),

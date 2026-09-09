@@ -59,26 +59,28 @@ use super::os_adapter::{OsAdapter, SystemOsAdapter};
 use super::time::{parse_optional_timestamp, parse_required_timestamp, rfc3339_z};
 use super::{ServiceError, ServiceResult};
 use crate::app::{correlate, heartbeat_flags, models, os_adapter, time};
-use crate::assessment::{GeminiAssessConfig, build_assessment_prompt, run_gemini_assessment};
+use crate::assessment::build_assessment_prompt;
 use crate::command_log::{self, CommandLogImportResult};
 use crate::config::{PoolBudget, StorageConfig};
 use crate::db::{self, Bucket, ContextRef, DbPool, SearchParams, TimelineGroupBy};
 use crate::filetail::{FileTailRegistry, FileTailStatus};
+use crate::llm_backend::LlmBackend;
 use crate::scanner;
 
-async fn run_gemini_with_delta<F>(
+async fn run_llm_with_delta<F>(
     runner: &crate::app::llm_runner::LlmRunner,
     spec: crate::app::llm_runner::LlmInvocationSpec,
-    gemini_config: &GeminiAssessConfig,
+    backend: &LlmBackend,
     on_delta: &mut F,
 ) -> ServiceResult<String>
 where
     F: FnMut(&str) -> anyhow::Result<()> + Send,
 {
-    let gemini_config = gemini_config.clone();
+    let backend = backend.clone();
+    let max_output_bytes = runner.max_output_bytes();
     runner
         .run(spec, move |prompt| async move {
-            run_gemini_assessment(&prompt, &gemini_config, |delta| on_delta(delta)).await
+            backend.run(&prompt, max_output_bytes, on_delta).await
         })
         .await
         .map(|outcome| outcome.output)

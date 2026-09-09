@@ -350,7 +350,12 @@ fn event_path_allowed(path: &Path, targets: &[WatchTarget]) -> bool {
 }
 
 fn event_path_allowed_missing_ok(path: &Path, targets: &[WatchTarget]) -> bool {
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let canonical = path.canonicalize().unwrap_or_else(|_| {
+        path.parent()
+            .and_then(|parent| parent.canonicalize().ok())
+            .and_then(|parent| path.file_name().map(|name| parent.join(name)))
+            .unwrap_or_else(|| path.to_path_buf())
+    });
     canonical_path_allowed(&canonical, targets)
 }
 

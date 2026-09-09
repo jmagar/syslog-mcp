@@ -381,7 +381,13 @@ The deterministic query and incident workflows are available through CLI, REST, 
 
 ### Guarded local assessments
 
-LLM-backed assessments are deliberately local-only. They run through `cortex assess` and are not exposed as MCP actions or REST routes because they spawn a local Gemini subprocess.
+LLM-backed assessments are deliberately local-only. They run through `cortex assess` and are not exposed as MCP actions or REST routes because they spawn a local provider subprocess.
+
+`CORTEX_LLM` selects the provider and optional model for **every** LLM operation: skill, MCP, hook, and abuse assessments, including dry-run audit metadata. Set `CORTEX_LLM=codex` (the default, using Codex app-server) or `CORTEX_LLM=gemini` (Gemini CLI). To pin the model globally, use `CORTEX_LLM=codex/gpt-5.5` or `CORTEX_LLM=gemini/gemini-3.1-flash-lite-preview`. An explicit model in `CORTEX_LLM` wins over `--model`; otherwise that existing flag can select a model for one invocation. Empty or unsupported selectors fail without provider fallback.
+
+The selector also works in managed `~/.cortex/.env`; process environment values take precedence. Settings are retained after config loading.
+
+The old `CORTEX_CODEX_MODEL` and `CORTEX_HEADLESS_GEMINI_MODEL` variables are ignored. Command and authentication-home overrides remain installation settings, not provider selectors. `--no-llm` needs no provider configuration or credentials.
 
 The shared LLM runner enforces:
 
@@ -464,11 +470,11 @@ The CLI supports direct/local operation and HTTP operation. REST-backed mode is 
 
 ### MCP
 
-Cortex exposes one MCP tool named `cortex`. Its required `action` field selects one of **56 live actions** from a single authoritative Rust registry.
+Cortex exposes one MCP tool named `cortex`. Its required `action` field selects one of **59 live actions** from a single authoritative Rust registry.
 
 The current scope split is:
 
-- 50 read actions requiring `cortex:read`
+- 53 read actions requiring `cortex:read`
 - 5 admin actions requiring `cortex:admin`: `ack_error`, `unack_error`, `file_tails`, `notifications_test`, and `llm_invocations`
 - 1 informational action, `help`, which requires an authenticated context when authentication is mounted but no read/admin scope
 
@@ -480,7 +486,7 @@ The current scope split is:
 | Discovery and health | `hosts`, `apps`, `source_ips`, `status`, `stats`, `ingest_rate`, `silent_hosts`, `clock_skew` |
 | Analytics and correlation | `timeline`, `patterns`, `anomalies`, `compare`, `correlate`, `topic_correlate`, `similar_incidents`, `incident_context` |
 | Fleet and topology | `map`, `host_state`, `fleet_state`, `correlate_state`, `graph`, `compose_status`, `compose_doctor` |
-| AI sessions | `sessions`, `search_sessions`, `abuse`, `abuse_incidents`, `abuse_investigate`, `ai_correlate`, `usage_blocks`, `project_context`, `list_ai_tools`, `list_ai_projects` |
+| AI sessions and scoped evidence | `sessions`, `search_sessions`, `evidence_scope`, `abuse`, `abuse_incidents`, `abuse_investigate`, `ai_correlate`, `usage_blocks`, `project_context`, `list_ai_tools`, `list_ai_projects` |
 | AI operational events | `skill_events`, `skill_incidents`, `skill_investigate`, `mcp_events`, `mcp_incidents`, `mcp_investigate`, `hook_events`, `hook_incidents`, `hook_investigate` |
 | Errors and administration | `unaddressed_errors`, `ack_error`, `unack_error`, `notifications_recent`, `notifications_test`, `file_tails`, `llm_invocations` |
 | Reference | `help` |
@@ -564,6 +570,21 @@ See [docs/plugin/HOOKS.md](docs/plugin/HOOKS.md) for the setup lifecycle and [do
 
 ## Configuration
 
+### macOS heartbeat agent quick start
+
+From an active desktop login:
+
+```bash
+cortex setup heartbeatagent install
+cortex setup heartbeatagent check
+```
+
+Set `CORTEX_HEARTBEAT_TARGET` and an ingest credential first.
+`CORTEX_API_TOKEN` is query-only and cannot authenticate agent ingest. See the
+authoritative [macOS heartbeat-agent operator
+contract](docs/SETUP.md#10-macos-heartbeat-agent) for capabilities, paths,
+login semantics, migration, recovery, removal, and delivery proof.
+
 Cortex loads configuration in this order, with later layers winning:
 
 1. Built-in defaults
@@ -615,6 +636,7 @@ Useful environment variables include:
 | `CORTEX_DOCKER_INGEST_ENABLED` | Enable central Docker pull compatibility mode |
 | `CORTEX_SCRUB_PROMPTS` | Best-effort AI prompt credential scrubbing |
 | `CORTEX_NOTIFICATIONS_ENABLED` | Enable notification services |
+| `CORTEX_LLM` | Shared provider/model selector: `codex[/MODEL]` or `gemini[/MODEL]`; default `codex` |
 | `CORTEX_LLM_ENABLED` | Global local-assessment kill switch |
 | `RUST_LOG` | Tracing filter |
 
@@ -907,7 +929,7 @@ Cortex is intentionally opinionated:
 - Syslog does not authenticate senders. Network and CIDR controls matter.
 - The graph is derived evidence, not authoritative configuration state.
 - MCP and REST expose bounded operations, not arbitrary SQL or unaudited log mutation.
-- LLM-backed assessments are local-only and require an operator-controlled Gemini environment.
+- LLM-backed assessments are local-only and require an operator-controlled installation of the provider selected by `CORTEX_LLM`.
 - Central Docker pull requires privileged read access to Docker endpoints and is disabled by default.
 - Inventory quality depends on collector access, SSH trust, optional API credentials, and cache freshness.
 - The bundled browser app is an investigation workspace preview, not a full monitoring dashboard.

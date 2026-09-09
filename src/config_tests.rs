@@ -1773,6 +1773,18 @@ fn agent_observatory_validation_rejects_zero_and_unsafe_limits() {
 
     let cfg = AgentObservatoryConfig {
         enabled: true,
+        projector_page_rows: 2_001,
+        ..Default::default()
+    };
+    assert!(
+        validate_agent_observatory_config(&cfg)
+            .unwrap_err()
+            .to_string()
+            .contains("projector_page_rows must be at most 2000")
+    );
+
+    let cfg = AgentObservatoryConfig {
+        enabled: true,
         stale_after_secs: 15,
         ..Default::default()
     };

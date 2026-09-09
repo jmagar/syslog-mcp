@@ -16,6 +16,20 @@ Direct query CLI mode does not start syslog listeners, the HTTP MCP server, the
 REST API, OTLP routes, retention purge, Docker ingest, or storage-budget cleanup
 tasks. Keep `cortex serve mcp` running somewhere for ingestion.
 
+## `cortex setup heartbeatagent`
+
+```bash
+cortex setup heartbeatagent install [--json]
+cortex setup heartbeatagent check [--json]
+cortex setup heartbeatagent remove [--json]
+```
+
+On macOS this manages the current user's LaunchAgent in the active `gui/$UID`
+domain. See the authoritative [macOS heartbeat-agent operator
+contract](SETUP.md#10-macos-heartbeat-agent) for lifecycle, capabilities,
+security, migration, retention, recovery, and delivery proof.
+`CORTEX_HEARTBEAT_TOKEN` is ingest; `CORTEX_API_TOKEN` is query-only.
+
 ## Breaking Command Migration
 
 Version 3.0 intentionally removes the old implementation-shaped top-level CLI
@@ -309,23 +323,23 @@ The public command expands at most 10 incidents per run.
 
 ### `cortex sessions assess`
 
-Fetch one incident evidence bundle and run the local Gemini CLI to produce a
+Fetch one incident evidence bundle and run the local provider selected by `CORTEX_LLM` to produce a
 Markdown frustration assessment.
 
 ```bash
 cortex sessions incidents --limit 10
 cortex sessions assess inc-f9a1d8e70cad13e6 --limit 3
-cortex sessions assess inc-f9a1d8e70cad13e6 --model gemini-3.1-flash-lite-preview --json
+CORTEX_LLM=gemini/gemini-3.1-flash-lite-preview cortex sessions assess inc-f9a1d8e70cad13e6 --json
 cortex sessions assess inc-f9a1d8e70cad13e6 --dry-run
 ```
 
-`assess` is local-only and rejects `--http` because it spawns Gemini on the
+`assess` is local-only and rejects `--http` because it spawns the selected provider on the
 local host. It can assess any incident ID returned by `cortex sessions incidents`
 within the incident-list cap, even when that incident is outside the top 10
 investigation bundles.
 
 `--dry-run` previews the prompt/evidence bundle that would be sent to
-Gemini — via `LlmRunner::dry_run` — without invoking the LLM. It still
+the selected LLM — via `LlmRunner::dry_run` — without invoking the LLM. It still
 writes an audit row to `llm_invocations` (status `dry_run`) but spawns no
 subprocess, and prints `invocation_id`, `prompt_bytes`,
 `evidence_counts`, and `would_exceed_prompt_limit` instead of an
@@ -334,7 +348,7 @@ assessment.
 ### `cortex sessions llminvocations`
 
 List audit rows recorded by `LlmRunner` for every LLM invocation attempt
-(dry runs, denials, and real Gemini calls alike).
+(dry runs, denials, and real provider calls alike).
 
 ```bash
 cortex sessions llminvocations --limit 20

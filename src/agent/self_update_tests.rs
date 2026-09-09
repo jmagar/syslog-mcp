@@ -4,6 +4,8 @@ use super::*;
 fn update_needed_false_for_matching_version() {
     let directive = AgentUpdateDirective {
         version: env!("CARGO_PKG_VERSION").to_string(),
+        os: std::env::consts::OS.to_string(),
+        arch: std::env::consts::ARCH.to_string(),
         path: "/v1/agent/binary?os=linux&arch=x86_64".to_string(),
         sha256: Some("deadbeef".to_string()),
         checksum_path: None,
@@ -15,13 +17,46 @@ fn update_needed_false_for_matching_version() {
 #[test]
 fn update_needed_true_for_different_version() {
     let directive = AgentUpdateDirective {
-        version: "0.0.0-other".to_string(),
+        version: "999.0.0".to_string(),
+        os: std::env::consts::OS.to_string(),
+        arch: std::env::consts::ARCH.to_string(),
         path: "/v1/agent/binary".to_string(),
         sha256: Some("deadbeef".to_string()),
         checksum_path: None,
         format: "binary".to_string(),
     };
     assert!(update_needed(&directive));
+}
+
+#[test]
+fn update_needed_rejects_semver_downgrade() {
+    let directive = AgentUpdateDirective {
+        version: "0.0.0".to_string(),
+        os: std::env::consts::OS.to_string(),
+        arch: std::env::consts::ARCH.to_string(),
+        path: "/binary".to_string(),
+        sha256: Some("deadbeef".to_string()),
+        checksum_path: None,
+        format: "binary".to_string(),
+    };
+    assert!(!update_needed(&directive));
+}
+
+#[test]
+fn directive_platform_binding_is_exact() {
+    let matching = AgentUpdateDirective {
+        version: "999.0.0".to_string(),
+        os: std::env::consts::OS.to_string(),
+        arch: std::env::consts::ARCH.to_string(),
+        path: "/binary".to_string(),
+        sha256: Some("deadbeef".to_string()),
+        checksum_path: None,
+        format: "binary".to_string(),
+    };
+    assert!(directive_matches_platform(&matching));
+    let mut wrong = matching;
+    wrong.os = "not-this-os".to_string();
+    assert!(!directive_matches_platform(&wrong));
 }
 
 #[test]
@@ -175,6 +210,37 @@ fn ensure_binary_still_present_ok_when_exe_exists() {
     assert!(ensure_binary_still_present(&exe).is_ok());
 }
 
+#[test]
+fn staged_binary_creation_is_exclusive_and_synced() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("stage.tmp");
+    write_staged_exclusive(&path, b"first").unwrap();
+    assert!(write_staged_exclusive(&path, b"second").is_err());
+    assert_eq!(std::fs::read(path).unwrap(), b"first");
+}
+
+#[test]
+fn pruning_bounds_backups_and_removes_stale_staging() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["cortex.bak-1", "cortex.bak-2", "cortex.bak-3"] {
+        std::fs::write(dir.path().join(name), name).unwrap();
+    }
+    std::fs::write(dir.path().join(".cortex-update-old.tmp"), b"old").unwrap();
+    prune_update_artifacts(dir.path()).unwrap();
+    let names: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        names
+            .iter()
+            .filter(|name| name.starts_with("cortex.bak-"))
+            .count(),
+        RETAIN_BACKUPS
+    );
+    assert!(!names.iter().any(|name| name == ".cortex-update-old.tmp"));
+}
+
 #[tokio::test]
 async fn download_binary_accepts_authenticated_body() {
     use wiremock::matchers::{header, method, path};
@@ -227,7 +293,9 @@ async fn maybe_update_resolves_server_checksum_before_validating_binary() {
         .await;
 
     let directive = AgentUpdateDirective {
-        version: "0.0.0-other".to_string(),
+        version: "999.0.0".to_string(),
+        os: std::env::consts::OS.to_string(),
+        arch: std::env::consts::ARCH.to_string(),
         path: "/binary".to_string(),
         sha256: None,
         checksum_path: Some("/checksum".to_string()),
