@@ -414,6 +414,11 @@ def main() -> int:
     output.write_text(json.dumps({"schema": "cortex-live-rest-sweep-v1", "contract_version": contract["version"],
                                   "entry_count": len(entries), "results": results, "failures": failures}, indent=2) + "\n")
     os.chmod(output, 0o600)
+    # A fail-closed sweep must say what failed: these identifiers are the only
+    # way a hosted run can be diagnosed, because the observation file carries
+    # raw command output and is deliberately excluded from uploaded artifacts.
+    for failure in failures:
+        print(f"live-e2e: rest surface case failed: {failure}", file=sys.stderr)
     return 1 if failures else 0
 
 
