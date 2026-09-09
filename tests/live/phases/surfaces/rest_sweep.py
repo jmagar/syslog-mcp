@@ -55,6 +55,10 @@ QUERY = {
     "/api/v1/graph/evidence": {"evidence_id": "1"},
     "/api/sessions/search": {"query": '"cortex-live"', "limit": "5"},
     "/api/sessions/context": {"project": "cortex-live", "limit": "5"},
+    "/api/agent-observatory/runs/{run_key}/telemetry": {"span_limit": "5", "metric_limit": "5"},
+    "/api/agent-runs/{run_key}/telemetry": {"span_limit": "5", "metric_limit": "5"},
+    "/api/agent-observatory/worktrees": {"repository_id": "1", "limit": "5"},
+    "/api/repositories/{repository_id}/worktrees": {"limit": "5"},
     "/api/sessions/rendered": {},
     "/api/streams/logs": {},
     "/api/streams/sessions": {},
@@ -95,10 +99,14 @@ def expanded_path(path: str) -> str:
         return path[:-4] + "/1"
     if path in QUERY:
         params = QUERY[path]
-        return path if not params else path + "?" + urllib.parse.urlencode(params)
-    if path.startswith("/api/") and not path.startswith("/api/db/") and path not in ("/api/version", "/api/v1/investigation/version"):
-        return path + "?limit=5"
-    return path
+        expanded = path if not params else path + "?" + urllib.parse.urlencode(params)
+    elif path.startswith("/api/") and not path.startswith("/api/db/") and path not in ("/api/version", "/api/v1/investigation/version"):
+        expanded = path + "?limit=5"
+    else:
+        expanded = path
+    # Numeric path parameters are parsed as i64 by their handler, so the literal
+    # template answers 400 and the semantics under test are never reached.
+    return expanded.replace("{repository_id}", "1")
 
 
 def evidence(status: int, body: bytes, headers: dict[str, str]) -> dict:
@@ -194,6 +202,15 @@ CONTRACTS = {
     "GET /api/v1/graph/evidence": ("object", "metadata result"),
     "GET /api/v1/graph/explain": ("object", "metadata result"),
     "GET /api/v1/investigation/version": ("object", "schema_version ui_version"),
+    "GET /api/agent-observatory/repositories": ("object", "as_of pagination repositories stream_cursor"),
+    "GET /api/agent-observatory/runs": ("object", "as_of pagination runs stream_cursor"),
+    "GET /api/agent-observatory/runs/{run_key}/events": ("object", "as_of events pagination run_key stream_cursor"),
+    "GET /api/agent-observatory/worktrees": ("object", "as_of pagination stream_cursor worktrees"),
+    "GET /api/agent-runs": ("object", "as_of pagination runs stream_cursor"),
+    "GET /api/agent-runs/{run_key}/events": ("object", "as_of events pagination run_key stream_cursor"),
+    "GET /api/recurring-error-comparison": ("object", "baseline_from baseline_to candidate_cap candidate_rows candidate_window_truncated comparisons focal_from focal_to privacy_policy results_truncated"),
+    "GET /api/repositories": ("object", "as_of pagination repositories stream_cursor"),
+    "GET /api/repositories/{repository_id}/worktrees": ("object", "as_of pagination stream_cursor worktrees"),
     "GET /api/version": ("object", "capabilities compose_container compose_project compose_service database_fingerprint deployment_id fleet_allowlist instance_id schema_version version"),
     "GET /v1/integration/identity": ("object", "api_version auth contract_version product product_version route_support server_id streams"),
     "POST /api/artifact-evidence": ("object", "cortexLogId event inserted"),
