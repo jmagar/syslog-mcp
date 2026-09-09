@@ -28,6 +28,7 @@ use thiserror::Error;
 /// - `ShellHistory` → `"shell-history"` (local shell history backfill)
 /// - `AgentCommand` → `"agent-command"` (AI agent-launched shell command spool)
 /// - `FileTail` → `"file-tail"` (Cortex-managed local file-tail ingest)
+/// - `AgentFileTail` → `"agent-file-tail"` (authenticated fleet-agent file tail)
 ///
 /// **History:** prior versions of this contract used `snake_case` with a
 /// bare `Syslog` variant. Both were corrected during the cross-cutting audit
@@ -47,6 +48,7 @@ pub enum SourceKind {
     ShellHistory,
     AgentCommand,
     FileTail,
+    AgentFileTail,
 }
 
 impl SourceKind {
@@ -54,7 +56,7 @@ impl SourceKind {
     /// iteration, [`SourceKind::from_wire`], and MCP schema `enum` generation —
     /// keeps the kebab-case list from drifting between the enum, the JSON
     /// schema, and validation code.
-    pub const ALL: [SourceKind; 11] = [
+    pub const ALL: [SourceKind; 12] = [
         SourceKind::SyslogUdp,
         SourceKind::SyslogTcp,
         SourceKind::DockerStream,
@@ -66,6 +68,7 @@ impl SourceKind {
         SourceKind::ShellHistory,
         SourceKind::AgentCommand,
         SourceKind::FileTail,
+        SourceKind::AgentFileTail,
     ];
 
     /// Canonical kebab-case wire names for every variant, in [`SourceKind::ALL`]
@@ -91,6 +94,7 @@ impl SourceKind {
             SourceKind::ShellHistory => "shell-history",
             SourceKind::AgentCommand => "agent-command",
             SourceKind::FileTail => "file-tail",
+            SourceKind::AgentFileTail => "agent-file-tail",
         }
     }
 

@@ -87,6 +87,7 @@ no-match, §7). Renaming an existing value is a major version bump.
 | `shell-history` | `src/command_log.rs` | Local shell history backfill, currently zsh extended history |
 | `agent-command` | `src/command_log.rs` | AI agent-launched shell commands imported from a private JSONL spool |
 | `file-tail` | `src/file_tail/supervisor.rs` | Cortex-managed local file tails configured in `file-tails.json` |
+| `agent-file-tail` | `src/agent/file_tail.rs` | Authenticated file tails forwarded by a fleet agent |
 
 **Removed / renamed during reconciliation:**
 
@@ -125,6 +126,7 @@ percent-encoded as required.
 | `shell-history` | `shell-history://<hostname>/<user>/<shell>` | `shell-history://devhost/jmagar/zsh` |
 | `agent-command` | `agent-command://<hostname>/<agent>/<session_id>` | `agent-command://devhost/claude-code/019e588f` |
 | `file-tail` | `file-tail://<hostname>/<source_id>` | `file-tail://edgehost/swag-access` |
+| `agent-file-tail` | `agent-file-tail://<hostname>/<source_id>` | `agent-file-tail://devhost/app-log` |
 
 ### Notes on the `agent://` authority
 

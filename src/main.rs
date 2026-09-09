@@ -618,13 +618,15 @@ async fn serve_mcp() -> Result<()> {
     info!("Receipt-backed syslog forward receiver mounted at /v1/syslog-forward");
     app = app.merge(runtime.shell_history_router());
     info!("Shell-history forward receiver mounted at /v1/shell-history");
+    app = app.merge(runtime.agent_file_tail_router());
+    info!("Agent file-tail receiver mounted at /v1/file-tails");
     app = app.merge(web_app::router());
     info!("Investigation workspace mounted under /app");
     if runtime.config.mcp.api_token.is_none() && !runtime.config.mcp.host.starts_with("127.") {
         tracing::warn!(
             bind = %runtime.config.mcp.bind_addr(),
-            "OTLP /v1/logs, heartbeat /v1/heartbeats, and agent-command forwarding \
-             /v1/agent-commands are mounted WITHOUT authentication on a non-loopback bind. \
+            "OTLP /v1/logs, heartbeat /v1/heartbeats, agent-command forwarding \
+             /v1/agent-commands, and agent file tails /v1/file-tails are mounted WITHOUT authentication on a non-loopback bind. \
              Anyone reachable on this address can write telemetry. \
              Set CORTEX_TOKEN to require Bearer auth."
         );
