@@ -35,6 +35,7 @@ pub(crate) mod skill_assessment;
 pub(crate) use filetail as file_tail;
 pub mod heartbeat;
 pub mod heartbeat_agent;
+pub(crate) mod hostname;
 pub mod inventory;
 pub(crate) mod llm_backend;
 pub mod logging;

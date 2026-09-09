@@ -12,7 +12,7 @@ use crate::db::{
 };
 use crate::git_observer::discovery::{DiscoveryOptions, discover_repositories};
 use crate::git_observer::reconcile::{ReconcileOptions, reconcile_one_repository};
-use crate::scanner::local_hostname;
+use crate::hostname::local_hostname;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;

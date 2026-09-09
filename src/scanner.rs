@@ -18,6 +18,7 @@ use crate::db::{
     enforce_storage_budget, insert_hook_events_in_tx, insert_logs_batch_in_tx,
     insert_mcp_events_in_tx, insert_skill_events_in_tx,
 };
+use crate::hostname::local_hostname;
 use crate::ingest_metadata::bounded_metadata_json;
 use crate::receiver::enrichment::{project_from_transcript_path, scrub_ai_message};
 use crate::scanner::hook_events::extract_claude_hook_events;
@@ -2438,53 +2439,6 @@ fn normalize_timestamp(timestamp: Option<&str>) -> Result<String> {
         None => Ok(chrono::Utc::now()
             .format("%Y-%m-%dT%H:%M:%S%.3fZ")
             .to_string()),
-    }
-}
-
-/// Warn once per process when the hostname cannot be resolved. Rows filed under
-/// the literal `localhost` do not correspond to any fleet host, so correlation
-/// queries for the real host silently return nothing — worth one loud line.
-fn warn_unresolved_hostname() {
-    static WARNED: std::sync::Once = std::sync::Once::new();
-    WARNED.call_once(|| {
-        tracing::warn!(
-            "could not resolve a hostname (gethostname failed and $HOSTNAME is unset); \
-             falling back to \"localhost\" — forwarded rows will be misattributed"
-        );
-    });
-}
-
-pub(crate) fn local_hostname() -> String {
-    #[cfg(unix)]
-    {
-        let mut buf = vec![0u8; 256];
-        let result = unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) };
-        if result == 0 {
-            let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
-            if let Ok(name) = std::str::from_utf8(&buf[..len]) {
-                let name = name.trim();
-                if !name.is_empty() && name != "localhost" {
-                    return name.to_string();
-                }
-            }
-        }
-        crate::env::var("HOSTNAME").unwrap_or_else(|_| {
-            warn_unresolved_hostname();
-            "localhost".to_string()
-        })
-    }
-    #[cfg(not(unix))]
-    {
-        // On Windows use COMPUTERNAME; fall back to HOSTNAME then "localhost".
-        for var in &["COMPUTERNAME", "HOSTNAME"] {
-            if let Ok(name) = crate::env::var(var) {
-                let name = name.trim().to_string();
-                if !name.is_empty() && name != "localhost" {
-                    return name;
-                }
-            }
-        }
-        "localhost".to_string()
     }
 }
 

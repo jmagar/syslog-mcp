@@ -82,7 +82,7 @@ impl AiTranscriptForwardConfig {
             roots: scanner::default_transcript_roots(),
             target,
             token,
-            hostname: scanner::local_hostname(),
+            hostname: crate::hostname::local_hostname(),
             checkpoint_path,
             poll_interval: Duration::from_secs(15),
         }

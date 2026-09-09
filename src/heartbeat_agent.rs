@@ -536,7 +536,7 @@ impl HeartbeatCollector {
             schema_version: 1,
             host: HeartbeatHost {
                 host_id,
-                hostname: hostname(),
+                hostname: crate::hostname::local_hostname(),
                 os: std::env::consts::OS.to_string(),
                 kernel: kernel_release(),
                 architecture: std::env::consts::ARCH.to_string(),
@@ -1488,7 +1488,7 @@ pub async fn run_agent(config: HeartbeatAgentConfig) -> Result<()> {
                 .unwrap_or_else(|| DEFAULT_TARGET.to_string()),
             syslog_forward_token: config.token.clone(),
             syslog_forward_spool_path: config.syslog_forward_spool_path.clone(),
-            hostname: hostname(),
+            hostname: crate::hostname::local_hostname(),
             ai_transcripts: config.ai_transcripts,
             ai_transcript_target: config
                 .target
@@ -1845,63 +1845,6 @@ fn bounded_probe_error(name: &str, error: &anyhow::Error) -> String {
     let mut text = format!("{name}: {error}");
     text.truncate(240);
     text
-}
-
-fn hostname() -> String {
-    if let Ok(hostname) = crate::env::var("HOSTNAME")
-        && !hostname.is_empty()
-    {
-        return hostname;
-    }
-    #[cfg(unix)]
-    {
-        let mut buffer = [0_u8; 256];
-        if unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) } == 0 {
-            let end = buffer
-                .iter()
-                .position(|byte| *byte == 0)
-                .unwrap_or(buffer.len());
-            let name = String::from_utf8_lossy(&buffer[..end]).trim().to_string();
-            if !name.is_empty() {
-                return name;
-            }
-        }
-    }
-    match std::fs::read_to_string("/proc/sys/kernel/hostname") {
-        Ok(name) => {
-            let name = name.trim().to_string();
-            if !name.is_empty() {
-                return name;
-            }
-        }
-        Err(error) => tracing::debug!(error = %error, "Linux proc hostname unavailable"),
-    }
-    #[cfg(unix)]
-    if let Some(name) = unix_hostname() {
-        return name;
-    }
-    tracing::warn!("could not determine hostname; using 'unknown'");
-    "unknown".to_string()
-}
-
-#[cfg(unix)]
-fn unix_hostname() -> Option<String> {
-    let mut bytes = [0_u8; 256];
-    // SAFETY: `bytes` is writable for its full advertised length. gethostname
-    // writes at most that many bytes; we find the first NUL (or use the full
-    // buffer) before validating UTF-8.
-    if unsafe { libc::gethostname(bytes.as_mut_ptr().cast(), bytes.len()) } != 0 {
-        return None;
-    }
-    let len = bytes
-        .iter()
-        .position(|byte| *byte == 0)
-        .unwrap_or(bytes.len());
-    std::str::from_utf8(&bytes[..len])
-        .ok()
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(ToOwned::to_owned)
 }
 
 fn kernel_release() -> Option<String> {
