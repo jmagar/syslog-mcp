@@ -22,7 +22,7 @@ environment = {
     "LIVE_RUN_ID": os.environ["LIVE_RUN_ID"],
     "LIVE_RUN_ROOT": os.environ["LIVE_RUN_ROOT"],
 }
-for name in ("DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH"):
+for name in ("DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH", "DOCKER_CONFIG"):
     if name in os.environ:
         environment[name] = os.environ[name]
 os.execvpe(command[0], command, environment)
