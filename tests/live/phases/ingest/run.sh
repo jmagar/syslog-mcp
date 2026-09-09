@@ -218,6 +218,37 @@ live_ingest_http_json_lanes() {
   live_ingest_case heartbeat.state pass artifacts/heartbeat-host-state-rest.json
 }
 
+# Forwarded syslog is the replayable sibling of the best-effort TCP listener:
+# it must commit the frame, echo a stable receipt, refuse a reused key that
+# carries different content, and never store a second copy on retry.
+live_ingest_syslog_forward() {
+  local marker instance key body conflict response status
+  marker="$(live_ingest_marker syslog-forward 15)"; instance="$(live_ingest_identity syslog-forward 15)"; key="$instance-1"
+  body="$(jq -cn --arg instance "$instance" --arg key "$key" --arg m "$marker" '{records:[{source_instance:$instance,source_epoch:1,sequence:1,idempotency_key:$key,observed_at:"2026-08-27T12:00:08Z",line:("<134>1 2026-08-27T12:00:08Z "+$instance+" forwarder 15 ID54 - "+$m)}],gaps:[]}')"
+  response="$LIVE_RUN_ROOT/artifacts/ingest-syslog-forward-post.json"
+  live_budget_add fixture_records 1; live_budget_add fixture_bytes "${#body}"
+  status="$(live_ingest_curl_status "$response" -X POST -H "Authorization: Bearer $LIVE_CORTEX_TOKEN" -H 'Content-Type: application/json' --data-binary "$body" "$(live_ingest_http /v1/syslog-forward)")"
+  if [[ "$status" != 200 ]]; then live_die "syslog-forward ingest returned HTTP $status"; return 1; fi
+  jq -e --arg key "$key" '.receipts==[$key]' "$response" >/dev/null
+  live_ingest_wait_marker "$marker" syslog-forward 15
+  # The forwarder identity is server-derived: a hostname claimed in the frame
+  # never becomes the stored identity.
+  jq -e --arg claimed "$instance" '.count==1 and .logs[0].hostname!=$claimed and (.logs[0].hostname|startswith("agent-"))' "$LIVE_RUN_ROOT/artifacts/ingest-syslog-forward-15-rest.json" >/dev/null
+  # Replay is the point of the receipt: an identical batch is acknowledged
+  # without a second row.
+  [[ "$(live_ingest_curl_status "$LIVE_RUN_ROOT/artifacts/ingest-syslog-forward-replay.json" -X POST -H "Authorization: Bearer $LIVE_CORTEX_TOKEN" -H 'Content-Type: application/json' --data-binary "$body" "$(live_ingest_http /v1/syslog-forward)")" == 200 ]]
+  jq -e --arg key "$key" '.receipts==[$key]' "$LIVE_RUN_ROOT/artifacts/ingest-syslog-forward-replay.json" >/dev/null
+  live_ingest_rest_search "$marker" "$LIVE_RUN_ROOT/artifacts/ingest-syslog-forward-replay-search.json"
+  jq -e '.count==1' "$LIVE_RUN_ROOT/artifacts/ingest-syslog-forward-replay-search.json" >/dev/null
+  # A reused key carrying different content is a client defect, not a retry.
+  conflict="$(jq -c '.records[0].line += "-conflict"' <<<"$body")"
+  [[ "$(live_ingest_curl_status "$LIVE_RUN_ROOT/artifacts/ingest-syslog-forward-conflict.json" -X POST -H "Authorization: Bearer $LIVE_CORTEX_TOKEN" -H 'Content-Type: application/json' --data-binary "$conflict" "$(live_ingest_http /v1/syslog-forward)")" == 409 ]]
+  [[ "$(live_ingest_curl_status "$LIVE_RUN_ROOT/artifacts/ingest-syslog-forward-unauth.json" -X POST -H 'Content-Type: application/json' --data-binary "$body" "$(live_ingest_http /v1/syslog-forward)")" == 401 ]]
+  [[ "$(live_ingest_curl_status "$LIVE_RUN_ROOT/artifacts/ingest-syslog-forward-malformed.json" -X POST -H "Authorization: Bearer $LIVE_CORTEX_TOKEN" -H 'Content-Type: application/json' --data-binary '{' "$(live_ingest_http /v1/syslog-forward)")" =~ ^(400|422)$ ]]
+  live_budget_add fixture_records 3; live_budget_add connections 5
+  live_ingest_case http.syslog-forward pass artifacts/ingest-syslog-forward-post.json
+}
+
 live_ingest_otlp() {
   live_ingest_bound_producer otlp 15 22000000 90
   local signal status fixture_dir="$LIVE_RUN_ROOT/otlp-fixtures" otlp_id baseline_logs baseline_metrics
@@ -398,6 +429,7 @@ live_ingest_matrix_run() {
   live_ingest_syslog
   live_ingest_downtime
   live_ingest_http_json_lanes
+  live_ingest_syslog_forward
   live_ingest_otlp
   live_ingest_file_tail
   live_ingest_inventory_cli
@@ -438,6 +470,9 @@ live_ingest_surface_results() {
       ingest.post-v1-ai-transcripts/semantic-positive) evidence=artifacts/ingest-ai-transcript-post.json ;;
       ingest.post-v1-ai-transcripts/validation-negative) evidence=artifacts/ingest-ai-transcript-malformed.json ;;
       ingest.post-v1-ai-transcripts/authorization) evidence=artifacts/ingest-ai-transcript-unauth.json ;;
+      ingest.post-v1-syslog-forward/semantic-positive) evidence=artifacts/ingest-syslog-forward-post.json ;;
+      ingest.post-v1-syslog-forward/validation-negative) evidence=artifacts/ingest-syslog-forward-malformed.json ;;
+      ingest.post-v1-syslog-forward/authorization) evidence=artifacts/ingest-syslog-forward-unauth.json ;;
       ingest.post-v1-logs/semantic-positive) evidence=artifacts/otlp-logs-response.pb ;;
       ingest.post-v1-logs/validation-negative) evidence=artifacts/otlp-logs-malformed.json ;;
       ingest.post-v1-logs/authorization) evidence=artifacts/otlp-logs-unauth.json ;;

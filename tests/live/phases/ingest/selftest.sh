@@ -3,7 +3,7 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/../../../.." && pwd)"
 bash -n "$root/tests/live/phases/ingest/run.sh"
 bash -n "$root/tests/live/phases/ingest/generate.sh"
-jq -e '.schema=="cortex-live-ingest-matrix-v1" and (.lanes|length)==15 and ([.lanes[].id]|unique|length)==15 and all(.lanes[];.durability|length>0)' "$root/tests/live/fixtures/ingest/matrix.json" >/dev/null
+jq -e '.schema=="cortex-live-ingest-matrix-v1" and (.lanes|length)==16 and ([.lanes[].id]|unique|length)==16 and all(.lanes[];.durability|length>0)' "$root/tests/live/fixtures/ingest/matrix.json" >/dev/null
 grep -q 'live_ingest_mcp_search' "$root/tests/live/phases/ingest/run.sh"
 grep -q 'live_ingest_rest_search' "$root/tests/live/phases/ingest/run.sh"
 if grep -Eq 'sqlite3|cortex\.db' "$root/tests/live/phases/ingest/run.sh"; then echo 'direct DB access is forbidden' >&2; exit 1; fi

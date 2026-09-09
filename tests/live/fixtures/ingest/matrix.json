@@ -7,6 +7,7 @@
     {"id":"syslog-tcp-rfc3164","transport":"tcp","durability":"durable"},
     {"id":"syslog-tcp-rfc5424","transport":"tcp","durability":"durable"},
     {"id":"syslog-tcp-framing","transport":"tcp","durability":"durable"},
+    {"id":"syslog-forward","transport":"http-json","durability":"receipted"},
     {"id":"otlp-logs","transport":"http-protobuf","durability":"lossy"},
     {"id":"otlp-metrics","transport":"http-protobuf","durability":"durable"},
     {"id":"otlp-traces","transport":"http-protobuf","durability":"durable"},
