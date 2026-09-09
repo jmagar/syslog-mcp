@@ -1,3 +1,9 @@
+---
+title: Skill reflection with Codex app-server
+created: 2026-09-08
+updated: 2026-09-09
+---
+
 # Skill reflection with Codex app-server
 
 `cortex assess skill` uses Codex app-server over stdio, not Gemini. The
