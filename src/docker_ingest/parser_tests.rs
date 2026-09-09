@@ -87,6 +87,23 @@ fn stderr_frame_uses_inner_info_level_when_present() {
 }
 
 #[test]
+fn stderr_frame_treats_postgres_log_level_as_info() {
+    let entry = log_output_to_entry(
+        "db-host",
+        &meta(),
+        LogOutput::StdErr {
+            message: Bytes::from_static(
+                b"2026-09-07T23:05:23Z 2026-09-07 23:05:23 EDT [27] LOG: checkpoint starting\n",
+            ),
+        },
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(entry.severity, "info");
+}
+
+#[test]
 fn stderr_frame_uses_inner_ansi_info_level_when_present() {
     let entry = log_output_to_entry(
         "app-host-b",
@@ -275,4 +292,13 @@ fn event(action: &str) -> EventMessage {
         time_nano: Some(1_777_942_923_123_456_789),
         ..Default::default()
     }
+}
+
+#[test]
+fn ordinary_log_word_is_not_a_postgres_severity_marker() {
+    assert_eq!(infer_docker_severity("cannot open log file"), None);
+    assert_eq!(
+        infer_docker_severity("log writer ERROR database unavailable"),
+        Some("err")
+    );
 }
