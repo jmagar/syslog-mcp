@@ -18,6 +18,7 @@ use super::syslog_sender::{
 };
 use crate::docker_ingest::{
     docker_event_severity, docker_event_source_action, docker_event_timestamp,
+    infer_docker_severity,
 };
 
 const CONTAINER_POLL_SECS: u64 = 30;
@@ -254,11 +255,7 @@ async fn follow_container(
         if msg.is_empty() {
             continue;
         }
-        let pri = if is_stderr {
-            PRI_LOCAL0_WARN
-        } else {
-            PRI_LOCAL0_INFO
-        };
+        let pri = docker_log_pri(is_stderr, msg);
         let prefix = if is_stderr {
             &stderr_prefix
         } else {
@@ -282,6 +279,21 @@ async fn follow_container(
         sender.try_send_from(&format!("docker:{}", container.id), line);
     }
     Ok(())
+}
+
+fn docker_log_pri(is_stderr: bool, message: &str) -> u8 {
+    match infer_docker_severity(message) {
+        Some("emerg") => local0_pri(0),
+        Some("alert") => local0_pri(1),
+        Some("crit") => local0_pri(2),
+        Some("err") => local0_pri(3),
+        Some("warning") => local0_pri(4),
+        Some("notice") => local0_pri(5),
+        Some("info") => PRI_LOCAL0_INFO,
+        Some("debug") => local0_pri(7),
+        _ if is_stderr => PRI_LOCAL0_WARN,
+        _ => PRI_LOCAL0_INFO,
+    }
 }
 
 async fn list_containers(docker: &Docker) -> Result<Vec<ContainerInfo>> {
