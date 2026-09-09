@@ -170,6 +170,44 @@ fn long_compose_app_name_still_has_structured_metadata() {
 }
 
 #[test]
+fn forwarded_stderr_uses_embedded_info_severity() {
+    assert_eq!(
+        docker_log_pri(
+            true,
+            "2026-09-07 23:06:45,636 - INFO - plex: Log Stream started"
+        ),
+        PRI_LOCAL0_INFO
+    );
+}
+
+#[test]
+fn forwarded_stderr_uses_embedded_postgres_log_severity() {
+    assert_eq!(
+        docker_log_pri(
+            true,
+            "2026-09-07 23:05:23.496 EDT [27] LOG: checkpoint starting"
+        ),
+        PRI_LOCAL0_INFO
+    );
+}
+
+#[test]
+fn forwarded_stderr_preserves_explicit_error_severity() {
+    assert_eq!(
+        docker_log_pri(true, "2026-09-07T23:06:00Z ERROR database unavailable"),
+        local0_pri(3)
+    );
+}
+
+#[test]
+fn forwarded_unstructured_stderr_remains_warning() {
+    assert_eq!(
+        docker_log_pri(true, "connection unexpectedly closed"),
+        PRI_LOCAL0_WARN
+    );
+}
+
+#[test]
 fn docker_die_event_is_rendered_with_lifecycle_metadata() {
     let attributes = HashMap::from([
         ("name".to_string(), "plex".to_string()),
@@ -247,4 +285,22 @@ fn forwarded_event_severity_matches_canonical_mapping() {
 fn clean_event_stream_eof_is_a_restartable_error() {
     let error = event_stream_ended().unwrap_err();
     assert!(error.to_string().contains("ended unexpectedly"));
+}
+
+#[test]
+fn forwarded_log_severity_preserves_structured_levels_and_fallbacks() {
+    for (stderr, message, expected) in [
+        (
+            false,
+            r#"{"level":"error","message":"database unavailable"}"#,
+            local0_pri(3),
+        ),
+        (true, "\u{1b}[32mINFO\u{1b}[0m listening", PRI_LOCAL0_INFO),
+        (true, "cannot open log file", PRI_LOCAL0_WARN),
+        (true, "log writer ERROR database unavailable", local0_pri(3)),
+        (false, "connection accepted", PRI_LOCAL0_INFO),
+        (true, "level=debug cache lookup", local0_pri(7)),
+    ] {
+        assert_eq!(docker_log_pri(stderr, message), expected, "{message}");
+    }
 }

@@ -256,7 +256,7 @@ fn docker_event_message(action: &str, meta: &ContainerMeta, actor: &EventActor) 
     parts.join(" ")
 }
 
-fn infer_docker_severity(message: &str) -> Option<&'static str> {
+pub(crate) fn infer_docker_severity(message: &str) -> Option<&'static str> {
     infer_json_severity(message).or_else(|| infer_text_severity(&strip_ansi(message)))
 }
 
@@ -293,9 +293,16 @@ fn infer_text_severity(message: &str) -> Option<&'static str> {
         }
     }
 
-    for token in normalized.split(|c: char| !c.is_ascii_alphanumeric()) {
-        if let Some(level) = normalize_level(token) {
-            return Some(level);
+    for word in normalized.split_whitespace() {
+        // PostgreSQL emits LOG: as an informational severity marker. Do not
+        // treat the ordinary word "log" in message text as a severity.
+        if word == "LOG:" {
+            return Some("info");
+        }
+        for token in word.split(|c: char| !c.is_ascii_alphanumeric()) {
+            if let Some(level) = normalize_level(token) {
+                return Some(level);
+            }
         }
     }
 

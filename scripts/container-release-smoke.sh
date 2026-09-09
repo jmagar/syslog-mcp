@@ -25,6 +25,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
+emit_startup_diagnostics() {
+  echo "ERROR: release-smoke health check failed for ${container}" >&2
+  docker inspect --format '{{json .State}}' "$container" 2>/dev/null >&2 || true
+  docker logs --tail 200 "$container" 2>&1 \
+    | sed -E \
+      -e 's/(Bearer )[A-Za-z0-9._~+\/-]+=*/\1[REDACTED]/g' \
+      -e 's/((TOKEN|KEY|SECRET|PASSWORD)=)[^[:space:]]+/\1[REDACTED]/g' \
+    >&2 || true
+}
+
 docker run -d --name "$container" \
   -e CORTEX_API_TOKEN=release-smoke-api \
   -e CORTEX_TOKEN=release-smoke-mcp \
@@ -44,11 +54,18 @@ udp_port=$(docker port "$container" 1514/udp | sed 's/.*://')
 # authority presented to RMCP's DNS-rebinding protection.
 http_host='127.0.0.1:3100'
 
+healthy=false
 for _ in $(seq 1 60); do
-  curl -fsS -H "Host: ${http_host}" "http://127.0.0.1:${http_port}/health" >/dev/null && break
+  if curl -fsS -H "Host: ${http_host}" "http://127.0.0.1:${http_port}/health" >/dev/null; then
+    healthy=true
+    break
+  fi
   sleep 1
 done
-curl -fsS -H "Host: ${http_host}" "http://127.0.0.1:${http_port}/health" >/dev/null
+if [[ "$healthy" != true ]]; then
+  emit_startup_diagnostics
+  exit 1
+fi
 
 printf '<13>Aug 29 00:00:00 release-smoke smokeapp: %stcp\n' "$marker" | nc -w 2 127.0.0.1 "$tcp_port"
 printf '<13>Aug 29 00:00:00 release-smoke smokeapp: %sudp\n' "$marker" | nc -u -w 2 127.0.0.1 "$udp_port"

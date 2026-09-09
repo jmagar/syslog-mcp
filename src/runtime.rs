@@ -608,36 +608,37 @@ impl RuntimeCore {
     /// [`MaintenanceHandles::syslog_monitor`] so it participates in the
     /// cooperative shutdown drain.
     pub async fn start_syslog(&self, handles: &mut MaintenanceHandles) -> Result<()> {
-        let listener_handles = receiver::start_listeners(
+        let listener_handles = receiver::start_listeners_with_shutdown(
             self.config.receiver.clone(),
             self.ingest.clone(),
             Arc::clone(&self.observability),
+            handles.token.clone(),
         )
         .await?;
 
         let fatal_shutdown = self.fatal_shutdown.clone();
-        let maintenance_shutdown = handles.token.clone();
+        let shutdown = handles.token.clone();
         let monitor = tokio::spawn(async move {
             let mut udp = listener_handles.udp;
             let mut tcp = listener_handles.tcp;
             let protocol = tokio::select! {
-                _ = maintenance_shutdown.cancelled() => {
-                    // The listener supervisors deliberately run forever while
-                    // serving.  They are owned by this monitor, so a normal
-                    // process shutdown must stop and join them instead of
-                    // waiting for the monitor's "unexpected exit" branch.
-                    // Without this branch the monitor alone consumed the
-                    // entire maintenance shutdown budget and made every clean
-                    // container stop look like an unclean runtime shutdown.
-                    udp.abort();
-                    tcp.abort();
-                    let _ = tokio::join!(udp, tcp);
-                    tracing::debug!("syslog listeners stopped for maintenance shutdown");
+                biased;
+                _ = shutdown.cancelled() => {
+                    // Both supervisors receive this token and abort their
+                    // active recv/accept task before returning. Join them so
+                    // graceful shutdown does not leave detached listeners or
+                    // misclassify their expected exit as a fatal outage.
+                    let (udp_result, tcp_result) = tokio::join!(udp, tcp);
+                    for (listener, result) in [("udp", udp_result), ("tcp", tcp_result)] {
+                        if let Err(error) = result {
+                            tracing::warn!(listener, error = %error,
+                                "syslog listener supervisor failed during shutdown");
+                        }
+                    }
+                    tracing::debug!("syslog listener monitor stopped cleanly");
                     return;
                 }
                 res = &mut udp => {
-                    tcp.abort();
-                    let _ = tcp.await;
                     match res {
                         Ok(()) => tracing::error!(
                             "syslog supervisor task (udp) exited unexpectedly — \
@@ -649,11 +650,11 @@ impl RuntimeCore {
                              listener will not restart: {}", e
                         ),
                     }
+                    tcp.abort();
+                    let _ = tcp.await;
                     "udp"
                 }
                 res = &mut tcp => {
-                    udp.abort();
-                    let _ = udp.await;
                     match res {
                         Ok(()) => tracing::error!(
                             "syslog supervisor task (tcp) exited unexpectedly — \
@@ -665,6 +666,8 @@ impl RuntimeCore {
                              listener will not restart: {}", e
                         ),
                     }
+                    udp.abort();
+                    let _ = udp.await;
                     "tcp"
                 }
             };
