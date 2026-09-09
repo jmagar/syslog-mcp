@@ -49,3 +49,27 @@ fn repository_contract_keeps_pinned_validation_without_private_runner() {
         !workflow.contains("uses: dinglebear-ai/workflows/.github/workflows/fleet-contract.yml")
     );
 }
+
+#[test]
+fn hosted_live_smoke_explicitly_opts_into_isolated_linux_topology() {
+    let workflow = include_str!("../.github/workflows/ci.yml");
+    let smoke = workflow
+        .split("  mcp-integration:")
+        .nth(1)
+        .unwrap()
+        .split("  deployment-contract:")
+        .next()
+        .unwrap();
+    for required in [
+        "runs-on: ubuntu-24.04",
+        "github.event.pull_request.head.repo.full_name == github.repository",
+        "LIVE_PLATFORM_POLICY: linux-full",
+        "CORTEX_LIVE_DIND_AUTHORIZED: \"1\"",
+        "bash tests/live/run-profile.sh smoke",
+    ] {
+        assert!(
+            smoke.contains(required),
+            "missing smoke requirement: {required}"
+        );
+    }
+}

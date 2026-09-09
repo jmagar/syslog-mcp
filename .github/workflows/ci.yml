@@ -341,6 +341,10 @@ jobs:
       - name: Run fail-closed live smoke
         env:
           LIVE_RUNS_ROOT: ${{ github.workspace }}/.live-runs
+          # This same-repository job runs on a disposable GitHub-hosted VM.
+          # Match the isolated Linux topology used by live-qualification.yml.
+          LIVE_PLATFORM_POLICY: linux-full
+          CORTEX_LIVE_DIND_AUTHORIZED: "1"
         run: bash tests/live/run-profile.sh smoke
 
       - name: Reconcile leases after success, failure, or cancellation
