@@ -31,6 +31,7 @@ pub fn ingest_source_kind_health(
                     WHEN source_ip LIKE 'agent-command://%' THEN 'agent-command'
                     WHEN source_ip LIKE 'shell-history://%' THEN 'shell-history'
                     WHEN source_ip LIKE 'file-tail://%' THEN 'file-tail'
+                    WHEN source_ip LIKE 'agent-file-tail://%' THEN 'agent-file-tail'
                     ELSE json_extract(metadata_json, '$.source_kind')
                 END AS source_kind,
                 received_at

@@ -539,6 +539,15 @@ impl RuntimeCore {
         crate::shell_history_ingest::router(state)
     }
 
+    pub fn agent_file_tail_router(&self) -> axum::Router {
+        let state = crate::agent_file_tail_ingest::AgentFileTailIngestState::new(
+            Arc::clone(&self.pool),
+            self.config.mcp.api_token.0.clone(),
+            self.auth_policy.clone(),
+        );
+        crate::agent_file_tail_ingest::router(state)
+    }
+
     pub fn mcp_state(&self) -> mcp::AppState {
         mcp::AppState {
             service: self.service(),
