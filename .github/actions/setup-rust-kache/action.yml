@@ -60,12 +60,13 @@ runs:
         need_install=false
         command -v cc >/dev/null 2>&1 || need_install=true
         command -v pkg-config >/dev/null 2>&1 || need_install=true
+        command -v rg >/dev/null 2>&1 || need_install=true
         pkg-config --exists openssl 2>/dev/null || need_install=true
         pkg-config --exists dbus-1 2>/dev/null || need_install=true
         if [ "$need_install" = false ]; then
           exit 0
         fi
-        packages="build-essential pkg-config libssl-dev libdbus-1-dev"
+        packages="build-essential pkg-config libssl-dev libdbus-1-dev ripgrep"
         if command -v apt-get >/dev/null 2>&1; then
           if [ "$(id -u)" = "0" ]; then
             apt-get update
