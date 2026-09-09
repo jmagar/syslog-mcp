@@ -4,6 +4,7 @@ use parking_lot::Mutex;
 use std::time::Duration;
 
 use anyhow::Result;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::config::{ReceiverConfig, StorageConfig};
@@ -64,6 +65,7 @@ async fn supervise_listener<F, Fut>(
     name: &'static str,
     observability: Arc<RuntimeObservability>,
     set_state: fn(&RuntimeObservability, ListenerState),
+    shutdown: CancellationToken,
     make_listener: F,
 ) where
     F: Fn() -> Fut + Send + 'static,
@@ -73,7 +75,22 @@ async fn supervise_listener<F, Fut>(
     loop {
         set_state(&observability, ListenerState::Alive);
         let started = tokio::time::Instant::now();
-        let outcome = tokio::spawn(make_listener()).await;
+        // A stopped supervisor must never detach its socket-owning child.
+        let mut listener = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(make_listener()));
+        let outcome = tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => {
+                // UDP/TCP listeners wait in recv/accept and do not own the
+                // runtime token. Abort their per-attempt task to close the
+                // socket before returning from this supervisor.
+                listener.abort();
+                let _ = listener.await;
+                set_state(&observability, ListenerState::Down);
+                tracing::debug!(listener = name, "syslog listener supervisor stopped cleanly");
+                return;
+            }
+            outcome = &mut listener => outcome,
+        };
         set_state(&observability, ListenerState::Down);
         match outcome {
             Ok(Ok(())) => {
@@ -99,7 +116,14 @@ async fn supervise_listener<F, Fut>(
             backoff_secs = backoff.as_secs(),
             "restarting listener after backoff"
         );
-        tokio::time::sleep(backoff).await;
+        tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => {
+                tracing::debug!(listener = name, "syslog listener supervisor stopped during backoff");
+                return;
+            }
+            _ = tokio::time::sleep(backoff) => {}
+        }
         backoff = (backoff * 2).min(LISTENER_BACKOFF_MAX);
         if backoff == LISTENER_BACKOFF_MAX {
             error!(
@@ -128,6 +152,18 @@ pub(crate) async fn start_listeners(
     ingest: ingest::IngestTx,
     observability: Arc<RuntimeObservability>,
 ) -> Result<ListenerHandles> {
+    start_listeners_with_shutdown(config, ingest, observability, CancellationToken::new()).await
+}
+
+/// Start supervised syslog listeners that terminate when `shutdown` is
+/// cancelled. RuntimeCore uses its maintenance token here so graceful server
+/// shutdown owns the otherwise unbounded listener loops.
+pub(crate) async fn start_listeners_with_shutdown(
+    config: ReceiverConfig,
+    ingest: ingest::IngestTx,
+    observability: Arc<RuntimeObservability>,
+    shutdown: CancellationToken,
+) -> Result<ListenerHandles> {
     let bind_addr = config.bind_addr();
     let allowed_cidrs = Arc::new(listener::parse_allowed_cidrs(&config.allowed_source_cidrs)?);
 
@@ -139,6 +175,7 @@ pub(crate) async fn start_listeners(
         "udp_syslog",
         Arc::clone(&observability),
         |obs, state| obs.set_udp_listener_state(state),
+        shutdown.clone(),
         move || {
             let bind = udp_bind.clone();
             let ingest = udp_ingest.clone();
@@ -156,6 +193,7 @@ pub(crate) async fn start_listeners(
         "tcp_syslog",
         Arc::clone(&observability),
         |obs, state| obs.set_tcp_listener_state(state),
+        shutdown,
         move || {
             let bind = tcp_bind.clone();
             let ingest = tcp_ingest.clone();
