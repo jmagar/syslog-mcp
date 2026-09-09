@@ -264,7 +264,10 @@ async fn gemini_assessment_reports_child_stderr_before_stdin_pipe_error() {
         program: script.display().to_string(),
         model: "gemini-test".into(),
         source_home: Some(source.path().to_path_buf()),
-        timeout_secs: 5,
+        // The full all-features suite deliberately saturates CPU and SQLite
+        // workers. Give this ordering assertion enough scheduling headroom so
+        // it tests stderr-vs-stdin precedence, not host load.
+        timeout_secs: 30,
     };
     let large_prompt = "x".repeat(2 * 1024 * 1024);
     let err = run_gemini_assessment(&large_prompt, &config, |_| Ok(()))

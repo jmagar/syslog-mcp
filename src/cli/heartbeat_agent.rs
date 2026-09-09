@@ -18,7 +18,7 @@ impl HeartbeatAgentArgs {
             .host_id_path
             .map(PathBuf::from)
             .unwrap_or_else(default_host_id_path);
-        let mut config = HeartbeatAgentConfig::from_env(host_id_path);
+        let mut config = HeartbeatAgentConfig::from_env(host_id_path)?;
         if let Some(target) = self.target {
             config.target = Some(target);
         }

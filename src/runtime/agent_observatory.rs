@@ -15,21 +15,85 @@ use crate::db::{
 use crate::git_observer::discovery::{DiscoveryOptions, discover_repositories};
 use crate::git_observer::reconcile::{ReconcileOptions, reconcile_one_repository};
 use crate::scanner::local_hostname;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-const SOURCE_KINDS: [AgentSourceKind; 4] = [
+const SOURCE_KINDS: [AgentSourceKind; 7] = [
     AgentSourceKind::Mcp,
     AgentSourceKind::Hook,
     AgentSourceKind::Skill,
     AgentSourceKind::Llm,
+    AgentSourceKind::OtelSpan,
+    AgentSourceKind::OtelMetric,
+    AgentSourceKind::RepositoryObservation,
 ];
 
 fn source_name(kind: AgentSourceKind) -> &'static str {
     kind.as_str()
+}
+
+/// A repository-round-robin checkpoint. Reconciliation itself commits its
+/// topology, commit, and observation snapshot atomically. This cursor is
+/// deliberately advanced only after that transaction succeeds, so a crash may
+/// replay one repository but can never skip it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct GitReconcileCursor {
+    #[serde(default)]
+    after_repository: Option<String>,
+}
+
+fn decode_git_reconcile_cursor(raw: &str) -> anyhow::Result<GitReconcileCursor> {
+    if raw.is_empty() {
+        return Ok(GitReconcileCursor::default());
+    }
+    serde_json::from_str(raw).map_err(Into::into)
+}
+
+fn encode_git_reconcile_cursor(repository: &str) -> String {
+    serde_json::to_string(&GitReconcileCursor {
+        after_repository: Some(repository.to_string()),
+    })
+    .expect("Git reconcile cursor serialization cannot fail")
+}
+
+/// Load the durable Git cursor, replacing malformed legacy state with the
+/// canonical initial cursor before returning. The decode error is returned as
+/// metadata so the caller can report the repair once without retrying the same
+/// corrupt value on every reconcile interval.
+fn load_git_reconcile_cursor(
+    pool: &DbPool,
+) -> anyhow::Result<(GitReconcileCursor, Option<anyhow::Error>)> {
+    let raw = projection_cursor(pool, "git")?;
+    match decode_git_reconcile_cursor(&raw) {
+        Ok(cursor) => Ok((cursor, None)),
+        Err(decode_error) => {
+            advance_projection_cursor(pool, "git", "").map_err(|repair_error| {
+                anyhow::anyhow!(
+                    "failed to reset malformed Git cursor ({decode_error}): {repair_error}"
+                )
+            })?;
+            Ok((GitReconcileCursor::default(), Some(decode_error)))
+        }
+    }
+}
+
+fn next_repository_index(repositories: &[PathBuf], cursor: &GitReconcileCursor) -> Option<usize> {
+    if repositories.is_empty() {
+        return None;
+    }
+    cursor
+        .after_repository
+        .as_deref()
+        .and_then(|after| {
+            repositories
+                .iter()
+                .position(|path| path.display().to_string().as_str() > after)
+        })
+        .or(Some(0))
 }
 
 fn projector_retry_delay_ms(attempt: usize) -> u64 {
@@ -355,8 +419,36 @@ pub(super) fn spawn_git_reconcile(
                     tracing::warn!(path = %warning.path.display(), kind = ?warning.kind,
                         "Agent Observatory Git discovery warning");
                 }
+                let mut repositories = discovery.repositories;
+                repositories.sort_by(|left, right| left.as_os_str().cmp(right.as_os_str()));
+                let cursor_pool = Arc::clone(&pool);
+                let cursor = match tokio::task::spawn_blocking(move || {
+                    load_git_reconcile_cursor(&cursor_pool)
+                })
+                .await
+                {
+                    Ok(Ok((cursor, None))) => cursor,
+                    Ok(Ok((cursor, Some(error)))) => {
+                        healthy = false;
+                        tracing::warn!(error = %error,
+                            "Agent Observatory Git cursor was malformed and has been reset");
+                        cursor
+                    }
+                    Ok(Err(error)) => {
+                        healthy = false;
+                        tracing::error!(error = %error, "Agent Observatory Git cursor load failed");
+                        GitReconcileCursor::default()
+                    }
+                    Err(error) => {
+                        healthy = false;
+                        tracing::error!(error = %error, "Agent Observatory Git cursor load task failed");
+                        GitReconcileCursor::default()
+                    }
+                };
+                let selected = next_repository_index(&repositories, &cursor)
+                    .and_then(|index| repositories.get(index).cloned());
                 let mut reconciled = 0usize;
-                for repository in discovery.repositories {
+                if let Some(repository) = selected {
                     let observed_at = chrono::Utc::now().to_rfc3339_opts(
                         chrono::SecondsFormat::Millis,
                         true,
@@ -369,38 +461,30 @@ pub(super) fn spawn_git_reconcile(
                                 tracing::warn!(path = %repository.display(), warning = ?warning,
                                     "Agent Observatory Git reconcile warning");
                             }
+                            let checkpoint = encode_git_reconcile_cursor(&repository.display().to_string());
+                            let checkpoint_pool = Arc::clone(&pool);
+                            let advance = tokio::task::spawn_blocking(move || {
+                                projection_cursor(&checkpoint_pool, "git").and_then(|_| {
+                                    advance_projection_cursor(&checkpoint_pool, "git", &checkpoint)
+                                })
+                            }).await;
+                            match advance {
+                                Ok(Ok(())) => {}
+                                Ok(Err(error)) => {
+                                    healthy = false;
+                                    tracing::error!(error = %error, "Agent Observatory Git progress cursor advance failed");
+                                }
+                                Err(error) => {
+                                    healthy = false;
+                                    tracing::error!(error = %error, "Agent Observatory Git progress cursor task failed");
+                                }
+                            }
                         }
                         Err(error) => {
                             healthy = false;
                             tracing::error!(path = %repository.display(), error = %error,
                                 "Agent Observatory Git reconcile failed");
                         }
-                    }
-                    if token.is_cancelled() { return; }
-                }
-                if healthy {
-                    let completed_at = chrono::Utc::now().to_rfc3339_opts(
-                        chrono::SecondsFormat::Millis,
-                        true,
-                    );
-                    // spawn_blocking: both calls take a pooled connection and
-                    // the advance also takes the process-wide write lock, so
-                    // on a contended pool this parked a runtime worker for the
-                    // full connection timeout (full-review PM8).
-                    let cursor_pool = Arc::clone(&pool);
-                    let advance = tokio::task::spawn_blocking(move || {
-                        projection_cursor(&cursor_pool, "git")
-                            .and_then(|_| {
-                                advance_projection_cursor(&cursor_pool, "git", &completed_at)
-                            })
-                    })
-                    .await;
-                    match advance {
-                        Ok(Ok(())) => {}
-                        Ok(Err(error)) => tracing::error!(error = %error,
-                            "Agent Observatory Git progress cursor advance failed"),
-                        Err(error) => tracing::error!(error = %error,
-                            "Agent Observatory Git progress cursor task failed"),
                     }
                 }
                 let status = if healthy { "ok" } else { "error" };

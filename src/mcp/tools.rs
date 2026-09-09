@@ -125,6 +125,7 @@ async fn dispatch_cortex_action(
         H::NotificationsTest => admin::tool_notifications_test(state, args, auth).await,
         H::LlmInvocations => tool_llm_invocations(state, args).await,
         H::SimilarIncidents => context::tool_similar_incidents(state, args).await,
+        H::RecurringErrorComparison => context::tool_recurring_error_comparison(state, args).await,
         H::IncidentContext => context::tool_incident_context(state, args).await,
         H::Graph => context::tool_graph(state, args).await,
         H::ArtifactEvidence => tool_artifact_evidence(state, args).await,

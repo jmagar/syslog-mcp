@@ -87,6 +87,29 @@ RUST_LOG=info
 
 See [CONFIG](CONFIG.md) for all environment variables.
 
+### AI transcript roots
+
+Local indexing and host-agent forwarding discover supported provider data only
+under these bounded roots:
+
+- Claude Code projects: `~/.claude/projects`
+- Codex sessions and worktrees: `~/.codex/sessions` and `~/.codex/worktrees`
+- Gemini CLI chats: `~/.gemini/tmp`
+- Antigravity desktop projections: `~/.gemini/antigravity/brain`
+- Antigravity CLI projections: `~/.gemini/antigravity-cli/brain`
+
+Within either Antigravity root, Cortex accepts only the provider's redacted
+`<session>/.system_generated/logs/transcript.jsonl` projection. It does not
+read Antigravity conversation databases or unrelated generated/user-authored
+brain artifacts. Skill, MCP, and hook lanes are reported according to what the
+provider projection actually contains; Cortex does not infer unsupported
+events.
+
+On Linux, `cortex setup sessions-watch-service install` grants the hardened
+user service read-only access to all five provider root families above. The
+setup permission check covers both Antigravity roots as well as Claude, Codex,
+and Gemini CLI.
+
 ## 5. Start locally
 
 ```bash

@@ -142,7 +142,7 @@ async fn run_docker_event_forwarder(
 
     while let Some(event) = events.next().await {
         if let Some(line) = docker_event_line(hostname, &event?) {
-            sender.send(line).await?;
+            sender.send_from("docker-events", line).await?;
         }
     }
     event_stream_ended()
@@ -279,7 +279,9 @@ async fn follow_container(
             &container.id[..12],
             &msg,
         );
-        sender.try_send(line);
+        sender
+            .send_from(&format!("docker:{}", container.id), line)
+            .await?;
     }
     Ok(())
 }

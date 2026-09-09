@@ -2,7 +2,7 @@ use serde_json::Value;
 
 use crate::app::{
     GraphAroundRequest, GraphEntityLookupRequest, GraphEvidenceLookupRequest, GraphExplainRequest,
-    IncidentContextRequest, SimilarIncidentsRequest,
+    IncidentContextRequest, RecurringErrorComparisonRequest, SimilarIncidentsRequest,
 };
 
 use super::super::AppState;
@@ -14,6 +14,20 @@ pub(super) async fn tool_similar_incidents(state: &AppState, args: Value) -> any
     tracing::debug!(
         cluster_count = response.total_clusters,
         "similar_incidents completed"
+    );
+    Ok(serde_json::to_value(response)?)
+}
+
+pub(super) async fn tool_recurring_error_comparison(
+    state: &AppState,
+    args: Value,
+) -> anyhow::Result<Value> {
+    let req: RecurringErrorComparisonRequest = action_payload(args, "recurring_error_comparison")?;
+    let response = state.service.compare_recurring_errors(req).await?;
+    tracing::debug!(
+        comparison_count = response.comparisons.len(),
+        candidate_rows = response.candidate_rows,
+        "recurring_error_comparison completed"
     );
     Ok(serde_json::to_value(response)?)
 }

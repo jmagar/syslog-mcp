@@ -84,6 +84,7 @@ fn loopback_mcp() -> McpConfig {
         allowed_hosts: Vec::new(),
         allowed_origins: Vec::new(),
         auth: AuthConfig::default(),
+        forwarding_agents: Default::default(),
         static_token_is_admin: false,
     }
 }
@@ -530,6 +531,24 @@ async fn shutdown_timeout_aborts_and_joins_non_cooperative_tasks() {
 }
 
 #[tokio::test]
+async fn syslog_monitor_stops_listener_supervisors_when_maintenance_stops() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = test_config(tmp.path(), loopback_mcp());
+    config.receiver.port = 0;
+    let runtime = RuntimeCore::for_server(config).await.expect("runtime");
+    let mut handles = runtime.spawn_maintenance_tasks();
+
+    runtime
+        .start_syslog(&mut handles)
+        .await
+        .expect("start supervised listeners");
+
+    assert!(handles.syslog_monitor.is_some());
+    assert!(handles.shutdown(Duration::from_secs(1)).await);
+    assert!(runtime.shutdown(Duration::from_secs(1)).await);
+}
+
+#[tokio::test]
 async fn maintenance_shutdown_reports_panicked_and_cancelled_tasks_as_unclean() {
     let panicked = tokio::spawn(async { panic!("injected maintenance panic") });
     assert!(!super::await_or_abort_tasks(vec![panicked], Duration::from_secs(1)).await);
@@ -572,7 +591,10 @@ async fn maintenance_shutdown_is_unclean_when_file_tail_checkpoint_fails() {
         .unwrap();
     let runtime = RuntimeCore::for_server(config).await.unwrap();
     let handles = runtime.spawn_maintenance_tasks();
-    tokio::time::timeout(Duration::from_secs(3), async {
+    // The all-features suite runs thousands of CPU- and SQLite-heavy tests in
+    // parallel. Allow scheduler headroom while still bounding readiness; this
+    // assertion is about the checkpoint-failure shutdown result below.
+    tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             if runtime
                 .file_tail_supervisor

@@ -60,6 +60,23 @@ pub struct RuntimeCore {
     fatal_shutdown: CancellationToken,
 }
 
+fn forwarding_agent_tokens(config: &Config) -> std::collections::HashMap<String, String> {
+    config
+        .mcp
+        .forwarding_agents
+        .iter()
+        .map(|(identity, secret)| {
+            (
+                secret
+                    .0
+                    .clone()
+                    .expect("forwarding credentials are validated at runtime construction"),
+                identity.clone(),
+            )
+        })
+        .collect()
+}
+
 pub struct MaintenanceHandles {
     /// Cooperative cancellation signal. Cancelling this token requests all
     /// background task loops to break at their next `select!` iteration.
@@ -495,9 +512,21 @@ impl RuntimeCore {
         let state = crate::ai_transcript_ingest::AiTranscriptIngestState::new(
             Arc::clone(&self.pool),
             self.config.mcp.api_token.0.clone(),
+            forwarding_agent_tokens(&self.config),
             self.auth_policy.clone(),
         );
         crate::ai_transcript_ingest::router(state)
+    }
+
+    /// Build the receipt-backed forwarded-syslog ingest router.
+    pub fn syslog_forward_router(&self) -> axum::Router {
+        let state = crate::syslog_forward_ingest::SyslogForwardIngestState::new(
+            Arc::clone(&self.pool),
+            self.config.mcp.api_token.0.clone(),
+            forwarding_agent_tokens(&self.config),
+            self.auth_policy.clone(),
+        );
+        crate::syslog_forward_ingest::router(state)
     }
 
     /// Build the forwarded shell-history ingest router.
@@ -1147,6 +1176,13 @@ impl RuntimeCore {
                     };
                     let global_deleted =
                         db::purge_old_logs(&pool, retention_days, fts_merge_pages)?;
+                    let receipt_deleted = db::purge_forward_receipts(&pool, cleanup_chunk_size)?;
+                    if receipt_deleted > 0 {
+                        tracing::info!(
+                            deleted = receipt_deleted,
+                            "Purged expired forwarding receipts"
+                        );
+                    }
                     // llm_invocations (migration 37) has no severity concept and no
                     // volume-driven need for its own hardcoded cap (unlike AdGuard
                     // tags/heartbeats above), so it rides the same global

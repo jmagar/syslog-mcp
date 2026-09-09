@@ -239,6 +239,45 @@ pub struct ServiceJournalEntry {
     pub cursor: Option<String>,
 }
 
+/// Bounded, safe health data for the operator watch-status surface.
+///
+/// The scanner's internal health object retains source locators for local
+/// doctor/checkpoint commands. This projection deliberately excludes those
+/// locators and any underlying error text before the status can reach JSON or
+/// human CLI output.
+#[derive(Debug, Clone, Serialize)]
+pub struct AiIndexingOperatorHealth {
+    pub db_schema_version: i64,
+    pub known_schema_version: i64,
+    pub schema_current: bool,
+    pub schema_drift_detected: bool,
+    pub last_successful_ingest_at: Option<String>,
+    pub recent_failure_count: i64,
+    pub first_failure_at: Option<String>,
+    pub last_failure_at: Option<String>,
+    pub recent_schema_error_count: i64,
+    pub stale_indicators: Vec<String>,
+    pub provider_coverage: Vec<crate::scanner::providers::ProviderRuntimeHealth>,
+}
+
+impl From<crate::scanner::AiIndexingHealth> for AiIndexingOperatorHealth {
+    fn from(health: crate::scanner::AiIndexingHealth) -> Self {
+        Self {
+            db_schema_version: health.db_schema_version,
+            known_schema_version: health.known_schema_version,
+            schema_current: health.schema_current,
+            schema_drift_detected: health.schema_drift_detected,
+            last_successful_ingest_at: health.last_successful_ingest_at,
+            recent_failure_count: health.recent_failure_count,
+            first_failure_at: health.first_failure_at,
+            last_failure_at: health.last_failure_at,
+            recent_schema_error_count: health.recent_schema_error_count,
+            stale_indicators: health.stale_indicators,
+            provider_coverage: health.provider_coverage,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct AiWatchStatusReport {
     pub service: String,
@@ -248,12 +287,11 @@ pub struct AiWatchStatusReport {
     pub exec_start: Option<String>,
     pub exec_main_start_timestamp: Option<String>,
     pub process_start_time: Option<String>,
-    pub db_path: String,
     /// `None` when the DB was unavailable during collection; OS probe fields
     /// are still populated so the operator can diagnose the service state even
     /// during a DB outage. See `health_error` for the failure reason.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub health: Option<crate::scanner::AiIndexingHealth>,
+    pub health: Option<AiIndexingOperatorHealth>,
     /// Set when `ai_indexing_health` failed; `health` will be `None`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub health_error: Option<String>,

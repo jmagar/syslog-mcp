@@ -10,17 +10,17 @@ Self-hosted homelab log intelligence over MCP, CLI, and REST with SQLite/FTS.
 
 It collects logs and operational evidence, stores them in SQLite with FTS5 search, and exposes one shared intelligence layer through CLI, REST, MCP, and a bundled browser workspace.
 
-Cortex began as a syslog receiver. It now covers network logs, Docker, managed files, OpenTelemetry logs, host heartbeats, fleet inventory, shell and agent activity, and Claude, Codex, and Gemini transcripts. It correlates those sources into timelines, incidents, and an evidence-backed topology graph without making the graph a second source of truth.
+Cortex began as a syslog receiver. It now covers network logs, Docker, managed files, OpenTelemetry logs, host heartbeats, fleet inventory, shell and agent activity, and Claude, Codex, Gemini CLI, and Antigravity transcripts. It correlates those sources into timelines, incidents, and an evidence-backed topology graph without making the graph a second source of truth.
 
 ## At a glance
 
 | Area | What Cortex provides |
 | --- | --- |
 | Ingest | UDP/TCP syslog, OTLP/HTTP logs, Docker logs and events, managed file tails, host heartbeats, AI transcripts, shell history, agent command records, and fleet inventory |
-| Storage | SQLite in WAL mode, FTS5 full-text search, bounded metadata, retention, storage budgets, maintenance jobs, checkpoints, and 50 sequential schema migrations |
+| Storage | SQLite in WAL mode, FTS5 full-text search, bounded metadata, retention, storage budgets, maintenance jobs, checkpoints, and 58 sequential schema migrations |
 | Investigation | Search, filtering, context, timelines, patterns, anomaly comparison, cross-source correlation, recurring error signatures, deterministic incident bundles, and graph explanations |
 | Fleet intelligence | SSH and API inventory collectors, host state, service topology, container and route relationships, redacted evidence, and rebuildable graph projections |
-| AI operations | Claude, Codex, and Gemini session indexing; skill, MCP, and hook event extraction; incident clustering; and guarded local LLM assessments |
+| AI operations | Claude, Codex, Gemini CLI, and Antigravity session indexing; skill, MCP, and hook event extraction where each provider exposes them; incident clustering; and guarded local LLM assessments |
 | Interfaces | Native CLI, one action-dispatched MCP tool, authenticated REST APIs, MCP prompts and resources, an MCP Apps search widget, and a bundled investigation workspace |
 | Operations | Setup and repair, diagnostics, Compose control, backup, integrity checks, WAL checkpoints, vacuum, update workflows, agents, and health endpoints |
 
@@ -159,7 +159,7 @@ Cortex is one Rust binary with multiple operating modes. The same application an
                          INGESTION
 
   Syslog UDP/TCP       OTLP logs          Docker agent / pull
-  Managed file tails  Heartbeats         Claude / Codex / Gemini
+  Managed file tails  Heartbeats         Claude / Codex / Gemini / Antigravity
   Shell history       Agent commands     Fleet inventory
           \               |                    /
            \              |                   /
@@ -260,9 +260,11 @@ Cortex indexes local and forwarded transcript data from:
 
 - Claude Code projects under `~/.claude/projects`
 - Codex sessions and worktrees under `~/.codex/sessions` and `~/.codex/worktrees`
-- Gemini chat data under `~/.gemini/tmp`
+- Gemini CLI chat data under `~/.gemini/tmp`
+- Antigravity desktop's redacted transcript projections under `~/.gemini/antigravity/brain/<session>/.system_generated/logs/transcript.jsonl`
+- Antigravity CLI's redacted transcript projections under `~/.gemini/antigravity-cli/brain/<session>/.system_generated/logs/transcript.jsonl`
 
-The scanner supports incremental checkpoints, parse-error records, bounded chunks, broad-path rejection, and safe recovery from changed files. It extracts normalized transcript rows plus dedicated skill, MCP tool-call, and hook events.
+The Antigravity adapter reads only the narrow redacted JSONL projections above; it does not scan conversation databases or other brain artifacts. The scanner supports incremental checkpoints, parse-error records, bounded chunks, broad-path rejection, and safe recovery from changed files. It extracts normalized transcript rows plus dedicated skill, MCP tool-call, and hook events where those lanes are represented by the provider schema, and reports unsupported lanes honestly.
 
 A satellite agent can send already-parsed records to `POST /v1/ai-transcripts`, which prevents transcript collection from depending on the database living on the same host as the AI client.
 
@@ -468,8 +470,8 @@ Cortex exposes one MCP tool named `cortex`. Its required `action` field selects 
 
 The current scope split is:
 
-- 50 read actions requiring `cortex:read`
-- 5 admin actions requiring `cortex:admin`: `ack_error`, `unack_error`, `file_tails`, `notifications_test`, and `llm_invocations`
+- 52 read actions requiring `cortex:read`
+- 6 admin actions requiring `cortex:admin`: `artifact_evidence_record`, `ack_error`, `unack_error`, `file_tails`, `notifications_test`, and `llm_invocations`
 - 1 informational action, `help`, which requires an authenticated context when authentication is mounted but no read/admin scope
 
 #### Complete MCP action catalog
@@ -478,11 +480,11 @@ The current scope split is:
 | --- | --- |
 | Log retrieval | `search`, `filter`, `tail`, `errors`, `get`, `context` |
 | Discovery and health | `hosts`, `apps`, `source_ips`, `status`, `stats`, `ingest_rate`, `silent_hosts`, `clock_skew` |
-| Analytics and correlation | `timeline`, `patterns`, `anomalies`, `compare`, `correlate`, `topic_correlate`, `similar_incidents`, `incident_context` |
+| Analytics and correlation | `timeline`, `patterns`, `anomalies`, `compare`, `correlate`, `topic_correlate`, `similar_incidents`, `recurring_error_comparison`, `incident_context` |
 | Fleet and topology | `map`, `host_state`, `fleet_state`, `correlate_state`, `graph`, `compose_status`, `compose_doctor` |
 | AI sessions | `sessions`, `search_sessions`, `abuse`, `abuse_incidents`, `abuse_investigate`, `ai_correlate`, `usage_blocks`, `project_context`, `list_ai_tools`, `list_ai_projects` |
 | AI operational events | `skill_events`, `skill_incidents`, `skill_investigate`, `mcp_events`, `mcp_incidents`, `mcp_investigate`, `hook_events`, `hook_incidents`, `hook_investigate` |
-| Errors and administration | `unaddressed_errors`, `ack_error`, `unack_error`, `notifications_recent`, `notifications_test`, `file_tails`, `llm_invocations` |
+| Errors and administration | `unaddressed_errors`, `ack_error`, `unack_error`, `notifications_recent`, `notifications_test`, `file_tails`, `llm_invocations`, `artifact_evidence_record` |
 | Reference | `help` |
 
 The runtime schema contains per-action flags, defaults, examples, relative cost metadata, and validation. See [docs/mcp/SCHEMA.md](docs/mcp/SCHEMA.md) for the parameter reference.
@@ -671,7 +673,7 @@ Cortex uses SQLite with:
 - Online backup support
 - Integrity checks, checkpoints, and vacuum workflows
 
-The current schema history contains 50 sequential migrations. CI derives this denominator from `KNOWN_SCHEMA_VERSION` and the migration registry.
+The current schema history contains 58 sequential migrations. CI derives this denominator from `KNOWN_SCHEMA_VERSION` and the migration registry. Forwarding receipts have a seven-day replay horizon and are removed when their canonical evidence is deleted. Senders retain unacknowledged spool records; retries beyond the horizon are new ingestion attempts.
 
 ### Authoritative and derived data
 

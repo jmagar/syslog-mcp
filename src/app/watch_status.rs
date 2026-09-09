@@ -12,13 +12,29 @@
 //! Execution order: systemctl probes first (OS-only), then DB calls.
 //! This ensures the operator receives host state even during DB outages.
 
+use std::sync::LazyLock;
+
+use regex::Regex;
 use tracing::warn;
 
 use super::ServiceResult;
-use super::models::AiWatchStatusReport;
+use super::models::{AiIndexingOperatorHealth, AiWatchStatusReport};
 use super::services::CortexService;
 
 const SERVICE: &str = "cortex-sessions-watch.service";
+const MAX_OPERATOR_STATUS_TEXT_CHARS: usize = 240;
+const MAX_OPERATOR_JOURNAL_LINES: usize = 10;
+
+// A status response is intentionally a summary, never an evidence or
+// filesystem-inspection endpoint. Keep both Unix and home-relative locators
+// out of its JSON and human output after secret scrubbing.
+static OPERATOR_PATH: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?:~|/)[^\s\]\[\(\)\{\}"']+"#).expect("static operator path regex")
+});
+static OPERATOR_SECRET_VALUE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\b((?:token|api[_-]?key|secret|password)\s*(?:=|:)\s*)[^\s,;]+")
+        .expect("static operator secret regex")
+});
 
 impl CortexService {
     /// Collect the ai watch-status report.
@@ -63,9 +79,9 @@ impl CortexService {
         // can still see host state (active, enabled, pid) even during a DB outage.
         let (health, health_error) = match self.ai_indexing_health(process_start_time.clone()).await
         {
-            Ok(h) => (Some(h), None),
+            Ok(h) => (Some(AiIndexingOperatorHealth::from(h)), None),
             Err(e) => {
-                let msg = e.to_string();
+                let msg = operator_status_text(&e.to_string());
                 warn!(error = %msg, "ai_indexing_health failed; health will be absent in report");
                 (None, Some(msg))
             }
@@ -88,25 +104,28 @@ impl CortexService {
 
         let (latest_journal, journal_error) =
             match self.os.run_command("journalctl", &journal_args).await {
-                Ok(raw) => (raw.lines().map(str::to_string).collect(), None),
+                Ok(raw) => (
+                    raw.lines()
+                        .take(MAX_OPERATOR_JOURNAL_LINES)
+                        .map(operator_status_text)
+                        .collect(),
+                    None,
+                ),
                 Err(e) => {
-                    let msg = e.to_string();
+                    let msg = operator_status_text(&e.to_string());
                     warn!(service = SERVICE, error = %msg, "journalctl probe failed");
                     (Vec::new(), Some(msg))
                 }
             };
-
-        let db_path = self.storage.db_path.display().to_string();
 
         Ok(AiWatchStatusReport {
             service: SERVICE.to_string(),
             active,
             enabled,
             main_pid,
-            exec_start,
+            exec_start: exec_start.map(|value| operator_status_text(&value)),
             exec_main_start_timestamp,
             process_start_time,
-            db_path,
             health,
             health_error,
             latest_journal,
@@ -149,6 +168,20 @@ impl CortexService {
             }
         }
     }
+}
+
+fn operator_status_text(value: &str) -> String {
+    let scrubbed = crate::receiver::enrichment::scrub_ai_message(value, None);
+    let secrets = OPERATOR_SECRET_VALUE.replace_all(&scrubbed, "$1[REDACTED]");
+    let paths = OPERATOR_PATH.replace_all(&secrets, "[PATH]");
+    let mut bounded = paths
+        .chars()
+        .take(MAX_OPERATOR_STATUS_TEXT_CHARS)
+        .collect::<String>();
+    if paths.chars().count() > MAX_OPERATOR_STATUS_TEXT_CHARS {
+        bounded.push('…');
+    }
+    bounded
 }
 
 #[cfg(test)]

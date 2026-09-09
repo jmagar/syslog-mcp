@@ -101,6 +101,9 @@ fn insert_otel_spans_batch_once(
     let tx = conn.transaction()?;
     let result = insert_otel_spans_batch_in_tx(&tx, entries)?;
     tx.commit()?;
+    if result.accepted > 0 {
+        crate::db::agent_observatory::notify_projection_work();
+    }
     tracing::debug!(
         accepted = result.accepted,
         duplicates = result.duplicates,

@@ -55,6 +55,42 @@ pub struct AgentWorktreeEvidenceUpsert {
     pub metadata_json: String,
 }
 
+/// A versioned, explicit relationship from an OTLP span to the run that the
+/// projector could identify.  This deliberately carries the evidence rather
+/// than making read paths rediscover a relationship from host/session fields.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AgentTraceRelationUpsert {
+    pub trace_id: String,
+    pub span_id: String,
+    pub identifier_namespace: String,
+    pub provider: Option<String>,
+    pub evidence_kind: String,
+    pub confidence: f64,
+    pub reason: String,
+    pub projection_version: i64,
+    pub candidate_count: i64,
+    pub observed_at: String,
+    pub metadata_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentTraceRelationRow {
+    pub id: i64,
+    pub relation_key: String,
+    pub trace_id: String,
+    pub span_id: String,
+    pub run_id: Option<i64>,
+    pub identifier_namespace: String,
+    pub provider: Option<String>,
+    pub evidence_kind: String,
+    pub confidence: f64,
+    pub reason: String,
+    pub projection_version: i64,
+    pub candidate_count: i64,
+    pub observed_at: String,
+    pub metadata_json: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AgentRunEventUpsert {
     pub source_kind: String,
@@ -87,6 +123,7 @@ pub struct AgentProjectionWriteInput {
     pub run: AgentRunUpsert,
     pub actor: Option<AgentActorUpsert>,
     pub worktree_evidence: Option<AgentWorktreeEvidenceUpsert>,
+    pub trace_relation: Option<AgentTraceRelationUpsert>,
     pub event: AgentRunEventUpsert,
     pub outbox: AgentProjectionOutboxInput,
 }
@@ -121,6 +158,7 @@ pub struct AgentProjectionWriteResult {
     pub run: AgentRunRow,
     pub actor: Option<AgentActorRow>,
     pub worktree_evidence: Option<AgentRunWorktreeEvidenceRow>,
+    pub trace_relation: Option<AgentTraceRelationRow>,
     pub event: AgentRunEventRow,
     pub event_inserted: bool,
     pub materialized_state_changed: bool,

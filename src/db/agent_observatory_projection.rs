@@ -5,7 +5,8 @@ mod types;
 pub(super) use types::AgentProjectionWriteFault;
 pub use types::{
     AgentActorRow, AgentActorUpsert, AgentProjectionOutboxInput, AgentProjectionWriteInput,
-    AgentProjectionWriteResult, AgentRunEventUpsert, AgentRunUpsert, AgentWorktreeEvidenceUpsert,
+    AgentProjectionWriteResult, AgentRunEventUpsert, AgentRunUpsert, AgentTraceRelationRow,
+    AgentTraceRelationUpsert, AgentWorktreeEvidenceUpsert,
 };
 
 #[path = "agent_observatory_projection_counters.rs"]
@@ -16,13 +17,20 @@ pub use lookup::{
     AgentProjectionRunMatch, find_active_projection_worktree,
     find_unique_overlapping_projection_run, find_unique_projection_run_by_session,
 };
+pub(crate) use lookup::{
+    AgentRepositoryObservationRunMatch, find_unique_projection_run_for_repository_observation,
+};
 #[path = "agent_observatory_projection_refs.rs"]
 mod refs;
 #[path = "agent_observatory_projection_sql.rs"]
 mod sql;
+#[path = "agent_observatory_projection/summary.rs"]
+mod summary;
 #[path = "agent_observatory_projection_tie_break.rs"]
 mod tie_break;
+pub(crate) use summary::projection_event_has_summary;
 
+use super::AgentRunRow;
 use crate::agent_observatory::identity::{actor_key, canonical_tool, event_key, run_key};
 use crate::db::pool::DbPool;
 use anyhow::{Context, Result, bail};
@@ -119,6 +127,29 @@ fn validate_evidence(input: &AgentWorktreeEvidenceUpsert) -> Result<()> {
     json_object(&input.metadata_json, "evidence metadata_json")
 }
 
+fn validate_trace_relation(input: &AgentTraceRelationUpsert) -> Result<()> {
+    if !valid_hex_id(&input.trace_id, 32) || !valid_hex_id(&input.span_id, 16) {
+        bail!("trace relation requires valid trace and span identifiers");
+    }
+    required(&input.identifier_namespace, "trace identifier_namespace")?;
+    required(&input.evidence_kind, "trace evidence_kind")?;
+    required(&input.reason, "trace relation reason")?;
+    if !input.confidence.is_finite() || !(0.0..=1.0).contains(&input.confidence) {
+        bail!("trace relation confidence must be between 0.0 and 1.0");
+    }
+    if input.projection_version <= 0 || !(0..=8).contains(&input.candidate_count) {
+        bail!("trace relation version or candidate count is invalid");
+    }
+    timestamp(&input.observed_at, "trace relation observed_at")?;
+    json_object(&input.metadata_json, "trace relation metadata_json")
+}
+
+fn valid_hex_id(value: &str, expected: usize) -> bool {
+    value.len() == expected
+        && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+        && value.bytes().any(|byte| byte != b'0')
+}
+
 fn validate_event(input: &AgentRunEventUpsert) -> Result<()> {
     event_key(
         &input.source_kind,
@@ -157,6 +188,9 @@ fn validate_input(input: &AgentProjectionWriteInput) -> Result<()> {
     if let Some(evidence) = &input.worktree_evidence {
         validate_evidence(evidence)?;
     }
+    if let Some(relation) = &input.trace_relation {
+        validate_trace_relation(relation)?;
+    }
     validate_event(&input.event)?;
     validate_outbox(&input.outbox)
 }
@@ -182,29 +216,20 @@ fn evidence_key(run_key: &str, input: &AgentWorktreeEvidenceUpsert) -> String {
     )
 }
 
+fn trace_relation_key(input: &AgentTraceRelationUpsert) -> String {
+    digest_key(
+        "trace_run_relation",
+        &[&input.trace_id, &input.span_id, &input.identifier_namespace],
+    )
+}
+
 fn outbox_key(input: &AgentProjectionWriteInput) -> Result<String> {
     let bytes = serde_json::to_vec(input).context("serialize projection input fingerprint")?;
     Ok(format!("v1:projection_outbox:{:x}", Sha256::digest(bytes)))
 }
 
-pub(crate) fn projection_event_has_summary(
-    pool: &DbPool,
-    source_kind: &str,
-    source_id: &str,
-    projection_variant: &str,
-    summary: &str,
-) -> Result<bool> {
-    let key = event_key(source_kind, source_id, projection_variant)?;
-    let connection = pool.get().context("acquire database connection")?;
-    let exists: i64 = connection.query_row(
-        "SELECT EXISTS(
-             SELECT 1 FROM agent_run_events
-              WHERE event_key = ?1 AND summary = ?2
-         )",
-        rusqlite::params![key, summary],
-        |row| row.get(0),
-    )?;
-    Ok(exists != 0)
+fn existing_run_event_outbox_key(event_key: &str) -> String {
+    digest_key("repository_observation_outbox", &[event_key])
 }
 
 fn write_inner(
@@ -234,6 +259,7 @@ fn write_inner(
         .worktree_evidence
         .as_ref()
         .map(|evidence| evidence_key(&durable_run_key, evidence));
+    let durable_trace_relation_key = input.trace_relation.as_ref().map(trace_relation_key);
 
     let mut connection = crate::db::write_conn(pool).context("acquire database connection")?;
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -261,6 +287,16 @@ fn write_inner(
             _ => unreachable!("evidence input and key are constructed together"),
         };
 
+    let (trace_relation, trace_relation_changed) =
+        match (&input.trace_relation, durable_trace_relation_key.as_deref()) {
+            (Some(relation), Some(key)) => {
+                let (row, changed) = sql::upsert_trace_relation(&tx, key, Some(run.id), relation)?;
+                (Some(row), changed)
+            }
+            (None, None) => (None, false),
+            _ => unreachable!("trace relation input and key are constructed together"),
+        };
+
     let event_worktree_id = input
         .event
         .worktree_key
@@ -283,8 +319,11 @@ fn write_inner(
     if event_inserted {
         run = counters::apply_event_counters(&tx, run.id, &event)?;
     }
-    let materialized_state_changed =
-        run_changed || actor_changed || evidence_changed || event_inserted;
+    let materialized_state_changed = run_changed
+        || actor_changed
+        || evidence_changed
+        || trace_relation_changed
+        || event_inserted;
     let outbox = if materialized_state_changed {
         Some(sql::insert_outbox(
             &tx,
@@ -310,6 +349,7 @@ fn write_inner(
         run,
         actor,
         worktree_evidence,
+        trace_relation,
         event,
         event_inserted,
         materialized_state_changed,
@@ -331,6 +371,155 @@ pub(crate) fn write_agent_projection_with_cursor(
     cursor: &str,
 ) -> Result<AgentProjectionWriteResult> {
     write_inner(pool, input, Some((source_name, cursor)), None)
+}
+
+/// Atomically attach source evidence to a pre-existing run.  Unlike
+/// [`write_agent_projection_with_cursor`], this does not upsert or refresh the
+/// run: callers use it for sources (notably Git observations) that have no
+/// native agent/session identity and therefore must not manufacture activity.
+fn write_agent_existing_run_event_inner(
+    pool: &DbPool,
+    expected_run: &AgentRunRow,
+    event: &AgentRunEventUpsert,
+    outbox: &AgentProjectionOutboxInput,
+    cursor: Option<(&str, &str)>,
+) -> Result<AgentProjectionWriteResult> {
+    required(&expected_run.run_key, "existing run_key")?;
+    validate_event(event)?;
+    validate_outbox(outbox)?;
+    let durable_event_key = event_key(
+        &event.source_kind,
+        &event.source_id,
+        &event.projection_variant,
+    )?;
+    let mut connection = crate::db::write_conn(pool).context("acquire database connection")?;
+    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let current_run = sql::run_by_id(&tx, expected_run.id)?;
+    if current_run.run_key != expected_run.run_key {
+        bail!("existing run identity changed before repository observation projection");
+    }
+    let event_worktree_id = event
+        .worktree_key
+        .as_deref()
+        .map(|key| sql::worktree_id(&tx, key))
+        .transpose()?;
+    let (event_row, event_inserted) = sql::insert_event(
+        &tx,
+        &durable_event_key,
+        current_run.id,
+        None,
+        event_worktree_id,
+        event,
+    )?;
+    let run = if event_inserted {
+        counters::apply_evidence_event_counters(&tx, current_run.id, &event_row)?
+    } else {
+        current_run
+    };
+    let outbox = if event_inserted {
+        Some(sql::insert_outbox(
+            &tx,
+            &existing_run_event_outbox_key(&durable_event_key),
+            run.id,
+            outbox,
+        )?)
+    } else {
+        None
+    };
+    if let Some((source_name, cursor)) = cursor {
+        super::advance_projection_cursor_in_tx(&tx, source_name, cursor)?;
+    }
+    tx.commit()?;
+    Ok(AgentProjectionWriteResult {
+        run,
+        actor: None,
+        worktree_evidence: None,
+        trace_relation: None,
+        event: event_row,
+        event_inserted,
+        materialized_state_changed: event_inserted,
+        outbox,
+    })
+}
+
+pub(crate) fn write_agent_existing_run_event_with_cursor(
+    pool: &DbPool,
+    expected_run: &AgentRunRow,
+    event: &AgentRunEventUpsert,
+    outbox: &AgentProjectionOutboxInput,
+    source_name: &str,
+    cursor: &str,
+) -> Result<AgentProjectionWriteResult> {
+    write_agent_existing_run_event_inner(
+        pool,
+        expected_run,
+        event,
+        outbox,
+        Some((source_name, cursor)),
+    )
+}
+
+pub(crate) fn write_agent_existing_run_event(
+    pool: &DbPool,
+    expected_run: &AgentRunRow,
+    event: &AgentRunEventUpsert,
+    outbox: &AgentProjectionOutboxInput,
+) -> Result<AgentProjectionWriteResult> {
+    write_agent_existing_run_event_inner(pool, expected_run, event, outbox, None)
+}
+
+/// Record an explicit non-match or ambiguous trace conclusion when no run can
+/// safely be projected.  It is intentionally durable instead of leaving a
+/// read path to rediscover the same weak host/session coincidence.
+pub(crate) fn write_agent_trace_relation_without_run(
+    pool: &DbPool,
+    input: &AgentTraceRelationUpsert,
+) -> Result<AgentTraceRelationRow> {
+    validate_trace_relation(input)?;
+    let key = trace_relation_key(input);
+    let mut connection = crate::db::write_conn(pool).context("acquire database connection")?;
+    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let (row, _) = sql::upsert_trace_relation(&tx, &key, None, input)?;
+    tx.commit()?;
+    Ok(row)
+}
+
+/// A later transcript/source projection may make a previously unmatchable
+/// span exact. Reconcile a fixed page only; this is evidence repair, never a
+/// timestamp-based association upgrade.
+pub(crate) fn reconcile_unmatched_trace_relations(pool: &DbPool) -> Result<usize> {
+    let connection = crate::db::write_conn(pool).context("acquire database connection")?;
+    let changed = connection.execute(
+        "UPDATE agent_run_trace_relations
+            SET run_id = (
+                    SELECT ar.id FROM otel_spans os
+                    JOIN agent_runs ar
+                      ON ar.hostname = os.hostname
+                     AND ar.tool = os.ai_tool
+                     AND ar.native_session_id = os.ai_session_id
+                   WHERE os.trace_id = agent_run_trace_relations.trace_id
+                     AND os.span_id = agent_run_trace_relations.span_id
+                 ),
+                evidence_kind = 'exact_provider_id',
+                confidence = 0.98,
+                reason = 'late exact provider identity became available',
+                candidate_count = 1
+          WHERE id IN (
+                SELECT relation.id
+                  FROM agent_run_trace_relations relation
+                  JOIN otel_spans os
+                    ON os.trace_id = relation.trace_id AND os.span_id = relation.span_id
+                  JOIN agent_runs ar
+                    ON ar.hostname = os.hostname
+                   AND ar.tool = os.ai_tool
+                   AND ar.native_session_id = os.ai_session_id
+                 WHERE relation.run_id IS NULL
+                 ORDER BY relation.id
+                 LIMIT 64
+          )",
+        [],
+    )?;
+    Ok(changed)
 }
 
 #[cfg(test)]

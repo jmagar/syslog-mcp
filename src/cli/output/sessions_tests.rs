@@ -1,8 +1,7 @@
 use super::*;
+use cortex::app::AiIndexingOperatorHealth;
 use cortex::app::{IncidentEvent, ServiceJournalEntry};
-use cortex::scanner::{
-    AiIndexingHealth, CheckpointEntry, IndexFileError, ParseErrorEntry, TranscriptRootStatus,
-};
+use cortex::scanner::{CheckpointEntry, IndexFileError, ParseErrorEntry, TranscriptRootStatus};
 use std::path::PathBuf;
 
 #[test]
@@ -95,21 +94,18 @@ fn human_status_and_incident_outputs_accept_optional_branches() {
         exec_start: Some("/usr/bin/cortex sessions watch".to_string()),
         exec_main_start_timestamp: Some("Sat 2026-06-13".to_string()),
         process_start_time: Some("2026-06-13T00:00:00Z".to_string()),
-        db_path: "/tmp/cortex.db".to_string(),
-        health: Some(AiIndexingHealth {
+        health: Some(AiIndexingOperatorHealth {
             db_schema_version: 2,
-            db_last_migration_at: None,
             known_schema_version: 2,
             schema_current: true,
             schema_drift_detected: false,
-            schema_drift_migrations: Vec::new(),
             last_successful_ingest_at: Some("2026-06-13T00:00:00Z".to_string()),
             recent_failure_count: 0,
             first_failure_at: None,
             last_failure_at: None,
-            affected_paths: Vec::new(),
             recent_schema_error_count: 0,
             stale_indicators: vec!["lagging".to_string()],
+            provider_coverage: Vec::new(),
         }),
         health_error: None,
         latest_journal: vec!["one log line".to_string()],

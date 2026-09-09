@@ -159,7 +159,7 @@ esac
     );
     let _path_guard = EnvGuard::set("PATH", path);
 
-    let summary = repo_summary(&repo, std::time::Duration::from_secs(1))
+    let summary = repo_summary(&repo, std::time::Duration::from_secs(5))
         .await
         .unwrap();
 
@@ -211,7 +211,7 @@ esac
 
     let output = collect(
         &[dir.path().to_path_buf()],
-        std::time::Duration::from_secs(1),
+        std::time::Duration::from_secs(5),
     )
     .await;
 

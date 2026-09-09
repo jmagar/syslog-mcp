@@ -14,7 +14,7 @@ use crate::observability::{ListenerState, RuntimeObservability};
 
 pub(crate) mod enrichment;
 mod listener;
-mod parser;
+pub(crate) mod parser;
 pub(crate) mod writer;
 
 #[cfg(test)]
@@ -75,7 +75,8 @@ async fn supervise_listener<F, Fut>(
     loop {
         set_state(&observability, ListenerState::Alive);
         let started = tokio::time::Instant::now();
-        let mut listener = tokio::spawn(make_listener());
+        // A stopped supervisor must never detach its socket-owning child.
+        let mut listener = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(make_listener()));
         let outcome = tokio::select! {
             biased;
             _ = shutdown.cancelled() => {

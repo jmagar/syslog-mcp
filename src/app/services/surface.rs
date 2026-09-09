@@ -19,6 +19,10 @@ impl CortexService {
                 .similar_incidents(req)
                 .await
                 .map(AnalysisResponse::SimilarIncidents),
+            AnalysisRequest::RecurringErrorComparison(req) => self
+                .compare_recurring_errors(req)
+                .await
+                .map(AnalysisResponse::RecurringErrorComparison),
             AnalysisRequest::IncidentContext(req) => self
                 .incident_context(req)
                 .await

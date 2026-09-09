@@ -1844,6 +1844,57 @@ async fn filter_logs_file_tail_source_kind_uses_source_prefix() {
 }
 
 #[tokio::test]
+async fn filter_logs_shell_history_alias_covers_direct_and_forwarded_rows() {
+    let (service, pool, _dir) = test_service();
+    insert_logs_batch(
+        &pool,
+        &[
+            entry(
+                "2026-01-01T00:00:00Z",
+                "devhost",
+                "info",
+                "direct command",
+                "shell-history://devhost/user/zsh",
+            ),
+            entry(
+                "2026-01-01T00:00:01Z",
+                "devhost",
+                "info",
+                "forwarded command",
+                "agent-shell-history://devhost/user/bash",
+            ),
+            entry(
+                "2026-01-01T00:00:02Z",
+                "devhost",
+                "info",
+                "unrelated",
+                "file-tail://devhost/messages",
+            ),
+        ],
+    )
+    .unwrap();
+
+    let response = service
+        .filter_logs(FilterLogsRequest {
+            host: Some("devhost".into()),
+            source_kind: Some("shell-history".into()),
+            limit: Some(200),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(response.count, 2);
+    let messages: Vec<_> = response
+        .logs
+        .iter()
+        .map(|row| row.message.as_str())
+        .collect();
+    assert!(messages.contains(&"direct command"));
+    assert!(messages.contains(&"forwarded command"));
+}
+
+#[tokio::test]
 async fn filter_logs_rejects_conflicting_source_kind_tool_alias() {
     let (service, _pool, _dir) = test_service();
 

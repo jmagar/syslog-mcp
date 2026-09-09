@@ -62,19 +62,18 @@ pub fn canonical_tool(tool: &str) -> Result<String, IdentityError> {
     let tool = required(tool, "tool")?;
     let normalized = tool.to_lowercase();
 
-    match normalized.as_str() {
-        "claude" | "codex" | "gemini" => Ok(normalized),
-        _ => {
-            let source = normalized
-                .strip_prefix("unknown:")
-                .map(str::trim)
-                .unwrap_or(normalized.as_str());
-            if source.is_empty() {
-                return Err(IdentityError::Empty("tool"));
-            }
-            Ok(format!("unknown:{source}"))
-        }
+    if let Some(provider) = crate::scanner::providers::canonical_transcript_provider(&normalized) {
+        return Ok(provider.to_string());
     }
+
+    let source = normalized
+        .strip_prefix("unknown:")
+        .map(str::trim)
+        .unwrap_or(normalized.as_str());
+    if source.is_empty() {
+        return Err(IdentityError::Empty("tool"));
+    }
+    Ok(format!("unknown:{source}"))
 }
 
 /// Build the version-one run identity from host, canonical tool, and native session.

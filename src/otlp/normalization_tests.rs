@@ -154,6 +154,20 @@ fn log_tool_compatibility_remains_explicit_only() {
 }
 
 #[test]
+fn otlp_provider_aliases_use_the_scanner_registry() {
+    for (alias, expected) in [
+        ("claude-transcript", "claude"),
+        ("openai-codex", "codex"),
+        ("gemini-cli", "gemini"),
+    ] {
+        let explicit = vec![kv("ai.tool", alias)];
+        let normalized = normalize_attributes(&[], &explicit);
+        assert_eq!(normalized.ai_tool.as_deref(), Some(expected));
+        assert_eq!(normalized.log_ai_tool().as_deref(), Some(expected));
+    }
+}
+
+#[test]
 fn unknown_attributes_are_retained_and_sensitive_values_remain_redacted() {
     let resource = vec![
         kv("host.name", "devhost"),

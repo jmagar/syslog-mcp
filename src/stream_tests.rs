@@ -308,15 +308,35 @@ fn steady_state_session_poll_uses_bounded_composite_index() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn connection_deadline_releases_admission_even_when_body_stalls() {
     let semaphore = std::sync::Arc::new(Semaphore::new(1));
     let permit = semaphore.clone().try_acquire_owned().unwrap();
     let lease = client_lease(permit, Duration::from_millis(10));
     assert!(semaphore.clone().try_acquire_owned().is_err());
-    tokio::time::sleep(Duration::from_millis(30)).await;
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_millis(30)).await;
+    tokio::task::yield_now().await;
     assert!(semaphore.clone().try_acquire_owned().is_ok());
     drop(lease);
+}
+
+#[test]
+fn sixty_four_stream_burst_rejects_excess_and_recovers_after_disconnect() {
+    let clients = std::sync::Arc::new(Semaphore::new(MAX_CLIENTS));
+    let mut admitted = Vec::with_capacity(MAX_CLIENTS);
+
+    for _ in 0..MAX_CLIENTS {
+        admitted.push(acquire_client_permit(clients.clone()).unwrap());
+    }
+    assert_eq!(clients.available_permits(), 0);
+    assert!(matches!(
+        acquire_client_permit(clients.clone()),
+        Err(StreamError::Overloaded)
+    ));
+
+    drop(admitted.pop());
+    assert!(acquire_client_permit(clients).is_ok());
 }
 
 fn service() -> (
@@ -470,7 +490,7 @@ fn resolved_cursor_keys_fail_closed_rotate_safely_and_accept_toml_only_key() {
     assert_eq!(config.cursor_previous_keys, ["old-secret"]);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn slow_client_stream_body_terminates_at_lease_deadline() {
     use axum::response::IntoResponse;
     let (service, _pool, _dir) = service();
@@ -496,18 +516,19 @@ async fn slow_client_stream_body_terminates_at_lease_deadline() {
             event_name: "log",
             cursor_keys: test_cursor_keys(),
             connection_duration: Duration::from_millis(20),
+            clients: std::sync::Arc::new(Semaphore::new(1)),
         },
     )
     .await
     .unwrap();
     let body = sse.into_response().into_body();
-    tokio::time::timeout(
-        Duration::from_millis(250),
-        axum::body::to_bytes(body, MAX_EVENT_BYTES * 2),
-    )
-    .await
-    .expect("stream body must close at its lease deadline")
-    .unwrap();
+    let consumer = tokio::spawn(axum::body::to_bytes(body, MAX_EVENT_BYTES * 2));
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_millis(21)).await;
+    consumer
+        .await
+        .expect("stream body consumer must complete")
+        .expect("stream body must close at its lease deadline");
 }
 
 #[test]

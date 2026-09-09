@@ -59,3 +59,19 @@ fn transcript_detection_accepts_source_ip_and_app_suffix() {
     log.app_name = Some("codex-transcript".to_string());
     assert!(is_transcript_log(&log));
 }
+
+#[test]
+fn terminal_safe_line_neutralizes_transcript_control_sequences() {
+    assert_eq!(
+        terminal_safe_line("project\u{1b}[2J\rspoof\nnext\tfield"),
+        "project [2J spoof next field"
+    );
+}
+
+#[test]
+fn terminal_safe_multiline_preserves_layout_but_drops_terminal_controls() {
+    assert_eq!(
+        terminal_safe_multiline("first\n\u{1b}[31mred\r\tsecond"),
+        "first\n[31mredsecond"
+    );
+}

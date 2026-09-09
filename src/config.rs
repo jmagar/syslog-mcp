@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -753,6 +753,13 @@ pub struct McpConfig {
     /// Optional bearer token for authenticating MCP requests.
     #[serde(default)]
     pub api_token: Secret,
+    /// Named bearer credentials accepted only by the evidence-forwarding
+    /// endpoints. The map key is the server-authoritative agent principal;
+    /// its secret value is never serialized or exposed to browsers. A generic
+    /// `CORTEX_TOKEN` remains migration-compatible but is deliberately
+    /// classified as shared/unverified provenance.
+    #[serde(default)]
+    pub forwarding_agents: BTreeMap<String, Secret>,
     /// Optional additional Host header values accepted by RMCP Host validation.
     #[serde(default)]
     pub allowed_hosts: Vec<String>,
@@ -1306,6 +1313,7 @@ impl Default for McpConfig {
             no_auth: false,
             trusted_gateway_no_auth: false,
             api_token: Secret(None),
+            forwarding_agents: BTreeMap::new(),
             allowed_hosts: Vec::new(),
             allowed_origins: Vec::new(),
             auth: AuthConfig::default(),
@@ -2124,6 +2132,11 @@ pub(crate) fn validate_agent_observatory_config(
             ));
         }
     }
+    if config.projector_page_rows > 500 {
+        return Err(anyhow::anyhow!(
+            "agent_observatory.projector_page_rows must be between 1 and 500"
+        ));
+    }
     if config.stale_after_secs <= config.active_window_secs {
         return Err(anyhow::anyhow!(
             "agent_observatory.stale_after_secs must be greater than active_window_secs"
@@ -2232,6 +2245,43 @@ pub(crate) fn validate_auth_config(config: &Config, check_bind: bool) -> anyhow:
     }
     if token_is_set_but_blank(&config.api.admin_token.0) {
         return Err(anyhow::anyhow!("api.admin_token must not be empty"));
+    }
+    let mut forwarding_secrets = std::collections::HashSet::new();
+    for (principal, secret) in &config.mcp.forwarding_agents {
+        if principal.is_empty()
+            || principal == "shared_bearer"
+            || principal == "loopback"
+            || !principal
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        {
+            return Err(anyhow::anyhow!(
+                "mcp.forwarding_agents contains an invalid principal label"
+            ));
+        }
+        let Some(token) = secret.as_deref() else {
+            return Err(anyhow::anyhow!(
+                "mcp.forwarding_agents contains a missing bearer secret"
+            ));
+        };
+        if token.trim() != token || token.len() < 16 {
+            return Err(anyhow::anyhow!(
+                "mcp.forwarding_agents contains a weak or padded bearer secret"
+            ));
+        }
+        if config.mcp.api_token.as_deref() == Some(token)
+            || config.api.api_token.as_deref() == Some(token)
+            || config.api.admin_token.as_deref() == Some(token)
+        {
+            return Err(anyhow::anyhow!(
+                "mcp.forwarding_agents bearer secrets must differ from service API tokens"
+            ));
+        }
+        if !forwarding_secrets.insert(token) {
+            return Err(anyhow::anyhow!(
+                "mcp.forwarding_agents bearer secrets must be unique"
+            ));
+        }
     }
     // Note: CORTEX_API_TOKEN being entirely unset is enforced at
     // route-mount time by `api::router` (anyhow::bail) rather than here.

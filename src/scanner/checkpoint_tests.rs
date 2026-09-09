@@ -25,6 +25,21 @@ fn ensure_source_reuses_existing_source_id() {
         .unwrap();
 
     assert_eq!(first, second);
+
+    // Migration 51 gives legacy-style source rows a completed state until a
+    // bounded scanner explicitly records a resumable checkpoint.
+    assert_eq!(
+        store.source_metadata(first).unwrap().unwrap(),
+        SourceMetadata {
+            file_size: None,
+            file_mtime: None,
+            content_hash: None,
+            last_offset: Some(0),
+            last_error: None,
+            source_revision: None,
+            scan_state: SourceScanState::Complete,
+        }
+    );
 }
 
 #[test]
@@ -226,6 +241,135 @@ fn mark_error_sets_last_error_and_successful_import_clears_it() {
         .unwrap();
 
     assert_eq!(row, (99, 456, "content-hash".to_string(), 99, None));
+}
+
+#[test]
+fn partial_checkpoint_persists_full_source_metadata_and_recovery_state() {
+    let (pool, _dir) = test_pool();
+    let store = CheckpointStore::new(&pool);
+    let source_id = store
+        .ensure_source("/tmp/bounded-session.jsonl", "codex_session")
+        .unwrap();
+    store
+        .record_parse_error(source_id, 4, "invalid record", None)
+        .unwrap();
+
+    let metadata = FileMetadata {
+        size: 8_192,
+        mtime: Some(1_700_000_000),
+        content_hash: "prefix-hash-at-boundary".to_string(),
+    };
+    let mut conn = pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+    update_partial_source_metadata_in_tx(
+        &tx,
+        source_id,
+        &metadata,
+        "revision-1",
+        SourceScanState::Boundary,
+        4_096,
+    )
+    .unwrap();
+    tx.commit().unwrap();
+    drop(conn);
+
+    assert_eq!(
+        store.source_metadata(source_id).unwrap(),
+        Some(SourceMetadata {
+            file_size: Some(8_192),
+            file_mtime: Some(1_700_000_000),
+            content_hash: Some("prefix-hash-at-boundary".to_string()),
+            last_offset: Some(4_096),
+            last_error: None,
+            source_revision: Some("revision-1".to_string()),
+            scan_state: SourceScanState::Boundary,
+        })
+    );
+
+    let conn = pool.get().unwrap();
+    let parse_errors: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM transcript_parse_errors WHERE source_id = ?1",
+            [source_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(parse_errors, 1, "partial progress must retain diagnostics");
+    drop(conn);
+    assert!(
+        !store
+            .source_matches_metadata(source_id, 8_192, Some(1_700_000_000))
+            .unwrap(),
+        "a partial checkpoint must never be treated as a completed source"
+    );
+}
+
+#[test]
+fn complete_checkpoint_marks_revision_complete_and_clears_diagnostics() {
+    let (pool, _dir) = test_pool();
+    let store = CheckpointStore::new(&pool);
+    let source_id = store
+        .ensure_source("/tmp/completed-session.jsonl", "claude_session")
+        .unwrap();
+    store
+        .record_parse_error(source_id, 2, "invalid record", None)
+        .unwrap();
+
+    let metadata = FileMetadata {
+        size: 1_024,
+        mtime: Some(1_700_000_001),
+        content_hash: "full-source-hash".to_string(),
+    };
+    let mut conn = pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+    update_complete_source_metadata_in_tx(&tx, source_id, &metadata, "revision-2").unwrap();
+    tx.commit().unwrap();
+    drop(conn);
+
+    let source = store.source_metadata(source_id).unwrap().unwrap();
+    assert_eq!(source.file_size, Some(1_024));
+    assert_eq!(source.file_mtime, Some(1_700_000_001));
+    assert_eq!(source.content_hash.as_deref(), Some("full-source-hash"));
+    assert_eq!(source.last_offset, Some(1_024));
+    assert_eq!(source.source_revision.as_deref(), Some("revision-2"));
+    assert_eq!(source.scan_state, SourceScanState::Complete);
+    let conn = pool.get().unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM transcript_parse_errors WHERE source_id = ?1",
+            [source_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn partial_checkpoint_rejects_complete_state() {
+    let (pool, _dir) = test_pool();
+    let store = CheckpointStore::new(&pool);
+    let source_id = store
+        .ensure_source("/tmp/invalid-partial-session.jsonl", "codex_session")
+        .unwrap();
+    let metadata = FileMetadata {
+        size: 1,
+        mtime: None,
+        content_hash: "h".to_string(),
+    };
+    let mut conn = pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+    let error = update_partial_source_metadata_in_tx(
+        &tx,
+        source_id,
+        &metadata,
+        "revision",
+        SourceScanState::Complete,
+        1,
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("non-complete scan state"));
 }
 
 #[test]

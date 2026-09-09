@@ -186,6 +186,11 @@ pub const INGEST_SURFACES: &[(&str, SurfaceAccess, MutationClass)] = &[
         SurfaceAccess::Read,
         MutationClass::AppendOnly,
     ),
+    (
+        "POST /v1/syslog-forward",
+        SurfaceAccess::Read,
+        MutationClass::AppendOnly,
+    ),
     ("file-tail", SurfaceAccess::Admin, MutationClass::Reversible),
     (
         "agent-docker",

@@ -27,4 +27,5 @@ src/receiver/writer.rs
 src/runtime.rs
 src/scanner.rs
 src/scanner/checkpoint.rs
+src/surfaces/contract.rs
 xtask/src/version.rs

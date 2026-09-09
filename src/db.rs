@@ -91,7 +91,7 @@ pub use maintenance::{
     enforce_storage_budget_with_state, exceeds_trigger, finish_maintenance_job,
     get_maintenance_job, get_storage_metrics, insert_maintenance_job,
     insert_maintenance_job_with_result, physical_size_bytes, purge_by_tag_window,
-    purge_old_heartbeats, purge_old_llm_invocations, purge_old_logs,
+    purge_forward_receipts, purge_old_heartbeats, purge_old_llm_invocations, purge_old_logs,
     update_maintenance_job_progress, wal_checkpoint_complete,
 };
 pub(crate) use maintenance::{PragmaName, db_pragma_i64, db_pragma_string, sqlite_sidecar_path};

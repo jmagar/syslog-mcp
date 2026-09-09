@@ -614,6 +614,8 @@ async fn serve_mcp() -> Result<()> {
     info!("Agent-command forward receiver mounted at /v1/agent-commands");
     app = app.merge(runtime.ai_transcript_router());
     info!("AI-transcript forward receiver mounted at /v1/ai-transcripts");
+    app = app.merge(runtime.syslog_forward_router());
+    info!("Receipt-backed syslog forward receiver mounted at /v1/syslog-forward");
     app = app.merge(runtime.shell_history_router());
     info!("Shell-history forward receiver mounted at /v1/shell-history");
     app = app.merge(web_app::router());

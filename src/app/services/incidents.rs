@@ -74,6 +74,7 @@ impl CortexService {
             host: req.host.clone(),
             source: None,
             source_ip_prefix: None,
+            source_ip_prefixes: None,
             severity: None,
             severity_in: None,
             app: app_name,

@@ -12,7 +12,7 @@ Complete documentation for `cortex` -- a Rust syslog receiver and MCP server for
 | `SETUP.md` | Step-by-step setup guide -- clone, build, configure, deploy, verify (at `docs/SETUP.md`) |
 | `CONFIG.md` | Configuration reference -- config.toml, env vars, storage budget |
 | `CLI.md` | Direct CLI reference -- local search, tail, errors, hosts, correlate, and stats commands |
-| `api.md` | REST API endpoint matrix (82 method/path bindings), versioning, perf, threat model, response caps, VACUUM caveats |
+| `api.md` | REST API endpoint matrix (93 method/path bindings), versioning, perf, threat model, response caps, VACUUM caveats |
 | `architecture.md` | Caller → DB diagram (HTTP CLI default + direct-SQLite consumers) |
 | `rollout.md` | Manual v0.26 upgrade playbook for HTTP CLI cutover |
 | `CHECKLIST.md` | Supplemental pre-release audit checklist -- current version policy and release gates point to `RELEASE.md` |

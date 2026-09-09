@@ -123,6 +123,88 @@ fn receiver_toml_section_deserializes_into_receiver_field() {
 }
 
 #[test]
+fn named_forwarding_agents_deserialize_as_redacted_secrets() {
+    let cfg: Config = toml::from_str(
+        "[mcp.forwarding_agents]\nnode_a = \"agent-a-secret\"\nnode_b = \"agent-b-secret\"\n",
+    )
+    .expect("named forwarding credentials should parse");
+    assert_eq!(
+        cfg.mcp.forwarding_agents["node_a"].0.as_deref(),
+        Some("agent-a-secret")
+    );
+    let debug = format!("{:?}", cfg.mcp.forwarding_agents);
+    assert!(!debug.contains("agent-a-secret"));
+    assert!(debug.contains("[REDACTED]"));
+}
+
+#[test]
+fn named_forwarding_agents_fail_closed_without_disclosing_secrets() {
+    for (principal, left, right) in [
+        ("", "0123456789abcdef", "fedcba9876543210"),
+        ("shared_bearer", "0123456789abcdef", "fedcba9876543210"),
+        ("loopback", "0123456789abcdef", "fedcba9876543210"),
+        ("bad label", "0123456789abcdef", "fedcba9876543210"),
+        ("node-a", "short", "fedcba9876543210"),
+        ("node-a", " 0123456789abcdef", "fedcba9876543210"),
+        ("node-a", "0123456789abcdef", "0123456789abcdef"),
+    ] {
+        let mut config = Config::default();
+        config
+            .mcp
+            .forwarding_agents
+            .insert(principal.into(), Some(left.into()).into());
+        config
+            .mcp
+            .forwarding_agents
+            .insert("node-b".into(), Some(right.into()).into());
+        let message = validate_auth_config(&config, false)
+            .expect_err("invalid forwarding credentials must fail closed")
+            .to_string();
+        assert!(!message.contains(left));
+        assert!(!message.contains(right));
+    }
+
+    let mut config = Config::default();
+    config.mcp.forwarding_agents.insert(
+        "node-a.example".into(),
+        Some("0123456789abcdef".into()).into(),
+    );
+    config
+        .mcp
+        .forwarding_agents
+        .insert("node_b".into(), Some("fedcba9876543210".into()).into());
+    validate_auth_config(&config, false).expect("distinct strong mappings should be accepted");
+
+    let mut config = Config::default();
+    config.mcp.api_token = Some("0123456789abcdef".into()).into();
+    config
+        .mcp
+        .forwarding_agents
+        .insert("node-a".into(), Some("0123456789abcdef".into()).into());
+    let message = validate_auth_config(&config, false)
+        .expect_err("a named forwarding secret must not alias the shared bearer")
+        .to_string();
+    assert!(!message.contains("0123456789abcdef"));
+
+    for admin in [false, true] {
+        let mut config = Config::default();
+        if admin {
+            config.api.admin_token = Some("0123456789abcdef".into()).into();
+        } else {
+            config.api.api_token = Some("0123456789abcdef".into()).into();
+        }
+        config
+            .mcp
+            .forwarding_agents
+            .insert("node-a".into(), Some("0123456789abcdef".into()).into());
+        let message = validate_auth_config(&config, false)
+            .expect_err("forwarding secrets must not alias REST service tokens")
+            .to_string();
+        assert!(!message.contains("0123456789abcdef"));
+    }
+}
+
+#[test]
 fn storage_defaults_include_sqlite_memory_guardrails() {
     let storage = StorageConfig::default();
     assert_eq!(storage.pool_size, 8);
@@ -1769,6 +1851,18 @@ fn agent_observatory_validation_rejects_zero_and_unsafe_limits() {
             .unwrap_err()
             .to_string()
             .contains("projector_poll_ms")
+    );
+
+    let cfg = AgentObservatoryConfig {
+        enabled: true,
+        projector_page_rows: 501,
+        ..Default::default()
+    };
+    assert!(
+        validate_agent_observatory_config(&cfg)
+            .unwrap_err()
+            .to_string()
+            .contains("between 1 and 500")
     );
 
     let cfg = AgentObservatoryConfig {

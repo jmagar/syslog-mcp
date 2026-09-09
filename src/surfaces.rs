@@ -391,6 +391,7 @@ pub const SURFACE_SPECS: &[SurfaceSpec] = &[
         RetainedProtocolCompatibility,
         Read
     ),
+    mcp!("recurring_error_comparison", Analysis, Canonical, Read),
     mcp!(
         "incident_context",
         Analysis,

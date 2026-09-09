@@ -8,6 +8,18 @@ use cortex::app::{
 use super::super::SessionsOutputDetail;
 use super::super::color::{cyan, muted, primary, severity, violet};
 use super::common::{local_ts, print_json, print_log, truncate};
+use super::graph::safe_display;
+
+fn safe_session_title(title: Option<&str>, max: usize) -> String {
+    truncate(
+        &safe_session_field(title.unwrap_or("Untitled session")),
+        max,
+    )
+}
+
+fn safe_session_field(value: &str) -> String {
+    safe_display(&cortex::command_log::scrub_command(value))
+}
 
 pub(crate) mod events;
 
@@ -70,17 +82,18 @@ pub(crate) fn print_sessions_response(
     println!(
         "{}",
         muted(&format!(
-            "{:<40} {:<10} {:<36} {:<15} COUNT",
-            "PROJECT", "TOOL", "SESSION ID", "HOST"
+            "{:<32} {:<28} {:<10} {:<20} {:<15} COUNT",
+            "TITLE", "PROJECT", "TOOL", "SESSION ID", "HOST"
         ))
     );
     for s in &response.sessions {
         println!(
-            "{:<40} {:<10} {:<36} {:<15} {}",
-            primary(&truncate(&s.project, 39)),
-            violet(&s.tool),
-            muted(&s.session_id),
-            cyan(&s.hostname),
+            "{:<32} {:<28} {:<10} {:<20} {:<15} {}",
+            primary(&safe_session_title(s.title.as_deref(), 31)),
+            primary(&truncate(&safe_session_field(&s.project), 27)),
+            violet(&safe_session_field(&s.tool)),
+            muted(&truncate(&safe_session_field(&s.session_id), 19)),
+            cyan(&safe_session_field(&s.hostname)),
             cyan(&s.event_count.to_string())
         );
     }
@@ -113,16 +126,17 @@ pub(crate) fn print_search_sessions_response(
     println!(
         "{}",
         muted(&format!(
-            "{:<10} {:<30} {:<20} {:<6} MATCH",
-            "TOOL", "PROJECT", "SESSION ID", "EVENTS"
+            "{:<32} {:<10} {:<26} {:<18} {:<6} MATCH",
+            "TITLE", "TOOL", "PROJECT", "SESSION ID", "EVENTS"
         ))
     );
     for session in &response.sessions {
         println!(
-            "{:<10} {:<30} {:<20} {:<6} {}",
-            violet(&session.tool),
-            primary(&truncate(&session.project, 29)),
-            muted(&truncate(&session.session_id, 19)),
+            "{:<32} {:<10} {:<26} {:<18} {:<6} {}",
+            primary(&safe_session_title(session.title.as_deref(), 31)),
+            violet(&safe_session_field(&session.tool)),
+            primary(&truncate(&safe_session_field(&session.project), 25)),
+            muted(&truncate(&safe_session_field(&session.session_id), 17)),
             cyan(&session.event_count.to_string()),
             cyan(&session.match_count.to_string())
         );

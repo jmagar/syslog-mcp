@@ -1,10 +1,11 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use chrono::{TimeDelta, Utc};
+use parking_lot::Mutex;
 use tokio::sync::Semaphore;
 
 const DB_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -45,15 +46,16 @@ use super::models::{
     ListSessionsResponse, ListSourceIpsRequest, ListSourceIpsResponse, LlmInvocationsRequest,
     LogEntry, MaintenanceJobStatus, McpIncidentEvidence, McpIncidentSummary,
     NotificationsRecentRequest, PatternsRequest, PatternsResponse, ProjectContextRequest,
-    ProjectContextResponse, RequestActor, ResolvedTopicEntity, SearchLogsRequest,
-    SearchLogsResponse, SearchSessionsRequest, SearchSessionsResponse, SearchedSessionEntry,
-    ServiceJournalEntry, ServiceLogsRequest, ServiceLogsResponse, SilentHostsRequest,
-    SilentHostsResponse, SimilarIncidentsRequest, SimilarIncidentsResponse, SkillIncidentEvidence,
-    SkillIncidentSummary, TailLogsRequest, TimelineRequest, TimelineResponse,
-    TopicCorrelateRequest, TopicCorrelateResponse, TopicExpansionEntity, TopicTimelineEntry,
-    TopologyFinding, TopologyFindingEntity, TopologyFindingEvidence, UsageBlocksRequest,
-    UsageBlocksResponse, app_entity_summary, app_graph_from_explain_response, app_log_summary,
-    safe_passive_text,
+    ProjectContextResponse, RecurringErrorComparisonEntry, RecurringErrorComparisonRequest,
+    RecurringErrorComparisonResponse, RecurringErrorEvidenceBundle, RecurringErrorNextQuery,
+    RequestActor, ResolvedTopicEntity, SearchLogsRequest, SearchLogsResponse,
+    SearchSessionsRequest, SearchSessionsResponse, SearchedSessionEntry, ServiceJournalEntry,
+    ServiceLogsRequest, ServiceLogsResponse, SilentHostsRequest, SilentHostsResponse,
+    SimilarIncidentsRequest, SimilarIncidentsResponse, SkillIncidentEvidence, SkillIncidentSummary,
+    TailLogsRequest, TimelineRequest, TimelineResponse, TopicCorrelateRequest,
+    TopicCorrelateResponse, TopicExpansionEntity, TopicTimelineEntry, TopologyFinding,
+    TopologyFindingEntity, TopologyFindingEvidence, UsageBlocksRequest, UsageBlocksResponse,
+    app_entity_summary, app_graph_from_explain_response, app_log_summary, safe_passive_text,
 };
 use super::os_adapter::{OsAdapter, SystemOsAdapter};
 use super::time::{parse_optional_timestamp, parse_required_timestamp, rfc3339_z};
@@ -173,6 +175,11 @@ pub struct CortexService {
     file_tail_reconcile: Option<Arc<dyn Fn() -> anyhow::Result<()> + Send + Sync>>,
     file_tail_statuses: Option<Arc<dyn Fn() -> Vec<FileTailStatus> + Send + Sync>>,
     llm_runner: Arc<crate::app::llm_runner::LlmRunner>,
+    /// Bounded presentation cache for recurring-error bundles. Entries are
+    /// created only after irreversible redaction in `services/rag.rs`; raw
+    /// signature rows never enter this map.
+    pub(super) recurring_error_bundle_cache:
+        Arc<Mutex<BTreeMap<String, RecurringErrorComparisonEntry>>>,
 }
 
 /// Number of read permits issued for a given r2d2 pool size.
@@ -214,6 +221,7 @@ impl CortexService {
             file_tail_reconcile: None,
             file_tail_statuses: None,
             llm_runner,
+            recurring_error_bundle_cache: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 
@@ -246,6 +254,7 @@ impl CortexService {
             file_tail_reconcile: None,
             file_tail_statuses: None,
             llm_runner,
+            recurring_error_bundle_cache: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 

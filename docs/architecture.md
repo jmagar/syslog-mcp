@@ -31,14 +31,14 @@ SQLite database and a service layer:
 | `config.rs` | all | Layered config: defaults → `config.toml` → `~/.cortex/.env` → process env; startup validation (non-loopback auth gate) |
 | `runtime.rs` + `runtime/` | all | `RuntimeCore`: wires pool, ingest, auth policy; spawns the maintenance tasks below |
 | `app/` | core | `CortexService` service layer — shared limits/validation for MCP, REST, and CLI |
-| `db/` | core | SQLite pool + 50 sequential migrations, FTS5 queries, retention and storage-budget maintenance |
+| `db/` | core | SQLite pool + 58 sequential migrations, FTS5 queries, retention and storage-budget maintenance |
 | `receiver/` + `receiver.rs` | core | UDP + TCP listeners (supervised with restart + backoff), RFC 3164/5424 + CEF parsing |
 | `ingest.rs` | core | mpsc channel + batch writer (one pool connection reserved for this writer) |
 | `otlp.rs` | core | OTLP/HTTP `POST /v1/logs` (protobuf, 4 MiB cap) |
 | `agent/`, `heartbeat_agent.rs` | inventory | Host-local cortex agent, including Docker log streaming from the local socket |
 | `docker_ingest/` | core | Legacy central pull container stdout/stderr + lifecycle events via explicit remote Docker Engine HTTP endpoints |
 | `mcp/` | core | RMCP Streamable HTTP server, `ACTION_SPECS` registry, scope gates, `/health` + `/health/full` |
-| `api.rs` | core | Always-on `/api/*` REST surface (82 method/path bindings), bearer-token gated |
+| `api.rs` | core | Always-on `/api/*` REST surface (93 method/path bindings), bearer-token gated |
 | `scanner/`, `sessions_watch.rs` | core | AI transcript scanning/scrubbing and the host-side watch daemon |
 | `inventory/` | inventory | Collectors (SSH, Docker, UniFi/Unraid/media APIs), redaction, normalized cache |
 | `heartbeat.rs` / `heartbeat_agent.rs` | inventory | `POST /v1/heartbeats` ingest + host-local heartbeat agent |

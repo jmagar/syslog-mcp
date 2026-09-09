@@ -76,6 +76,19 @@ fn coverage_tooling_is_documented_and_scripted() {
 }
 
 #[test]
+fn published_package_readme_tracks_the_current_schema_version() {
+    let package_readme = include_str!("../packages/cortex-rmcp/README.md");
+    let current = format!(
+        "{} sequential schema migrations",
+        crate::db::KNOWN_SCHEMA_VERSION
+    );
+    assert!(
+        package_readme.contains(&current),
+        "packages/cortex-rmcp/README.md should report {current}"
+    );
+}
+
+#[test]
 fn live_smoke_uses_the_fail_closed_registry_runner() {
     let live = include_str!("../tests/live/runner.sh");
     let surfaces = include_str!("../tests/live/phases/surfaces/run.sh");

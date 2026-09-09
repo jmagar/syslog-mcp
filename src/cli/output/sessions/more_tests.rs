@@ -177,6 +177,8 @@ fn human_ai_more_outputs_accept_representative_payloads() {
                 first_seen: "2026-06-13T12:00:00Z".to_string(),
                 last_seen: "2026-06-13T12:01:00Z".to_string(),
                 event_count: 4,
+                title: Some("Investigate storage latency".to_string()),
+                title_provenance: Some("user".to_string()),
             }],
         },
         false,

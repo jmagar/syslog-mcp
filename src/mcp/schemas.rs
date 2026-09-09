@@ -219,7 +219,7 @@ pub(super) fn tool_definitions() -> Vec<Value> {
                 },
                 "until": {
                     "type": "string",
-                    "description": "For action=search, filter, sessions, search_sessions, abuse, abuse_incidents, abuse_investigate, ai_correlate, usage_blocks, list_ai_tools, list_ai_projects, errors, timeline, patterns, apps, similar_incidents, or incident_context: end of time range as ISO 8601/RFC3339. For incident_context, defaults to now. For action=timeline: a bucket-sized default lookback bounds the query when since/until are omitted."
+                    "description": "For action=search, filter, sessions, search_sessions, abuse, abuse_incidents, abuse_investigate, ai_correlate, usage_blocks, list_ai_tools, list_ai_projects, errors, timeline, patterns, apps, similar_incidents, recurring_error_comparison, or incident_context: end of time range as ISO 8601/RFC3339. For incident_context and recurring_error_comparison, defaults to now. For action=timeline: a bucket-sized default lookback bounds the query when since/until are omitted."
                 },
                 "status": {
                     "type": "string",
@@ -227,7 +227,7 @@ pub(super) fn tool_definitions() -> Vec<Value> {
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "For action=search: max results, default 50, max 1000. For action=filter: max results, default 100, max 1000. For action=errors: max summary rows, max 100. For action=sessions: max results, default 100, max 1000. For action=search_sessions: max grouped results, default 20, max 100 and returns total_candidates, candidate_rows, candidate_cap, candidate_window_truncated, and truncated. For action=abuse: max matches, default 20, max 100, each with same-session context. For action=abuse_incidents: max incidents, default 20, max 100; response includes total_incidents, candidate_rows, truncated. For action=abuse_investigate: max incidents to expand into evidence bundles, default 3, max 10. For action=ai_correlate: max AI anchors, default 10, max 50. For action=usage_blocks: max 5-hour usage buckets, default 1000, max 1000. For action=project_context: recent representative entries, default 5, max 20. For action=correlate: max total events, default 500, max 999. For action=topic_correlate: max timeline entries, default 200, max 1000. For action=correlate_state: max log rows per host, default 100, max 500. For action=host_state: max heartbeat samples, default 1, max 100. For action=patterns: alias for top_n, default 20, max 200. For action=clock_skew: max host rows, max 100. For action=apps or source_ips: page size, default 500, max 5000. For action=similar_incidents: max incident clusters, default 10, max 50. For action=incident_context: max error log rows, default 50, max 200. For action=graph: alias candidate or relationship cap. For action=llm_invocations: max audit rows, default 50, max 500."
+                    "description": "For action=search: max results, default 50, max 1000. For action=filter: max results, default 100, max 1000. For action=errors: max summary rows, max 100. For action=sessions: max results, default 100, max 1000. For action=search_sessions: max grouped results, default 20, max 100 and returns total_candidates, candidate_rows, candidate_cap, candidate_window_truncated, and truncated. For action=abuse: max matches, default 20, max 100, each with same-session context. For action=abuse_incidents: max incidents, default 20, max 100; response includes total_incidents, candidate_rows, truncated. For action=abuse_investigate: max incidents to expand into evidence bundles, default 3, max 10. For action=ai_correlate: max AI anchors, default 10, max 50. For action=usage_blocks: max 5-hour usage buckets, default 1000, max 1000. For action=project_context: recent representative entries, default 5, max 20. For action=correlate: max total events, default 500, max 999. For action=topic_correlate: max timeline entries, default 200, max 1000. For action=correlate_state: max log rows per host, default 100, max 500. For action=host_state: max heartbeat samples, default 1, max 100. For action=patterns: alias for top_n, default 20, max 200. For action=clock_skew: max host rows, max 100. For action=apps or source_ips: page size, default 500, max 5000. For action=similar_incidents or recurring_error_comparison: default 10, max 50. For action=incident_context: max error log rows, default 50, max 200. For action=graph: alias candidate or relationship cap. For action=llm_invocations: max audit rows, default 50, max 500."
                 },
                 "answer_limit": {
                     "type": "integer",
@@ -281,7 +281,7 @@ pub(super) fn tool_definitions() -> Vec<Value> {
                 },
                 "window_minutes": {
                     "type": "integer",
-                    "description": "For action=correlate: minutes before and after reference_time to search, default 5, max 60. For action=correlate_state: minutes before and after reference_time, default 10, max 120. For action=ai_correlate: minutes before and after each AI anchor, default 5, max 120. For action=abuse_incidents or abuse_investigate: incident grouping window, default 10, max 120. For action=similar_incidents: cluster grouping window in minutes, default 30, clamp 5..=120."
+                    "description": "For action=correlate: minutes before and after reference_time to search, default 5, max 60. For action=correlate_state: minutes before and after reference_time, default 10, max 120. For action=ai_correlate: minutes before and after each AI anchor, default 5, max 120. For action=abuse_incidents or abuse_investigate: incident grouping window, default 10, max 120. For action=similar_incidents: cluster grouping window in minutes, default 30, clamp 5..=120. For action=recurring_error_comparison: focal window width when since is absent, default 60, clamp 5..=1440."
                 },
                 "correlation_window_minutes": {
                     "type": "integer",
@@ -368,7 +368,7 @@ pub(super) fn tool_definitions() -> Vec<Value> {
                 },
                 "since": {
                     "type": "string",
-                    "description": "For action=search, filter, sessions, search_sessions, abuse, abuse_incidents, abuse_investigate, ai_correlate, usage_blocks, list_ai_tools, list_ai_projects, errors, timeline, patterns, apps, similar_incidents, or incident_context: start of time range as ISO 8601/RFC3339. Defaults to one hour ago for errors and incident_context, and 24 hours ago for patterns when both bounds are omitted. Timeline applies a bucket-sized default lookback. For action=clock_skew or host_state: lower sample bound. For action=notifications_recent or llm_invocations: lower time bound."
+                    "description": "For action=search, filter, sessions, search_sessions, abuse, abuse_incidents, abuse_investigate, ai_correlate, usage_blocks, list_ai_tools, list_ai_projects, errors, timeline, patterns, apps, similar_incidents, recurring_error_comparison, or incident_context: start of time range as ISO 8601/RFC3339. Defaults to one hour ago for errors and incident_context, 24 hours ago for patterns, and to until minus window_minutes for recurring_error_comparison when absent. Timeline applies a bucket-sized default lookback. For action=clock_skew or host_state: lower sample bound. For action=notifications_recent or llm_invocations: lower time bound."
                 },
                 "recent_minutes": {
                     "type": "integer",
@@ -396,11 +396,11 @@ pub(super) fn tool_definitions() -> Vec<Value> {
                 },
                 "include_acknowledged": {
                     "type": "boolean",
-                    "description": "For action=unaddressed_errors: include already-acknowledged signatures. Default false."
+                    "description": "For action=unaddressed_errors or recurring_error_comparison: include already-acknowledged signatures. Default false."
                 },
                 "signature_hash": {
                     "type": "string",
-                    "description": "For action=ack_error or unack_error: the SHA-256 signature hash to acknowledge or un-acknowledge."
+                    "description": "For action=ack_error or unack_error: the SHA-256 signature hash to acknowledge or un-acknowledge. For action=recurring_error_comparison: restrict to one canonical signature hash."
                 },
                 "notes": {
                     "type": "string",

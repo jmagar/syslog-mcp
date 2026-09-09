@@ -161,10 +161,6 @@ jobs:
         uses: ./.github/actions/setup-rust-kache
         with:
           components: clippy
-          # The shared wrapper has twice exited during the final cortex crate
-          # compile without forwarding a rustc diagnostic. Keep this required
-          # correctness gate independent of the optional cache daemon.
-          enable-cache: "false"
 
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
@@ -180,10 +176,6 @@ jobs:
 
       - name: Install Rust and kache
         uses: ./.github/actions/setup-rust-kache
-        with:
-          # A cache miss only costs time; a wrapper failure must not look like
-          # a compiler/test failure. The cache remains enabled on lighter jobs.
-          enable-cache: "false"
 
       - name: Install nextest
         uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2
@@ -208,6 +200,32 @@ jobs:
         run: |
           bash tests/live/phases/artifacts/selftest.sh
           bash tests/live/lib/aggregate-selftest.sh
+
+  session-query-benchmark:
+    name: Session query benchmark
+    runs-on: ci-pool-rust
+    timeout-minutes: 15
+    needs: [changes]
+    if: ${{ needs.changes.outputs.rust == 'true' }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install Rust and kache
+        uses: ./.github/actions/setup-rust-kache
+
+      - name: Collect session-query benchmark telemetry
+        env:
+          CORTEX_BENCH_ROWS: "50000"
+          CORTEX_BENCH_ARTIFACT: session-query-benchmark.json
+        run: cargo test --lib bench_stats_and_sessions -- --ignored --nocapture
+
+      - name: Upload benchmark evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: session-query-benchmark
+          path: session-query-benchmark.json
+          if-no-files-found: error
 
   docs-contract:
     name: Docs Contract
@@ -295,8 +313,6 @@ jobs:
 
   mcp-integration:
     name: Live PR Smoke
-    # The system pool does not guarantee a Docker socket. GitHub's Linux image
-    # does, and this gate explicitly validates that provisioned boundary.
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     needs: [changes, test]
@@ -346,8 +362,6 @@ jobs:
 
   deployment-contract:
     name: Container and Deployment Contracts
-    # Container qualification requires a provider with a contractual Docker
-    # daemon instead of whichever host happens to back ci-pool-system.
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     needs: [changes]

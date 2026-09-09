@@ -339,39 +339,33 @@ pub fn list_observatory_events(
 pub fn list_observatory_spans(
     pool: &DbPool,
     run_id: i64,
-    identity: &RunTelemetryIdentity,
+    _identity: &RunTelemetryIdentity,
     q: &TelemetryQuery,
     cursor: Option<(i64, i64)>,
     limit: usize,
     high_water: i64,
 ) -> Result<Vec<ObservatorySpanRow>> {
     let conn = pool.get()?;
-    let mut values = vec![
-        run_id.into(),
-        identity.hostname.clone().into(),
-        identity.native_session_id.clone().into(),
-        identity.tool.clone().into(),
-        identity.provider_tool.clone().unwrap_or_default().into(),
-    ];
-    let mut sql="SELECT id,trace_id,span_id,parent_span_id,span_name,span_kind,start_time_unix_nano,end_time_unix_nano,duration_nano,status_code,status_message,service_name,attributes_json FROM otel_spans WHERE (run_id=? OR (run_id IS NULL AND hostname=? AND ai_session_id=? AND (ai_tool=? OR ai_tool=?) AND (SELECT COUNT(*) FROM agent_runs ar WHERE ar.hostname=otel_spans.hostname AND ar.native_session_id=otel_spans.ai_session_id AND (ar.tool=otel_spans.ai_tool OR ar.provider_tool=otel_spans.ai_tool))=1))".to_string();
-    push_filter(&mut sql, &mut values, "id <= ?", high_water);
+    let mut values = vec![run_id.into()];
+    let mut sql="SELECT os.id,os.trace_id,os.span_id,os.parent_span_id,os.span_name,os.span_kind,os.start_time_unix_nano,os.end_time_unix_nano,os.duration_nano,os.status_code,os.status_message,os.service_name,os.attributes_json,r.identifier_namespace,r.evidence_kind,r.confidence,r.reason,r.candidate_count FROM agent_run_trace_relations r JOIN otel_spans os ON os.trace_id=r.trace_id AND os.span_id=r.span_id WHERE r.run_id=?".to_string();
+    push_filter(&mut sql, &mut values, "os.id <= ?", high_water);
     if let Some(v) = &q.trace_id {
-        push_filter(&mut sql, &mut values, "trace_id=?", v.clone());
+        push_filter(&mut sql, &mut values, "os.trace_id=?", v.clone());
     }
     if let Some(v) = q.since_nano {
-        push_filter(&mut sql, &mut values, "start_time_unix_nano>=?", v);
+        push_filter(&mut sql, &mut values, "os.start_time_unix_nano>=?", v);
     }
     if let Some(v) = q.until_nano {
-        push_filter(&mut sql, &mut values, "start_time_unix_nano<=?", v);
+        push_filter(&mut sql, &mut values, "os.start_time_unix_nano<=?", v);
     }
     int_cursor(
         &mut sql,
         &mut values,
-        ("start_time_unix_nano", "id"),
+        ("os.start_time_unix_nano", "os.id"),
         cursor,
         false,
     );
-    sql.push_str(" ORDER BY start_time_unix_nano DESC,id DESC LIMIT ?");
+    sql.push_str(" ORDER BY os.start_time_unix_nano DESC,os.id DESC LIMIT ?");
     values.push(((bounded_limit(limit, 500) + 1) as i64).into());
     conn.prepare(&sql)?
         .query_map(params_from_iter(values), |r| {
@@ -389,6 +383,11 @@ pub fn list_observatory_spans(
                 status_message: r.get(10)?,
                 service_name: r.get(11)?,
                 attributes_json: r.get(12)?,
+                relation_namespace: r.get(13)?,
+                relation_evidence_kind: r.get(14)?,
+                relation_confidence: r.get(15)?,
+                relation_reason: r.get(16)?,
+                relation_candidate_count: r.get(17)?,
             })
         })?
         .collect::<rusqlite::Result<_>>()

@@ -57,6 +57,7 @@ A single MCP tool, `mcp__cortex__cortex`, dispatches on a required `action` argu
 | `notifications_test` | Send a test notification via Apprise |
 | `llm_invocations` | Recent LLM invocation audit records (concurrency/rate-limit/circuit-breaker denials included) |
 | `similar_incidents` | FTS5 cluster search over historical system logs matching a query |
+| `recurring_error_comparison` | Compare recurring error signatures with redacted deterministic evidence bundles |
 | `incident_context` | Full log context bundle for a known time window |
 | `graph` | Resolve graph entities and return bounded one-hop neighborhoods with evidence |
 | `artifact_evidence` | Query bounded source-attributed artifact ecosystem evidence |
@@ -126,7 +127,7 @@ sessions, git_commits, users, devices, compose_projects) projected from logs.
 Start with **cheap** bounded calls, narrow scope with **moderate** actions, and reserve
 **expensive** ones for a specific question:
 - cheap: `search`, `filter`, `tail`, `errors`, `hosts`, `status`, `apps`, `sessions`, `timeline`, `context`, `get`, `help`, …
-- moderate: `map`, `correlate`, `topic_correlate`, `ai_correlate`, `host_state`, `silent_hosts`, `unaddressed_errors`, `incident_context`, …
+- moderate: `map`, `correlate`, `topic_correlate`, `ai_correlate`, `host_state`, `silent_hosts`, `unaddressed_errors`, `recurring_error_comparison`, `incident_context`, …
 - expensive: `fleet_state`, `correlate_state`, `stats`, `patterns`, `anomalies`, `compare`, `compose_doctor`, `graph`.
 - write (admin scope): `ack_error`, `unack_error`, `file_tails`, `notifications_test`.
 - read (admin scope, exposes operational state): `llm_invocations`.

@@ -26,6 +26,20 @@ const MAX_CLIENTS: usize = 64;
 const MAX_CONNECTION_DURATION: Duration = Duration::from_secs(15 * 60);
 static CLIENTS: OnceLock<std::sync::Arc<Semaphore>> = OnceLock::new();
 
+pub(crate) fn shared_client_permits() -> std::sync::Arc<Semaphore> {
+    CLIENTS
+        .get_or_init(|| std::sync::Arc::new(Semaphore::new(MAX_CLIENTS)))
+        .clone()
+}
+
+fn acquire_client_permit(
+    clients: std::sync::Arc<Semaphore>,
+) -> Result<OwnedSemaphorePermit, StreamError> {
+    clients
+        .try_acquire_owned()
+        .map_err(|_| StreamError::Overloaded)
+}
+
 #[derive(Clone)]
 pub struct CursorKeys {
     current: std::sync::Arc<[u8]>,
@@ -103,6 +117,7 @@ struct StreamContract {
     event_name: &'static str,
     cursor_keys: CursorKeys,
     connection_duration: Duration,
+    clients: std::sync::Arc<Semaphore>,
 }
 
 #[derive(Clone)]
@@ -110,10 +125,12 @@ struct ClientLease(std::sync::Arc<std::sync::Mutex<Option<OwnedSemaphorePermit>>
 
 fn client_lease(permit: OwnedSemaphorePermit, duration: Duration) -> ClientLease {
     let lease = ClientLease(std::sync::Arc::new(std::sync::Mutex::new(Some(permit))));
-    let expiry = lease.clone();
+    let expiry = std::sync::Arc::downgrade(&lease.0);
     tokio::spawn(async move {
         tokio::time::sleep(duration).await;
-        let _ = expiry.0.lock().expect("client lease mutex poisoned").take();
+        if let Some(expiry) = expiry.upgrade() {
+            let _ = expiry.lock().expect("client lease mutex poisoned").take();
+        }
     });
     lease
 }
@@ -123,6 +140,16 @@ pub async fn log_stream(
     auth: AuthContext,
     request: LogStreamRequest,
     cursor_keys: CursorKeys,
+) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>, StreamError> {
+    log_stream_with_clients(service, auth, request, cursor_keys, shared_client_permits()).await
+}
+
+pub(crate) async fn log_stream_with_clients(
+    service: CortexService,
+    auth: AuthContext,
+    request: LogStreamRequest,
+    cursor_keys: CursorKeys,
+    clients: std::sync::Arc<Semaphore>,
 ) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>, StreamError> {
     let mut filter_request = request.clone();
     filter_request.cursor = None;
@@ -145,6 +172,7 @@ pub async fn log_stream(
             event_name: "log",
             cursor_keys,
             connection_duration: MAX_CONNECTION_DURATION,
+            clients,
         },
     )
     .await
@@ -188,6 +216,7 @@ pub async fn session_stream(
             event_name: "session",
             cursor_keys,
             connection_duration: MAX_CONNECTION_DURATION,
+            clients: shared_client_permits(),
         },
     )
     .await
@@ -202,11 +231,7 @@ async fn build_stream(
     contract: StreamContract,
 ) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>, StreamError> {
     require_read_scope(&auth)?;
-    let client_permit = CLIENTS
-        .get_or_init(|| std::sync::Arc::new(Semaphore::new(MAX_CLIENTS)))
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| StreamError::Overloaded)?;
+    let client_permit = acquire_client_permit(contract.clients.clone())?;
     let principal = principal_key(&auth);
     let decoded = cursor
         .as_deref()

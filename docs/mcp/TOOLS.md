@@ -57,6 +57,7 @@ cortex exposes one MCP tool named `cortex`. The required
 | `notifications_test` | Send a test notification via Apprise |
 | `llm_invocations` | Recent LLM invocation audit records (concurrency/rate-limit/circuit-breaker denials included) |
 | `similar_incidents` | FTS5 cluster search — find historical incidents similar to a query |
+| `recurring_error_comparison` | Compare recurring error signatures with redacted deterministic evidence bundles |
 | `incident_context` | Full context bundle for a known time window — logs + AI sessions |
 | `graph` | Resolve graph entities, neighborhoods, evidence-backed explanations, and evidence proof rows |
 | `artifact_evidence` | Query bounded source-attributed artifact ecosystem evidence |

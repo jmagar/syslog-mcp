@@ -48,6 +48,7 @@ pub mod setup;
 pub mod shell_history_ingest;
 pub mod stream;
 pub mod surfaces;
+pub mod syslog_forward_ingest;
 pub mod update;
 pub mod web_app;
 
@@ -191,6 +192,7 @@ pub mod testing {
                 public_url: public_url.map(|u| u.to_string()),
                 ..Default::default()
             },
+            forwarding_agents: Default::default(),
             static_token_is_admin: false,
         }
     }

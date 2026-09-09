@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -28,6 +29,9 @@ const WATCH_EVENT_BUFFER: usize = 1024;
 const MAX_PENDING_FILES: usize = 4096;
 const OVERFLOW_RESCAN_LOOKBACK: Duration = Duration::from_secs(5 * 60);
 const OVERFLOW_RESCAN_MIN_INTERVAL: Duration = Duration::from_secs(60);
+const RESCAN_PER_SOURCE_MAX_BYTES: u64 = 16 * 1024 * 1024;
+const RESCAN_MAX_BYTES: u64 = 128 * 1024 * 1024;
+const RESCAN_PER_SOURCE_DEADLINE: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone)]
 pub struct WatchOptions {
@@ -69,10 +73,14 @@ pub async fn run(service: CortexService, options: WatchOptions) -> Result<()> {
     }
 
     tracing::info!(targets = ?targets, watched_dirs = watched_dirs.len(), "AI transcript watcher started");
+    let mut rescan_cursor = RescanCursor::default();
+    let mut next_overflow_rescan_at = Instant::now();
     if options.initial_scan
-        && run_rescan(&service, &options, "initial", None).await == RescanStatus::Retry
+        && run_rescan(&service, &options, "initial", None, &mut rescan_cursor).await
+            == RescanStatus::Retry
     {
         overflow_rescan.store(true, Ordering::Relaxed);
+        next_overflow_rescan_at = Instant::now() + OVERFLOW_RESCAN_MIN_INTERVAL;
     }
 
     let tick_duration = options
@@ -81,8 +89,6 @@ pub async fn run(service: CortexService, options: WatchOptions) -> Result<()> {
         .max(Duration::from_millis(50));
     let mut tick = tokio::time::interval(tick_duration);
     let mut pending = PendingFiles::default();
-    let mut next_overflow_rescan_at = Instant::now();
-
     loop {
         tokio::select! {
             Some(event) = rx.recv() => {
@@ -106,7 +112,7 @@ pub async fn run(service: CortexService, options: WatchOptions) -> Result<()> {
                         min_interval_ms = OVERFLOW_RESCAN_MIN_INTERVAL.as_millis(),
                         "AI transcript watcher running bounded overflow rescan"
                     );
-                    if run_rescan(&service, &options, "rescan", Some(since)).await == RescanStatus::Retry {
+                    if run_rescan(&service, &options, "rescan", Some(since), &mut rescan_cursor).await == RescanStatus::Retry {
                         overflow_rescan.store(true, Ordering::Relaxed);
                     }
                     next_overflow_rescan_at = Instant::now() + OVERFLOW_RESCAN_MIN_INTERVAL;
@@ -214,23 +220,81 @@ enum RescanStatus {
     Retry,
 }
 
+#[derive(Debug, Default)]
+struct RescanCursor {
+    start_after: Option<PathBuf>,
+    discovery_start_after: BTreeMap<PathBuf, PathBuf>,
+}
+
 async fn run_rescan(
     service: &CortexService,
     options: &WatchOptions,
     stage: &str,
     since: Option<SystemTime>,
+    cursor: &mut RescanCursor,
 ) -> RescanStatus {
     let path = options.path.as_ref().map(|path| path.display().to_string());
-    let since = since.map(system_time_to_rfc3339);
-    match service.index_ai_roots(path, false, since).await {
+    // A cursor means we are continuing an incomplete bounded backlog. Applying
+    // a fresh overflow lookback here would skip older deferred files and make
+    // the backlog look complete; retain the original scan filter only until
+    // the first attempted source establishes the continuation cursor.
+    let since = rescan_since_for_cursor(since, cursor).map(system_time_to_rfc3339);
+    match service
+        .index_ai_roots_with_scan_budget(
+            path,
+            false,
+            since,
+            Some(scanner::ScanBudget {
+                per_source_max_bytes: RESCAN_PER_SOURCE_MAX_BYTES,
+                scan_max_bytes: RESCAN_MAX_BYTES,
+                per_source_deadline: RESCAN_PER_SOURCE_DEADLINE,
+            }),
+            cursor.start_after.clone(),
+            cursor.discovery_start_after.clone(),
+        )
+        .await
+    {
         Ok(result) => {
             emit_index_result(stage, &result, options.json);
-            RescanStatus::Completed
+            if let Some(next) = result.next_scan_cursor.clone() {
+                cursor.start_after = Some(next);
+            }
+            cursor.discovery_start_after = result.next_discovery_cursors.clone();
+            let status = rescan_status_for_result(&result);
+            if status == RescanStatus::Completed {
+                cursor.start_after = None;
+                cursor.discovery_start_after.clear();
+            }
+            status
         }
         Err(error) => {
             tracing::warn!(error = %error, "AI transcript rescan failed");
             RescanStatus::Retry
         }
+    }
+}
+
+fn rescan_since_for_cursor(since: Option<SystemTime>, cursor: &RescanCursor) -> Option<SystemTime> {
+    if cursor.start_after.is_some() || !cursor.discovery_start_after.is_empty() {
+        None
+    } else {
+        since
+    }
+}
+
+fn rescan_status_for_result(result: &IndexResult) -> RescanStatus {
+    if result.source_budget_cap_hits > 0
+        || result.source_deadline_exceeded > 0
+        || result.scan_budget_cap_hit
+        || result.discovery_cap_hits > 0
+        || result.discovery_deferred_roots > 0
+        || result.deferred_sources > 0
+        || result.discovery_cap_hits > 0
+        || result.discovery_deferred_roots > 0
+    {
+        RescanStatus::Retry
+    } else {
+        RescanStatus::Completed
     }
 }
 
@@ -339,16 +403,25 @@ fn emit_index_result(stage: &str, result: &IndexResult, json: bool) {
         || result.parse_errors > 0
         || result.storage_blocked_chunks > 0
         || result.dropped_metadata_fields > 0
+        || result.source_budget_cap_hits > 0
+        || result.source_deadline_exceeded > 0
+        || result.scan_budget_cap_hit
         || !result.file_errors.is_empty()
     {
         println!(
-            "{stage}: files={} ingested={} duplicates={} parse_errors={} storage_blocked={} dropped_metadata_fields={} file_errors={}",
+            "{stage}: files={} ingested={} duplicates={} parse_errors={} storage_blocked={} dropped_metadata_fields={} source_budget_cap_hits={} source_deadline_exceeded={} discovery_cap_hits={} discovery_deferred_roots={} scan_budget_cap_hit={} deferred_sources={} file_errors={}",
             result.discovered_files,
             result.ingested,
             result.skipped_dupes,
             result.parse_errors,
             result.storage_blocked_chunks,
             result.dropped_metadata_fields,
+            result.source_budget_cap_hits,
+            result.source_deadline_exceeded,
+            result.discovery_cap_hits,
+            result.discovery_deferred_roots,
+            result.scan_budget_cap_hit,
+            result.deferred_sources,
             result.file_errors.len()
         );
     }

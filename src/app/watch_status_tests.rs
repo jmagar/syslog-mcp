@@ -129,7 +129,7 @@ async fn ai_watch_status_returns_journal_lines_from_os_adapter() {
     let pool = Arc::new(init_pool(&storage).unwrap());
     let os = Arc::new(MockProbeOs {
         journal_output:
-            "May 26 10:00:00 host cortex-sessions-watch[123]: started\nMay 26 10:01:00 host cortex-sessions-watch[123]: indexed 5 files\n"
+            "May 26 10:00:00 host cortex-sessions-watch[123]: started at /Users/operator/.codex/sessions/a.jsonl token=do-not-expose\nMay 26 10:01:00 host cortex-sessions-watch[123]: indexed 5 files\n"
                 .to_string(),
         probe_stdout: b"active\n".to_vec(),
         probe_success: true,
@@ -141,8 +141,49 @@ async fn ai_watch_status_returns_journal_lines_from_os_adapter() {
     assert_eq!(report.service, "cortex-sessions-watch.service");
     assert_eq!(report.latest_journal.len(), 2);
     assert!(report.latest_journal[0].contains("started"));
+    assert!(report.latest_journal[0].contains("[PATH]"));
+    assert!(!report.latest_journal[0].contains("/Users/operator"));
+    assert!(!report.latest_journal[0].contains("do-not-expose"));
     assert_eq!(report.active.as_deref(), Some("active"));
     assert!(report.journal_error.is_none());
+}
+
+#[tokio::test]
+async fn ai_watch_status_json_is_an_operator_safe_projection() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = StorageConfig::for_test(dir.path().join("private-cortex.db"));
+    let pool = Arc::new(init_pool(&storage).unwrap());
+    let os = Arc::new(MockProbeOs {
+        journal_output: "failed /Users/operator/private.jsonl api_key=super-secret-value\n"
+            .to_string(),
+        probe_stdout: b"active\n".to_vec(),
+        probe_success: true,
+    });
+    let service = CortexService::with_os_adapter(pool, storage, os);
+
+    let report = service.ai_watch_status().await.unwrap();
+    let json = serde_json::to_string(&report).unwrap();
+
+    assert!(!json.contains("private-cortex.db"));
+    assert!(!json.contains("/Users/operator"));
+    assert!(!json.contains("super-secret-value"));
+    assert!(!json.contains("affected_paths"));
+    assert!(json.contains("[PATH]"));
+    assert!(json.contains("[REDACTED]"));
+}
+
+#[test]
+fn human_status_text_redacts_paths_secrets_and_bounds_output() {
+    let rendered = super::operator_status_text(&format!(
+        "error /Users/operator/private.jsonl password=hunter2 {}",
+        "x".repeat(300)
+    ));
+
+    assert!(rendered.contains("[PATH]"));
+    assert!(rendered.contains("[REDACTED]"));
+    assert!(!rendered.contains("/Users/operator"));
+    assert!(!rendered.contains("hunter2"));
+    assert!(rendered.chars().count() <= 241);
 }
 
 #[tokio::test]
@@ -192,7 +233,8 @@ async fn ai_watch_status_health_is_some_with_valid_db() {
     let report = result.unwrap();
     assert!(
         report.health.is_some(),
-        "health should be Some with a valid DB"
+        "health should be Some with a valid DB; health_error={:?}",
+        report.health_error
     );
     assert!(
         report.health_error.is_none(),

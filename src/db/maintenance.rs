@@ -9,6 +9,48 @@ use crate::config::StorageConfig;
 use super::models::{StorageEnforcementOutcome, StorageMetrics, StorageRecovery};
 use super::pool::DbPool;
 
+/// Supported idempotent replay window for authenticated forwarding clients.
+pub const FORWARD_RECEIPT_REPLAY_HORIZON_DAYS: u32 = 7;
+
+/// Bound forwarding ledgers and remove receipts whose canonical evidence no
+/// longer exists. Agents keep unacknowledged records in their durable spool;
+/// after this horizon a retry is intentionally ingested as new evidence.
+pub fn purge_forward_receipts(pool: &DbPool, chunk_size: usize) -> Result<usize> {
+    let cutoff = Utc::now()
+        .checked_sub_signed(chrono::TimeDelta::days(i64::from(
+            FORWARD_RECEIPT_REPLAY_HORIZON_DAYS,
+        )))
+        .ok_or_else(|| anyhow::anyhow!("receipt replay horizon overflow"))?
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
+    let limit = chunk_size.max(1).min(i64::MAX as usize) as i64;
+    let mut total = 0;
+    loop {
+        let conn = crate::db::write_conn(pool)?;
+        let syslog = conn.execute(
+            "DELETE FROM syslog_forward_receipts WHERE rowid IN (
+                 SELECT r.rowid FROM syslog_forward_receipts r
+                 LEFT JOIN logs l ON l.id = r.canonical_log_id
+                 WHERE r.received_at < ?1 OR l.id IS NULL LIMIT ?2)",
+            params![cutoff, limit],
+        )?;
+        let transcripts = conn.execute(
+            "DELETE FROM ai_transcript_forward_receipts WHERE rowid IN (
+                 SELECT r.rowid FROM ai_transcript_forward_receipts r
+                 LEFT JOIN logs l ON l.id = r.log_id
+                 WHERE r.received_at < ?1 OR l.id IS NULL LIMIT ?2)",
+            params![cutoff, limit],
+        )?;
+        total += syslog + transcripts;
+        if syslog < limit as usize && transcripts < limit as usize {
+            break;
+        }
+        drop(conn);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    Ok(total)
+}
+
 pub trait DiskSpaceProbe {
     fn free_bytes(&self, path: &Path) -> Result<u64>;
 }

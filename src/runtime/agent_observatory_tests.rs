@@ -29,6 +29,77 @@ fn projector_sqlite_retry_backoff_reuses_ingest_policy_and_caps() {
 }
 
 #[test]
+fn git_reconcile_cursor_round_robins_sorted_repositories_and_replays_invalid_state() {
+    let repositories = vec![
+        std::path::PathBuf::from("/workspace/a"),
+        std::path::PathBuf::from("/workspace/b"),
+        std::path::PathBuf::from("/workspace/c"),
+    ];
+    assert_eq!(
+        next_repository_index(&repositories, &GitReconcileCursor::default()),
+        Some(0)
+    );
+    let cursor = decode_git_reconcile_cursor(&encode_git_reconcile_cursor("/workspace/a")).unwrap();
+    assert_eq!(next_repository_index(&repositories, &cursor), Some(1));
+    let cursor = decode_git_reconcile_cursor(&encode_git_reconcile_cursor("/workspace/c")).unwrap();
+    assert_eq!(next_repository_index(&repositories, &cursor), Some(0));
+    assert!(
+        decode_git_reconcile_cursor("legacy timestamp").is_err(),
+        "malformed persisted cursors must be surfaced instead of silently reset"
+    );
+
+    let (_directory, pool) = pool();
+    assert_eq!(projection_cursor(&pool, "git").unwrap(), "");
+    let checkpoint = encode_git_reconcile_cursor("/workspace/b");
+    advance_projection_cursor(&pool, "git", &checkpoint).unwrap();
+    let persisted = projection_cursor(&pool, "git").unwrap();
+    assert_eq!(persisted, checkpoint);
+    assert_eq!(
+        next_repository_index(
+            &repositories,
+            &decode_git_reconcile_cursor(&persisted).unwrap()
+        ),
+        Some(2)
+    );
+}
+
+#[test]
+fn malformed_git_reconcile_cursor_is_reset_once() {
+    let (_directory, pool) = pool();
+    projection_cursor(&pool, "git").unwrap();
+    advance_projection_cursor(&pool, "git", "2026-09-04T00:00:00Z").unwrap();
+
+    let (cursor, repaired_error) = load_git_reconcile_cursor(&pool).unwrap();
+    assert_eq!(cursor.after_repository, None);
+    assert!(
+        repaired_error.is_some(),
+        "the repair must remain observable"
+    );
+    assert_eq!(projection_cursor(&pool, "git").unwrap(), "");
+
+    let (cursor, repaired_error) = load_git_reconcile_cursor(&pool).unwrap();
+    assert_eq!(cursor.after_repository, None);
+    assert!(
+        repaired_error.is_none(),
+        "the repaired cursor must not be reported again"
+    );
+}
+
+#[test]
+fn valid_git_reconcile_cursor_is_preserved_when_loaded() {
+    let (_directory, pool) = pool();
+    projection_cursor(&pool, "git").unwrap();
+    let checkpoint = encode_git_reconcile_cursor("/workspace/b");
+    advance_projection_cursor(&pool, "git", &checkpoint).unwrap();
+
+    let (cursor, repaired_error) = load_git_reconcile_cursor(&pool).unwrap();
+
+    assert_eq!(cursor.after_repository.as_deref(), Some("/workspace/b"));
+    assert!(repaired_error.is_none());
+    assert_eq!(projection_cursor(&pool, "git").unwrap(), checkpoint);
+}
+
+#[test]
 fn workers_stay_dormant_when_agent_observatory_is_disabled() {
     let (_directory, pool) = pool();
     let config = AgentObservatoryConfig::default();
@@ -166,6 +237,61 @@ fn projection_cycle_counts_an_oversized_first_row() {
     );
     assert_eq!(drained.oversized_first_rows, 0);
     assert_eq!(drained.projected, 0);
+}
+
+#[test]
+fn projection_cycle_defers_untrusted_otlp_span_and_metric_but_advances_cursors() {
+    let (_directory, pool) = pool();
+    let conn = pool.get().unwrap();
+    conn.execute(
+        "INSERT INTO otel_spans
+            (trace_id,span_id,span_name,span_kind,start_time_unix_nano,end_time_unix_nano,
+             duration_nano,hostname,ai_tool,ai_project,ai_session_id,received_at)
+         VALUES (?1,?2,'tool.call',1,1000000000,2000000000,1000000000,
+                 'test-host','codex','/workspace/cortex','session-one',?3)",
+        rusqlite::params!["1".repeat(32), "2".repeat(16), "2026-08-09T12:00:00.000Z"],
+    )
+    .unwrap();
+    conn.execute(
+        r#"INSERT INTO otel_metric_points
+            (point_key,metric_name,instrument_kind,time_unix_nano,hostname,ai_tool,ai_project,
+             ai_session_id,resource_json,attributes_json,value_json,received_at)
+         VALUES (?1,'gen_ai.client.token.usage','gauge',2000000000,'test-host','codex',
+                 '/workspace/cortex','session-one','{}','{}','{"value":42}',?2)"#,
+        rusqlite::params!["a".repeat(64), "2026-08-09T12:00:00.000Z"],
+    )
+    .unwrap();
+    drop(conn);
+
+    let cycle = run_projection_cycle(
+        &pool,
+        ProjectionLimits {
+            page_rows: 500,
+            page_bytes: 1024 * 1024,
+        },
+    );
+    assert!(cycle.healthy);
+    assert_eq!(projection_cursor(&pool, "otel_spans").unwrap(), "1");
+    assert_eq!(projection_cursor(&pool, "otel_metric_points").unwrap(), "1");
+    let conn = pool.get().unwrap();
+    let events: Vec<(String, String, Option<String>, Option<String>)> = conn
+        .prepare("SELECT event_kind,source_kind,trace_id,span_id FROM agent_run_events ORDER BY id")
+        .unwrap()
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert!(events.is_empty(), "telemetry may not synthesize a run");
+    let relation: (Option<i64>, String) = conn
+        .query_row(
+            "SELECT run_id,evidence_kind FROM agent_run_trace_relations",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(relation, (None, "no_match".to_string()));
 }
 
 #[test]

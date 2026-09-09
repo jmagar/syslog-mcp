@@ -42,6 +42,7 @@ fn make_state(auth_policy: AuthPolicy) -> (AppState, Arc<DbPool>, tempfile::Temp
             allowed_hosts: Vec::new(),
             allowed_origins: Vec::new(),
             auth: Default::default(),
+            forwarding_agents: Default::default(),
             static_token_is_admin: false,
         },
         notifications_config: crate::config::NotificationsConfig::default(),
@@ -250,6 +251,7 @@ fn allowed_hosts_include_bracketed_ipv6_authority_variants() {
         allowed_hosts: vec!["[fd00::1]".into(), "syslog.example.com:443".into()],
         allowed_origins: Vec::new(),
         auth: Default::default(),
+        forwarding_agents: Default::default(),
         static_token_is_admin: false,
     };
 
@@ -744,6 +746,7 @@ fn public_url_config(public_url: &str) -> McpConfig {
             public_url: Some(public_url.into()),
             ..Default::default()
         },
+        forwarding_agents: Default::default(),
         static_token_is_admin: false,
     }
 }

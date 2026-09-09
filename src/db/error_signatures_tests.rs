@@ -118,6 +118,125 @@ fn insert_window_merges_conflicting_counts_and_keeps_dimensions_separate() {
 }
 
 #[test]
+fn recurring_error_comparison_is_bounded_stable_and_marks_boundary_windows() {
+    let (pool, _dir) = test_pool();
+    let conn = pool.get().unwrap();
+    for hash in ["alpha", "beta", "boundary", "acked"] {
+        insert_sig(&conn, hash, 1, "2026-01-01T02:50:00.000Z");
+    }
+    // alpha and beta intentionally tie on all ranking dimensions. Canonical
+    // source hash, not sample/template text, must make the answer stable.
+    for hash in ["alpha", "beta"] {
+        insert_window(
+            &conn,
+            hash,
+            1,
+            "2026-01-01T00:00:00.000Z",
+            "2026-01-01T01:00:00.000Z",
+            3,
+        )
+        .unwrap();
+        insert_window(
+            &conn,
+            hash,
+            1,
+            "2026-01-01T01:00:00.000Z",
+            "2026-01-01T02:00:00.000Z",
+            10,
+        )
+        .unwrap();
+    }
+    // This interval overlaps the focal window but is not wholly contained;
+    // it must be disclosed rather than counted as an exact sample.
+    insert_window(
+        &conn,
+        "boundary",
+        1,
+        "2026-01-01T01:30:00.000Z",
+        "2026-01-01T02:30:00.000Z",
+        999,
+    )
+    .unwrap();
+    update_ack_projection(
+        &conn,
+        "acked",
+        1,
+        Some("2026-01-01T01:00:00.000Z"),
+        Some("operator"),
+    )
+    .unwrap();
+    drop(conn);
+
+    let result = compare_recurring_errors(
+        &pool,
+        RecurringErrorComparisonParams {
+            normalizer_version: 1,
+            focal_from: "2026-01-01T01:00:00.000Z",
+            focal_to: "2026-01-01T02:00:00.000Z",
+            baseline_from: "2026-01-01T00:00:00.000Z",
+            baseline_to: "2026-01-01T01:00:00.000Z",
+            signature_hash: None,
+            include_acknowledged: false,
+            limit: 50,
+        },
+    )
+    .unwrap();
+    assert_eq!(result.candidate_cap, RECURRING_ERROR_CANDIDATE_CAP);
+    assert_eq!(
+        result
+            .rows
+            .iter()
+            .map(|row| row.signature_hash.as_str())
+            .collect::<Vec<_>>(),
+        vec!["alpha", "beta", "boundary"],
+        "equal ranking must use canonical hash as the final tie break"
+    );
+    assert_eq!(result.rows[0].current_count, 10);
+    assert_eq!(result.rows[0].baseline_count, 3);
+    assert_eq!(result.rows[2].current_count, 0);
+    assert_eq!(result.rows[2].focal_boundary_windows, 1);
+    assert!(!result.rows.iter().any(|row| row.signature_hash == "acked"));
+}
+
+#[test]
+fn recurring_error_comparison_reports_high_cardinality_candidate_truncation() {
+    let (pool, _dir) = test_pool();
+    let conn = pool.get().unwrap();
+    for index in 0..=RECURRING_ERROR_CANDIDATE_CAP {
+        let hash = format!("high-cardinality-{index:04}");
+        insert_sig(&conn, &hash, 1, "2026-01-01T01:30:00.000Z");
+        insert_window(
+            &conn,
+            &hash,
+            1,
+            "2026-01-01T01:00:00.000Z",
+            "2026-01-01T02:00:00.000Z",
+            1,
+        )
+        .unwrap();
+    }
+    drop(conn);
+
+    let result = compare_recurring_errors(
+        &pool,
+        RecurringErrorComparisonParams {
+            normalizer_version: 1,
+            focal_from: "2026-01-01T01:00:00.000Z",
+            focal_to: "2026-01-01T02:00:00.000Z",
+            baseline_from: "2026-01-01T00:00:00.000Z",
+            baseline_to: "2026-01-01T01:00:00.000Z",
+            signature_hash: None,
+            include_acknowledged: false,
+            limit: 50,
+        },
+    )
+    .unwrap();
+    assert!(result.candidate_window_truncated);
+    assert_eq!(result.candidate_rows, RECURRING_ERROR_CANDIDATE_CAP);
+    assert_eq!(result.rows.len(), 50);
+}
+
+#[test]
 fn read_unaddressed_filters_acknowledged_and_sums_recent_windows() {
     let (pool, _dir) = test_pool();
     let newer = recent_timestamp(5);

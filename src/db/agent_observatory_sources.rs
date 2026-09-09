@@ -5,6 +5,10 @@ use anyhow::{Context, Result, bail};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
+#[path = "agent_observatory_sources/repository_page.rs"]
+mod repository_page;
+use repository_page::repository_observation_page;
+
 const MAX_PAGE: usize = 500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13,6 +17,9 @@ pub enum AgentSourceKind {
     Hook,
     Skill,
     Llm,
+    OtelSpan,
+    OtelMetric,
+    RepositoryObservation,
 }
 
 impl AgentSourceKind {
@@ -23,6 +30,9 @@ impl AgentSourceKind {
             Self::Hook => "hook_events",
             Self::Skill => "skill_events",
             Self::Llm => "llm_invocations",
+            Self::OtelSpan => "otel_spans",
+            Self::OtelMetric => "otel_metric_points",
+            Self::RepositoryObservation => "repository_observations",
         }
     }
 }
@@ -115,11 +125,71 @@ pub struct AgentLlmSourceRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentOtelSpanSourceRow {
+    pub cursor_id: i64,
+    pub trace_id: String,
+    pub span_id: String,
+    pub span_name: String,
+    pub span_kind: i64,
+    pub start_time_unix_nano: i64,
+    pub end_time_unix_nano: i64,
+    pub status_code: i64,
+    pub status_message: Option<String>,
+    pub hostname: String,
+    pub service_name: Option<String>,
+    pub ai_tool: Option<String>,
+    pub ai_project: Option<String>,
+    pub ai_session_id: Option<String>,
+    pub attributes_json: String,
+    pub received_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentOtelMetricSourceRow {
+    pub cursor_id: i64,
+    pub point_key: String,
+    pub metric_name: String,
+    pub instrument_kind: String,
+    pub time_unix_nano: i64,
+    pub hostname: String,
+    pub service_name: Option<String>,
+    pub ai_tool: Option<String>,
+    pub ai_project: Option<String>,
+    pub ai_session_id: Option<String>,
+    pub value_json: String,
+    pub attributes_json: String,
+    pub received_at: String,
+}
+
+/// A durable Git-observer observation.  This source deliberately contains no
+/// synthetic tool or session identity: repository observations can only be
+/// attached by the projector when it finds pre-existing, bounded run evidence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentRepositoryObservationSourceRow {
+    pub cursor_id: i64,
+    pub observation_key: String,
+    pub repository_key: String,
+    pub repository_name: String,
+    pub hostname: String,
+    pub worktree_key: Option<String>,
+    pub worktree_path: Option<String>,
+    pub observed_at: String,
+    pub observation_kind: String,
+    pub old_head_sha: Option<String>,
+    pub new_head_sha: Option<String>,
+    pub summary: String,
+    pub payload_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentSourceRecord {
     Mcp(AgentMcpSourceRow),
     Hook(AgentHookSourceRow),
     Skill(AgentSkillSourceRow),
     Llm(AgentLlmSourceRow),
+    OtelSpan(AgentOtelSpanSourceRow),
+    OtelMetric(AgentOtelMetricSourceRow),
+    RepositoryObservation(AgentRepositoryObservationSourceRow),
 }
 
 impl AgentSourceRecord {
@@ -136,6 +206,9 @@ impl AgentSourceRecord {
                 id: row.id.clone(),
             })
             .expect("LLM cursor serialization cannot fail"),
+            Self::OtelSpan(row) => row.cursor_id.to_string(),
+            Self::OtelMetric(row) => row.cursor_id.to_string(),
+            Self::RepositoryObservation(row) => row.cursor_id.to_string(),
         }
     }
 }
@@ -343,6 +416,73 @@ fn llm_page(
         .collect::<rusqlite::Result<_>>()?)
 }
 
+fn otel_span_page(
+    conn: &rusqlite::Connection,
+    after: i64,
+    limit: i64,
+) -> Result<Vec<AgentSourceRecord>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, trace_id, span_id, span_name, span_kind, start_time_unix_nano,
+                end_time_unix_nano, status_code, status_message, hostname, service_name,
+                ai_tool, ai_project, ai_session_id, attributes_json, received_at
+           FROM otel_spans WHERE id > ?1 ORDER BY id LIMIT ?2",
+    )?;
+    Ok(stmt
+        .query_map(params![after, limit], |row| {
+            Ok(AgentSourceRecord::OtelSpan(AgentOtelSpanSourceRow {
+                cursor_id: row.get(0)?,
+                trace_id: row.get(1)?,
+                span_id: row.get(2)?,
+                span_name: row.get(3)?,
+                span_kind: row.get(4)?,
+                start_time_unix_nano: row.get(5)?,
+                end_time_unix_nano: row.get(6)?,
+                status_code: row.get(7)?,
+                status_message: row.get(8)?,
+                hostname: row.get(9)?,
+                service_name: row.get(10)?,
+                ai_tool: row.get(11)?,
+                ai_project: row.get(12)?,
+                ai_session_id: row.get(13)?,
+                attributes_json: row.get(14)?,
+                received_at: row.get(15)?,
+            }))
+        })?
+        .collect::<rusqlite::Result<_>>()?)
+}
+
+fn otel_metric_page(
+    conn: &rusqlite::Connection,
+    after: i64,
+    limit: i64,
+) -> Result<Vec<AgentSourceRecord>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, point_key, metric_name, instrument_kind, time_unix_nano, hostname,
+                service_name, ai_tool, ai_project, ai_session_id, value_json, attributes_json,
+                received_at
+           FROM otel_metric_points WHERE id > ?1 ORDER BY id LIMIT ?2",
+    )?;
+    Ok(stmt
+        .query_map(params![after, limit], |row| {
+            Ok(AgentSourceRecord::OtelMetric(AgentOtelMetricSourceRow {
+                cursor_id: row.get(0)?,
+                point_key: row.get(1)?,
+                metric_name: row.get(2)?,
+                instrument_kind: row.get(3)?,
+                time_unix_nano: row.get(4)?,
+                hostname: row.get(5)?,
+                service_name: row.get(6)?,
+                ai_tool: row.get(7)?,
+                ai_project: row.get(8)?,
+                ai_session_id: row.get(9)?,
+                value_json: row.get(10)?,
+                attributes_json: row.get(11)?,
+                received_at: row.get(12)?,
+            }))
+        })?
+        .collect::<rusqlite::Result<_>>()?)
+}
+
 pub fn page_agent_sources(
     pool: &DbPool,
     kind: AgentSourceKind,
@@ -358,6 +498,15 @@ pub fn page_agent_sources(
         AgentSourceKind::Llm => {
             let after = llm_cursor(after_cursor)?;
             llm_page(&conn, after.as_ref(), probe_limit)?
+        }
+        AgentSourceKind::OtelSpan => {
+            otel_span_page(&conn, numeric_cursor(after_cursor)?, probe_limit)?
+        }
+        AgentSourceKind::OtelMetric => {
+            otel_metric_page(&conn, numeric_cursor(after_cursor)?, probe_limit)?
+        }
+        AgentSourceKind::RepositoryObservation => {
+            repository_observation_page(&conn, numeric_cursor(after_cursor)?, probe_limit)?
         }
     };
     let truncated = records.len() > limit;

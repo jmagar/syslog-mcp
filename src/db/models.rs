@@ -81,6 +81,8 @@ pub struct AiSessionEntry {
     pub first_seen: String,
     pub last_seen: String,
     pub event_count: i64,
+    pub title: Option<String>,
+    pub title_provenance: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -208,6 +210,8 @@ pub struct SearchedAiSessionEntry {
     pub event_count: i64,
     pub match_count: i64,
     pub best_snippet: Option<String>,
+    pub title: Option<String>,
+    pub title_provenance: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

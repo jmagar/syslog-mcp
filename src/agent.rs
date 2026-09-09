@@ -36,6 +36,10 @@ pub struct AgentStreamsConfig {
     /// TCP syslog target in `host:port` form.  Derived from the heartbeat
     /// target when not set explicitly.
     pub syslog_target: String,
+    /// HTTP Cortex endpoint used for durable syslog receipts.
+    pub syslog_forward_target: String,
+    pub syslog_forward_token: Option<String>,
+    pub syslog_forward_spool_path: PathBuf,
     pub hostname: String,
     /// Forward local AI transcript (Claude/Codex) changes to the central
     /// server via `POST /v1/ai-transcripts`. Unlike the other streams this
@@ -95,7 +99,11 @@ pub async fn run_agent_streams(config: AgentStreamsConfig) -> Result<()> {
         return Ok(());
     }
 
-    let sender = Arc::new(SyslogSender::new(config.syslog_target.clone()));
+    let sender = Arc::new(SyslogSender::new(
+        config.syslog_forward_target.clone(),
+        config.syslog_forward_token.clone(),
+        config.syslog_forward_spool_path.clone(),
+    ));
     let mut tasks: JoinSet<()> = JoinSet::new();
 
     if config.docker {

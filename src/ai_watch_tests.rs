@@ -258,6 +258,76 @@ fn overflow_rescan_since_saturates_at_epoch() {
 }
 
 #[test]
+fn bounded_rescan_deferral_requests_the_existing_retry_path() {
+    let result = IndexResult {
+        scan_budget_cap_hit: true,
+        deferred_sources: 2,
+        ..Default::default()
+    };
+
+    assert_eq!(rescan_status_for_result(&result), RescanStatus::Retry);
+    assert_eq!(
+        rescan_status_for_result(&IndexResult::default()),
+        RescanStatus::Completed
+    );
+}
+
+#[test]
+fn rescan_cursor_advances_only_after_an_attempted_source() {
+    let mut cursor = RescanCursor::default();
+    let no_attempt = IndexResult::default();
+    if let Some(next) = no_attempt.next_scan_cursor.clone() {
+        cursor.start_after = Some(next);
+    }
+    assert!(cursor.start_after.is_none());
+
+    let attempted = IndexResult {
+        next_scan_cursor: Some(PathBuf::from("/safe/root/b.jsonl")),
+        ..Default::default()
+    };
+    if let Some(next) = attempted.next_scan_cursor.clone() {
+        cursor.start_after = Some(next);
+    }
+    assert_eq!(
+        cursor.start_after,
+        Some(PathBuf::from("/safe/root/b.jsonl"))
+    );
+}
+
+#[test]
+fn bounded_backlog_continuation_drops_overflow_since_filter_until_cursor_clears() {
+    let old_overflow_filter = SystemTime::UNIX_EPOCH + Duration::from_secs(1_500);
+    let mut cursor = RescanCursor {
+        start_after: Some(PathBuf::from("/safe/root/deferred-old.jsonl")),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        rescan_since_for_cursor(Some(old_overflow_filter), &cursor),
+        None,
+        "an old deferred source must not be skipped by a new five-minute lookback"
+    );
+
+    cursor.start_after = None;
+    cursor.discovery_start_after.insert(
+        PathBuf::from("/safe/root/.claude/projects"),
+        PathBuf::from("/safe/root/.claude/projects/entry"),
+    );
+    assert_eq!(
+        rescan_since_for_cursor(Some(old_overflow_filter), &cursor),
+        None,
+        "a bounded provider-root continuation also keeps the backlog unfiltered"
+    );
+
+    cursor.discovery_start_after.clear();
+    assert_eq!(
+        rescan_since_for_cursor(Some(old_overflow_filter), &cursor),
+        Some(old_overflow_filter),
+        "a fresh overflow rescan keeps its lookback after backlog completion"
+    );
+}
+
+#[test]
 fn system_time_to_rfc3339_is_parseable_by_cortex_time_parser() {
     let time = SystemTime::UNIX_EPOCH + Duration::from_secs(1_800);
 

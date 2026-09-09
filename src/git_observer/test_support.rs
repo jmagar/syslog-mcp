@@ -15,6 +15,12 @@ const MAIN_TIME: &str = "2026-01-02T03:06:05Z";
 const RESET_TIME: &str = "2026-01-02T03:07:05Z";
 const REBASE_TIME: &str = "2026-01-02T03:08:05Z";
 
+fn canonical_timestamp(value: String) -> Result<String> {
+    DateTime::parse_from_rfc3339(&value)
+        .map(|timestamp| timestamp.to_rfc3339_opts(SecondsFormat::Secs, true))
+        .with_context(|| format!("fixture commit timestamp was not RFC 3339: {value}"))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GitFixtureCommits {
     pub root: String,
@@ -402,30 +408,14 @@ impl GitFixture {
         let mut strings = fields.into_iter().map(|field| {
             String::from_utf8(field.to_vec()).context("commit metadata was not UTF-8")
         });
-        let sha = strings.next().expect("five fields")?;
-        let parents = strings.next().expect("five fields")?;
-        let subject = strings.next().expect("five fields")?;
-        let authored_at = strings.next().expect("five fields")?;
-        let committed_at = strings.next().expect("five fields")?;
-
         Ok(CommitMetadata {
-            sha,
-            parents,
-            subject,
-            authored_at: canonical_timestamp(&authored_at)?,
-            committed_at: canonical_timestamp(&committed_at)?,
+            sha: strings.next().expect("five fields")?,
+            parents: strings.next().expect("five fields")?,
+            subject: strings.next().expect("five fields")?,
+            authored_at: canonical_timestamp(strings.next().expect("five fields")?)?,
+            committed_at: canonical_timestamp(strings.next().expect("five fields")?)?,
         })
     }
-}
-
-fn canonical_timestamp(value: &str) -> Result<String> {
-    DateTime::parse_from_rfc3339(value)
-        .context("commit metadata timestamp was not RFC3339")
-        .map(|timestamp| {
-            timestamp
-                .to_utc()
-                .to_rfc3339_opts(SecondsFormat::Secs, true)
-        })
 }
 
 #[cfg(test)]

@@ -78,6 +78,9 @@ fn insert_once(pool: &DbPool, entries: &[OtelMetricPointInput]) -> Result<OtelMe
     let tx = conn.transaction()?;
     let result = insert_in_tx(&tx, entries)?;
     tx.commit()?;
+    if result.accepted > 0 {
+        crate::db::agent_observatory::notify_projection_work();
+    }
     Ok(result)
 }
 

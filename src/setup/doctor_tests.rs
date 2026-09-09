@@ -152,6 +152,8 @@ async fn run_setup_doctor_collects_temp_home_sections_without_live_services() {
     std::fs::create_dir_all(home.join(".claude/projects")).unwrap();
     std::fs::create_dir_all(home.join(".codex/sessions")).unwrap();
     std::fs::create_dir_all(home.join(".gemini/tmp")).unwrap();
+    std::fs::create_dir_all(home.join(".gemini/antigravity/brain")).unwrap();
+    std::fs::create_dir_all(home.join(".gemini/antigravity-cli/brain")).unwrap();
     std::fs::create_dir_all(repo.join("scripts")).unwrap();
     std::fs::create_dir_all(&bin_dir).unwrap();
     write_executable(

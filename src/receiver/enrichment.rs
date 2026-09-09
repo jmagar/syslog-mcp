@@ -108,8 +108,9 @@ static SECRET_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         r"\beyJ[A-Za-z0-9_\-]{8,}\.eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b",
         // Bearer tokens in Authorization headers (broad token charset incl. base64 +/=)
         r"(?i)Authorization:\s*Bearer\s+[A-Za-z0-9._+/=\-]+",
-        // password=value / api_key=value / secret=value (handles quoted values)
-        r#"(?i)\b(?:password|api[_-]?key|secret)\s*[:=]\s*"?[^\s,;\}\]"]+"?"#,
+        // Generic credential assignments. Match the key and value together so
+        // delimiters cannot leave the secret behind in persisted text.
+        r#"(?i)["']?\b(?:password|passphrase|api[_-]?key|token|access[_-]?token|refresh[_-]?token|id[_-]?token|secret|client[_-]?secret|credential(?:s)?|private[_-]?key)\b["']?\s*[:=]\s*["']?[^\s,;\}\]"']+["']?"#,
         // PEM private key block — match the WHOLE block including key body. (?s)
         // makes `.` cross newlines; lazy `.+?` stops at the first END marker.
         r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.+?-----END [A-Z ]*PRIVATE KEY-----",

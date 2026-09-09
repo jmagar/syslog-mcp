@@ -33,9 +33,13 @@ done
 
 # Model loss of the data volume. Backups remain usable on their independent bind.
 rm -rf "$source_dir"
-[[ "$(docker run --rm -v "$backup_dir:/backups:ro" "$image_ref" sqlite3 "/backups/$(basename "$syslog_backup")" 'SELECT value FROM proof;')" == "syslog-survives" ]]
-[[ "$(docker run --rm -v "$backup_dir:/backups:ro" "$image_ref" sqlite3 "/backups/$(basename "$auth_backup")" 'SELECT value FROM proof;')" == "auth-survives" ]]
-[[ "$(cat "$key_backup")" == "test-signing-key" ]]
+# This fixture deliberately creates a private root-owned backup directory, so
+# restore it under the same explicit test identity. The runtime image remains
+# non-root by default; this only prevents the contract fixture from testing
+# filesystem ownership mismatch instead of backup recoverability.
+[[ "$(docker run --rm --user 0:0 -v "$backup_dir:/backups:ro" "$image_ref" sqlite3 "/backups/$(basename "$syslog_backup")" 'SELECT value FROM proof;')" == "syslog-survives" ]]
+[[ "$(docker run --rm --user 0:0 -v "$backup_dir:/backups:ro" "$image_ref" sqlite3 "/backups/$(basename "$auth_backup")" 'SELECT value FROM proof;')" == "auth-survives" ]]
+[[ "$(docker run --rm --user 0:0 -v "$backup_dir:/backups:ro" "$image_ref" cat "/backups/$(basename "$key_backup")")" == "test-signing-key" ]]
 
 # Retention failures happen after valid artifacts are written. They must warn
 # and fail the scheduled run instead of being silently swallowed.

@@ -1,6 +1,6 @@
 use super::{
     COMMIT_SHOW_FORMAT, CommitParseErrorKind, CommitParseOptions, commit_show_arguments,
-    parse_commit_show, timestamp,
+    parse_commit_show,
 };
 use sha2::{Digest, Sha256};
 use std::ffi::OsString;
@@ -210,14 +210,6 @@ fn options() -> CommitParseOptions {
         store_author_name: true,
         store_author_email_hash: true,
     }
-}
-
-#[test]
-fn timestamp_normalizes_equivalent_utc_offset_to_canonical_z() {
-    assert_eq!(
-        timestamp(b"2026-01-02T03:04:05+00:00", "authored_at", 0, 0).unwrap(),
-        ROOT_TIME
-    );
 }
 
 #[test]

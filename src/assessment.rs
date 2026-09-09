@@ -438,11 +438,10 @@ pub(crate) fn looks_secretish(token: &str) -> bool {
         || token.starts_with("atk_")
 }
 
-/// Recursively redact every string leaf in a `serde_json::Value` tree in
-/// place, using the same per-token `redact_secrets` heuristic used for
-/// error sanitization. Object keys are left untouched (only values are
-/// caller-controlled data); array elements and nested objects/arrays are
-/// visited recursively.
+/// Recursively redact secrets in a `serde_json::Value` tree in place.
+/// Values under credential-bearing keys are always replaced, even when the
+/// value itself has no recognizable token prefix. Other string leaves use the
+/// same per-token heuristic as error sanitization.
 ///
 /// `redact_secrets` tokenizes on whitespace, so redacting a *serialized*
 /// JSON blob directly misses secrets carried as JSON values: a value like
@@ -465,12 +464,43 @@ pub(crate) fn redact_json_value_strings(value: &mut serde_json::Value) {
             }
         }
         serde_json::Value::Object(map) => {
-            for v in map.values_mut() {
-                redact_json_value_strings(v);
+            for (key, value) in map.iter_mut() {
+                if is_secret_key(key) {
+                    *value = serde_json::Value::String("[REDACTED]".to_string());
+                } else {
+                    redact_json_value_strings(value);
+                }
             }
         }
         _ => {}
     }
+}
+
+fn is_secret_key(key: &str) -> bool {
+    let normalized = key
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
+    matches!(
+        normalized.as_str(),
+        "token"
+            | "authtoken"
+            | "bearertoken"
+            | "accesstoken"
+            | "refreshtoken"
+            | "idtoken"
+            | "authorization"
+            | "proxyauthorization"
+            | "apikey"
+            | "secret"
+            | "clientsecret"
+            | "credential"
+            | "credentials"
+            | "password"
+            | "passphrase"
+            | "privatekey"
+    )
 }
 
 #[cfg(test)]

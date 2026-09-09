@@ -287,3 +287,66 @@ async fn listener_supervisors_stop_cleanly_when_runtime_shutdown_is_cancelled() 
     assert_eq!(observability.tcp_listener_state(), ListenerState::Down);
     ingest.shutdown(Duration::from_secs(1)).await;
 }
+
+async fn assert_supervisor_releases_bound_socket(abort_supervisor: bool) {
+    let observability = Arc::new(RuntimeObservability::default());
+    let shutdown = CancellationToken::new();
+    let (bound_tx, bound_rx) = tokio::sync::oneshot::channel();
+    let bound_tx = Arc::new(Mutex::new(Some(bound_tx)));
+    let supervisor = tokio::spawn(supervise_listener(
+        "socket_shutdown_test",
+        observability,
+        |obs, state| obs.set_udp_listener_state(state),
+        shutdown.clone(),
+        move || {
+            let bound_tx = Arc::clone(&bound_tx);
+            async move {
+                let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
+                bound_tx
+                    .lock()
+                    .take()
+                    .unwrap()
+                    .send(socket.local_addr()?)
+                    .unwrap();
+                let mut buffer = [0u8; 1];
+                socket.recv_from(&mut buffer).await?;
+                Ok(())
+            }
+        },
+    ));
+    let address = tokio::time::timeout(Duration::from_secs(2), bound_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(tokio::net::UdpSocket::bind(address).await.is_err());
+    if abort_supervisor {
+        supervisor.abort();
+        assert!(supervisor.await.unwrap_err().is_cancelled());
+    } else {
+        shutdown.cancel();
+        tokio::time::timeout(Duration::from_secs(2), supervisor)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if tokio::net::UdpSocket::bind(address).await.is_ok() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("stopping the supervisor must release the actual listener socket");
+}
+
+#[tokio::test]
+async fn supervisor_cancellation_releases_bound_socket() {
+    assert_supervisor_releases_bound_socket(false).await;
+}
+
+#[tokio::test]
+async fn supervisor_abort_releases_bound_socket() {
+    assert_supervisor_releases_bound_socket(true).await;
+}

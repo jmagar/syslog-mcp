@@ -113,6 +113,7 @@ fn projection_input(source: &TranscriptLogProjection) -> Result<AgentProjectionW
         },
         actor: None,
         worktree_evidence: None,
+        trace_relation: None,
         event: AgentRunEventUpsert {
             source_kind: "logs".to_string(),
             source_id: source.log_id.to_string(),

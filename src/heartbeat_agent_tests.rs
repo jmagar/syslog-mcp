@@ -192,8 +192,12 @@ fn config_from_env_honors_agent_stream_flags_and_fallbacks() {
     let _journald = EnvGuard::set("CORTEX_AGENT_JOURNALD", "true");
     let _syslog_file = EnvGuard::set("CORTEX_AGENT_SYSLOG_FILE", "/var/log/syslog");
     let _syslog_target = EnvGuard::set("CORTEX_SYSLOG_TARGET", "127.0.0.1:1514");
+    let _syslog_forward_target = EnvGuard::set(
+        "CORTEX_AGENT_SYSLOG_FORWARD_TARGET",
+        "https://durable.example.test",
+    );
 
-    let config = HeartbeatAgentConfig::from_env(PathBuf::from("/tmp/host-id"));
+    let config = HeartbeatAgentConfig::from_env(PathBuf::from("/tmp/host-id")).unwrap();
 
     assert_eq!(
         config.target.as_deref(),
@@ -208,6 +212,28 @@ fn config_from_env_honors_agent_stream_flags_and_fallbacks() {
         Some(Path::new("/var/log/syslog"))
     );
     assert_eq!(config.syslog_target.as_deref(), Some("127.0.0.1:1514"));
+    assert_eq!(
+        config.syslog_forward_target.as_deref(),
+        Some("https://durable.example.test")
+    );
+}
+
+#[test]
+#[serial]
+fn legacy_syslog_target_uses_heartbeat_http_target_for_compatible_upgrade() {
+    let _legacy = EnvGuard::set("CORTEX_SYSLOG_TARGET", "central.example.test:1514");
+    let _durable = EnvGuard::unset("CORTEX_AGENT_SYSLOG_FORWARD_TARGET");
+    let _heartbeat = EnvGuard::set(
+        "CORTEX_HEARTBEAT_TARGET",
+        "https://central.example.test:3100",
+    );
+
+    let config = HeartbeatAgentConfig::from_env(PathBuf::from("/tmp/host-id")).unwrap();
+
+    assert_eq!(
+        config.syslog_forward_target.as_deref(),
+        Some("https://central.example.test:3100")
+    );
 }
 
 #[test]
@@ -221,7 +247,7 @@ fn config_from_env_uses_cortex_url_and_token_fallbacks_and_ignores_blank_syslog_
     let _journald = EnvGuard::set("CORTEX_AGENT_JOURNALD", "0");
     let _syslog_file = EnvGuard::set("CORTEX_AGENT_SYSLOG_FILE", "   ");
 
-    let config = HeartbeatAgentConfig::from_env(PathBuf::from("/tmp/host-id"));
+    let config = HeartbeatAgentConfig::from_env(PathBuf::from("/tmp/host-id")).unwrap();
 
     assert_eq!(
         config.target.as_deref(),
@@ -707,7 +733,7 @@ fn transcript_forward_env_resolution_precedence_is_stable() {
 fn transcript_forward_env_current_value_is_authoritative_in_config() {
     let _new = EnvGuard::set(AI_TRANSCRIPT_FORWARD_ENV, "false");
     let _legacy = EnvGuard::set(AI_TRANSCRIPT_FORWARD_LEGACY_ENV, "true");
-    let config = HeartbeatAgentConfig::from_env(PathBuf::from("/tmp/host-id"));
+    let config = HeartbeatAgentConfig::from_env(PathBuf::from("/tmp/host-id")).unwrap();
     assert!(!config.ai_transcripts);
 }
 
@@ -716,7 +742,7 @@ fn transcript_forward_env_current_value_is_authoritative_in_config() {
 fn transcript_forward_env_legacy_value_is_honored_in_config() {
     let _new = EnvGuard::unset(AI_TRANSCRIPT_FORWARD_ENV);
     let _legacy = EnvGuard::set(AI_TRANSCRIPT_FORWARD_LEGACY_ENV, "true");
-    let config = HeartbeatAgentConfig::from_env(PathBuf::from("/tmp/host-id"));
+    let config = HeartbeatAgentConfig::from_env(PathBuf::from("/tmp/host-id")).unwrap();
     assert!(config.ai_transcripts);
 }
 

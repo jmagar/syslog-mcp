@@ -14,10 +14,12 @@ through `src/mcp/schemas.rs::tool_definitions()` and exposed as
 `cortex://schema/mcp-tool`; maintained Markdown docs are drift-checked rather
 than automatically generated.
 
-## Proposed Agent Observatory package
+## Agent Observatory design package
 
-The following files describe a planned feature and are not part of the current
-3.11.1 runtime inventory:
+The following files preserve the Agent Observatory design, contract, and proof
+history. They are reference material rather than a generated runtime inventory;
+the implemented runtime surfaces remain governed by the registry and route
+contracts below.
 
 | Artifact | Scope |
 | --- | --- |
@@ -35,8 +37,7 @@ The following files describe a planned feature and are not part of the current
 | `plans/2026-07-31-agent-observatory-implementation.md` | 116-task TDD implementation index and phase gates, including the transcript-forward env compatibility track |
 
 Runtime MCP actions, routes, commands, variables, ports, and dependencies below
-remain the authoritative current inventory until those tasks are implemented
-and generated inventories are updated.
+are the authoritative current inventory.
 
 ## Palette session contract
 
@@ -98,6 +99,7 @@ that registry by `src/mcp/schemas.rs::tool_definitions()`.
 | `unaddressed_errors` | Repeating unacknowledged error signatures | no |
 | `notifications_recent` | Recent notification firings | no |
 | `similar_incidents` | FTS5 historical incident clusters with overlapping AI sessions | no |
+| `recurring_error_comparison` | Compare recurring error signatures with redacted deterministic evidence bundles | no |
 | `incident_context` | Window bundle of non-AI log aggregates/errors and active AI sessions | no |
 | `graph` | Resolve graph entities, neighborhoods, and evidence-backed explanations | no |
 | `artifact_evidence` | Query bounded source-attributed artifact ecosystem evidence | no |

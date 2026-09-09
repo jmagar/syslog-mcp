@@ -57,6 +57,7 @@ pub struct RenderedSessionPageResponse {
 #[derive(Debug, Clone, Serialize)]
 pub struct CortexCapabilities {
     pub contract_version: &'static str,
+    pub generation: u32,
     pub sessions: SessionCapabilities,
     pub logs: LogCapabilities,
 }
@@ -97,6 +98,7 @@ pub struct StreamCapability {
 pub fn capabilities() -> CortexCapabilities {
     CortexCapabilities {
         contract_version: "1.0.0",
+        generation: 1,
         sessions: SessionCapabilities {
             rendered_pages: true,
             polling: PollingCapability {

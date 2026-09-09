@@ -87,12 +87,36 @@ fn unknown_hook_variant_maps_to_unknown_status_not_panic() {
 
 #[test]
 fn error_and_timeout_variants_map_to_error_status() {
-    for t in ["hook_error", "hook_timeout", "hook_parse_error"] {
+    for t in [
+        "hook_error",
+        "hook_timeout",
+        "hook_parse_error",
+        "hook_non_blocking_error",
+    ] {
         let value = json!({"attachment": {"type": t, "hookEvent": "PostToolUse"}});
         let events = extract_claude_hook_events(&value);
         assert_eq!(events.len(), 1, "variant {t}");
         assert_eq!(events[0].status, HookStatus::Error, "variant {t}");
     }
+}
+
+#[test]
+fn extracts_async_hook_response_and_derives_status_from_exit_code() {
+    let value = json!({
+        "attachment": {
+            "type": "async_hook_response",
+            "hookName": "audit",
+            "hookEvent": "PostToolUse",
+            "exitCode": 2,
+            "response": "async response",
+            "stderr": "failed"
+        }
+    });
+    let events = extract_claude_hook_events(&value);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].status, HookStatus::Failed);
+    assert_eq!(events[0].hook_name.as_deref(), Some("audit"));
+    assert_eq!(events[0].stdout_preview.as_deref(), Some("async response"));
 }
 
 #[test]
@@ -164,6 +188,26 @@ fn stdout_preview_secrets_shaped_as_json_are_redacted() {
     let preview = events[0].stdout_preview.as_deref().unwrap();
     assert!(!preview.contains("ghp_FAKE_TEST_TOKEN_DO_NOT_USE_0000000000"));
     assert!(preview.contains("[REDACTED]"));
+}
+
+#[test]
+fn stdout_preview_generic_credentials_are_redacted_by_key_recursively() {
+    let value = json!({
+        "attachment": {
+            "type": "hook_success",
+            "hookEvent": "PostToolUse",
+            "stdout": "{\"outer\":{\"credential\":\"plain-value\"},\"private_key\":\"plain-key\",\"safe\":\"visible\"}"
+        }
+    });
+    let preview = extract_claude_hook_events(&value)[0]
+        .stdout_preview
+        .as_deref()
+        .unwrap()
+        .to_string();
+    assert!(!preview.contains("plain-value"));
+    assert!(!preview.contains("plain-key"));
+    assert!(preview.contains("visible"));
+    assert_eq!(preview.matches("[REDACTED]").count(), 2);
 }
 
 #[test]

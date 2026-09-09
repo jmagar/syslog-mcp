@@ -2,7 +2,7 @@
 //! core.
 //!
 //! Owns the full schema: the `logs` table + FTS5 index, AI/graph/heartbeat
-//! projections, and the **44 sequential migrations** tracked by
+//! projections, and the sequential migrations tracked by
 //! `KNOWN_SCHEMA_VERSION`. Migrations run at startup; heavy ones log
 //! `Migration N: starting ...` lines, and the one-time
 //! `auto_vacuum=INCREMENTAL` conversion VACUUM is logged loudly (it can take
@@ -258,7 +258,7 @@ pub(crate) fn try_write_conn_for(
     }
 }
 
-pub const KNOWN_SCHEMA_VERSION: i64 = 50;
+pub const KNOWN_SCHEMA_VERSION: i64 = 58;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SchemaVersionInfo {
@@ -3250,6 +3250,230 @@ pub fn init_pool(config: &StorageConfig) -> Result<DbPool> {
              COMMIT;",
         )?;
         tracing::info!("Migration 50: indexed every durable stream filter shape");
+    }
+
+    // Migration 51: transcript scans can now distinguish a completed source
+    // revision from a checkpoint at a record boundary.  The columns are
+    // additive so older databases retain their imported-record identities;
+    // existing rows are deliberately treated as complete because that was the
+    // only state representable before this migration.
+    if !migration_applied(&conn, 51)? {
+        // Some historical recovery fixtures (and databases restored from an
+        // interrupted early migration) retain the migration marker but not
+        // the original transcript source table.  Migration 51 must converge
+        // those databases instead of assuming every earlier table exists.
+        let transcript_sources_exists = table_exists(&conn, "transcript_sources")?;
+        let tx = conn.transaction()?;
+        if !transcript_sources_exists {
+            // With foreign-key enforcement disabled, damaged/restored databases
+            // can retain children after the identity-bearing parent vanished.
+            // Recreated parent IDs begin at 1, so retaining those rows would let
+            // a new source inherit old dedupe receipts and parse errors.
+            for child in ["transcript_import_records", "transcript_parse_errors"] {
+                if table_exists(&tx, child)? {
+                    tx.execute(&format!("DELETE FROM {child}"), [])?;
+                }
+            }
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS transcript_sources (
+                     id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                     canonical_path  TEXT NOT NULL UNIQUE,
+                     source_kind     TEXT NOT NULL,
+                     file_size       INTEGER,
+                     file_mtime      INTEGER,
+                     content_hash    TEXT,
+                     last_offset     INTEGER NOT NULL DEFAULT 0,
+                     last_indexed_at TEXT,
+                     last_error      TEXT
+                 );",
+            )?;
+        }
+        add_column_if_missing(&tx, "transcript_sources", "source_revision", "TEXT")?;
+        add_column_if_missing(
+            &tx,
+            "transcript_sources",
+            "scan_state",
+            "TEXT NOT NULL DEFAULT 'complete' CHECK (scan_state IN ('restart', 'boundary', 'discard_until_newline', 'complete'))",
+        )?;
+        tx.execute(
+            "UPDATE transcript_sources
+             SET scan_state = 'complete'
+             WHERE scan_state IS NULL
+                OR scan_state NOT IN ('restart', 'boundary', 'discard_until_newline', 'complete')",
+            [],
+        )?;
+        tx.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version) VALUES (51)",
+            [],
+        )?;
+        tx.commit()?;
+        tracing::info!("Migration 51: added transcript scan revisions and states");
+    }
+
+    // Migration 52: receipt ledger for replay-safe agent syslog forwarding.
+    //
+    // The idempotency key is source-local and stable across reconnects.  The
+    // receiver writes the canonical log and this receipt in the same SQLite
+    // transaction; replay after a lost response therefore returns the old
+    // receipt instead of creating a second canonical evidence row.
+    if !migration_applied(&conn, 52)? {
+        conn.execute_batch(
+            "BEGIN IMMEDIATE;
+             CREATE TABLE IF NOT EXISTS syslog_forward_receipts (
+                 idempotency_key TEXT PRIMARY KEY,
+                 source_instance TEXT NOT NULL,
+                 source_epoch    INTEGER NOT NULL,
+                 sequence        INTEGER NOT NULL,
+                 canonical_log_id INTEGER NOT NULL,
+                 receipt_kind    TEXT NOT NULL CHECK (receipt_kind IN ('record', 'gap')),
+                 request_fingerprint TEXT NOT NULL,
+                 received_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+             );
+             CREATE INDEX IF NOT EXISTS idx_syslog_forward_receipts_source_sequence
+               ON syslog_forward_receipts(source_instance, source_epoch, sequence);
+             INSERT OR IGNORE INTO schema_migrations (version) VALUES (52);
+             COMMIT;",
+        )?;
+        tracing::info!("Migration 52: created syslog forward receipt ledger");
+    }
+
+    // Migration 53: durable idempotency receipts for versioned AI transcript
+    // evidence envelopes. The receipt belongs in the same transaction as the
+    // canonical log row, so a sender can retry safely after losing a response.
+    if !migration_applied(&conn, 53)? {
+        conn.execute_batch(
+            "BEGIN IMMEDIATE;
+             CREATE TABLE IF NOT EXISTS ai_transcript_forward_receipts (
+                 source_record_id TEXT PRIMARY KEY,
+                 envelope_version INTEGER NOT NULL,
+                 log_id INTEGER NOT NULL UNIQUE REFERENCES logs(id) ON DELETE CASCADE,
+                 provider TEXT NOT NULL,
+                 source_identity TEXT NOT NULL,
+                 source_epoch TEXT NOT NULL,
+                 source_revision TEXT NOT NULL,
+                 received_at TEXT NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_ai_transcript_forward_receipts_source
+               ON ai_transcript_forward_receipts
+                  (provider, source_identity, source_epoch, source_revision);
+             INSERT OR IGNORE INTO schema_migrations (version) VALUES (53);
+             COMMIT;",
+        )?;
+        tracing::info!("Migration 53: created transcript evidence receipt ledger");
+    }
+
+    // Migration 54: explicit, versioned OTLP span-to-run association evidence.
+    // The row records uncertainty rather than allowing read paths to turn a
+    // host/session coincidence into a causal claim.
+    if !migration_applied(&conn, 54)? {
+        conn.execute_batch(
+            "BEGIN IMMEDIATE;
+             CREATE TABLE IF NOT EXISTS agent_run_trace_relations (
+                 id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                 relation_key         TEXT NOT NULL UNIQUE,
+                 trace_id             TEXT NOT NULL CHECK (length(trace_id) = 32),
+                 span_id              TEXT NOT NULL CHECK (length(span_id) = 16),
+                 run_id               INTEGER REFERENCES agent_runs(id) ON DELETE SET NULL,
+                 identifier_namespace TEXT NOT NULL,
+                 provider             TEXT,
+                 evidence_kind        TEXT NOT NULL CHECK (evidence_kind IN (
+                     'exact_provider_id', 'trace_context', 'claimed', 'ambiguous', 'no_match'
+                 )),
+                 confidence           REAL NOT NULL CHECK (confidence >= 0.0 AND confidence <= 1.0),
+                 reason               TEXT NOT NULL,
+                 projection_version   INTEGER NOT NULL CHECK (projection_version > 0),
+                 candidate_count      INTEGER NOT NULL DEFAULT 0 CHECK (candidate_count BETWEEN 0 AND 8),
+                 observed_at          TEXT NOT NULL,
+                 metadata_json        TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json))
+             );
+             CREATE INDEX IF NOT EXISTS idx_agent_run_trace_relations_run_span
+                 ON agent_run_trace_relations(run_id, observed_at DESC, id DESC);
+             CREATE INDEX IF NOT EXISTS idx_agent_run_trace_relations_trace_span
+                 ON agent_run_trace_relations(trace_id, span_id, id);
+             INSERT OR IGNORE INTO schema_migrations (version) VALUES (54);
+             COMMIT;",
+        )?;
+        tracing::info!("Migration 54: created versioned OTLP trace/run relations");
+    }
+
+    // Migration 55: keep bounded session-title provenance in the materialized
+    // rollup. Reading it from raw logs per returned session would make the
+    // indexed rollup path scale with transcript event volume again.
+    if !migration_applied(&conn, 55)? {
+        let tx = conn.transaction()?;
+        // The rollup is a rebuildable cache. Legacy recovery databases can
+        // carry the migration-21 marker without the optional table, so an
+        // additive cache migration must not block the rest of their recovery.
+        if table_exists(&tx, "ai_session_rollup")? {
+            add_column_if_missing(&tx, "ai_session_rollup", "title", "TEXT")?;
+            add_column_if_missing(&tx, "ai_session_rollup", "title_provenance", "TEXT")?;
+        }
+        tx.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version) VALUES (55)",
+            [],
+        )?;
+        tx.commit()?;
+        tracing::info!("Migration 55: added session title provenance to AI session rollup");
+    }
+
+    // Migration 56: bind syslog-forward replay receipts to the authenticated
+    // request tuple so conflicting idempotency-key reuse cannot drop evidence.
+    if !migration_applied(&conn, 56)? {
+        let tx = conn.transaction()?;
+        if table_exists(&tx, "syslog_forward_receipts")? {
+            add_column_if_missing(
+                &tx,
+                "syslog_forward_receipts",
+                "request_fingerprint",
+                "TEXT NOT NULL DEFAULT ''",
+            )?;
+        }
+        tx.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version) VALUES (56)",
+            [],
+        )?;
+        tx.commit()?;
+        tracing::info!("Migration 56: bound syslog forwarding receipts to request fingerprints");
+    }
+
+    // Migration 57: bind transcript replay receipts to the complete scrubbed
+    // evidence envelope. The idempotency key alone cannot distinguish an
+    // exact retry from a buggy or hostile sender reusing the ID for new data.
+    if !migration_applied(&conn, 57)? {
+        let tx = conn.transaction()?;
+        if table_exists(&tx, "ai_transcript_forward_receipts")? {
+            add_column_if_missing(
+                &tx,
+                "ai_transcript_forward_receipts",
+                "request_fingerprint",
+                "TEXT",
+            )?;
+        }
+        tx.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version) VALUES (57)",
+            [],
+        )?;
+        tx.commit()?;
+        tracing::info!("Migration 57: bound transcript receipts to request fingerprints");
+    }
+
+    // Migration 58: recurring-error enrichment looks up evidence for a
+    // bounded set of signature hashes in one query.
+    if !migration_applied(&conn, 58)? {
+        let tx = conn.transaction()?;
+        if table_exists(&tx, "graph_relationship_evidence")? {
+            tx.execute_batch(
+                "CREATE INDEX IF NOT EXISTS idx_graph_evidence_error_signature_hash_id
+                 ON graph_relationship_evidence(source_signature_hash, id)
+                 WHERE source_kind = 'error_signature';",
+            )?;
+        }
+        tx.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version) VALUES (58)",
+            [],
+        )?;
+        tx.commit()?;
+        tracing::info!("Migration 58: indexed recurring-error graph evidence lookup");
     }
 
     if table_exists(&conn, "host_heartbeats")? && table_exists(&conn, "host_heartbeats_latest")? {

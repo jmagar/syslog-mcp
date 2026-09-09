@@ -1,19 +1,18 @@
 //! Gemini CLI transcript parsing.
 //!
-//! Unlike Claude/Codex (which write line-delimited JSONL), the Gemini CLI
-//! stores each session as a single JSON object at `chats/session-*.json` with a
-//! top-level `messages` array. The live entry point is therefore [`parse_file`]
-//! (whole-file JSON), invoked from `index_gemini_file` in the parent module —
-//! Gemini sessions never flow through the per-line `parse_line_for_source`
-//! dispatch, so this module carries its own error/observability accounting via
-//! [`GeminiParse`] rather than the line loop's `record_parse_error` machinery.
+//! Current Gemini CLI releases write a JSONL patch journal: a session metadata
+//! snapshot followed by `$set` records containing newly persisted messages.
+//! Older releases wrote one whole-file JSON object. [`parse_file`] accepts both
+//! formats and normalizes them to one stable, duplicate-free message stream.
 
 use std::path::Path;
 
-use anyhow::Result;
+use std::collections::HashMap;
+
+use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
-use super::{ParsedTranscriptRecord, hash_text};
+use super::{ParsedTranscriptRecord, TranscriptSessionMetadata, hash_text};
 
 /// Outcome of parsing one Gemini session file.
 ///
@@ -21,6 +20,7 @@ use super::{ParsedTranscriptRecord, hash_text};
 /// how many messages were skipped for lack of extractable text, and whether the
 /// file is a chat file with no `messages` array at all (a likely upstream schema
 /// change that must not be silently checkpointed as "fully indexed").
+#[derive(Debug)]
 pub struct GeminiParse {
     pub records: Vec<ParsedTranscriptRecord>,
     pub skipped_empty: usize,
@@ -34,14 +34,49 @@ pub fn is_chat_file(path: &Path) -> bool {
         .and_then(Path::file_name)
         .and_then(|name| name.to_str());
     matches!(parent_name, Some("chats"))
-        && file_name.is_some_and(|name| name.starts_with("session-") && name.ends_with(".json"))
+        && file_name.is_some_and(|name| {
+            name.starts_with("session-") && (name.ends_with(".json") || name.ends_with(".jsonl"))
+        })
 }
 
 pub fn parse_file(raw: &str, path: &Path) -> Result<GeminiParse> {
-    let value: Value = serde_json::from_str(raw)?;
-    let session_id = value
-        .get("sessionId")
-        .or_else(|| value.get("session_id"))
+    if raw.trim().is_empty() {
+        bail!("Gemini chat file is empty");
+    }
+
+    // A legacy session is exactly one JSON value. A current patch journal is
+    // multiple independently valid JSON values separated by newlines.
+    if let Ok(value) = serde_json::from_str::<Value>(raw) {
+        return parse_values(std::slice::from_ref(&value), path);
+    }
+
+    let mut values = Vec::new();
+    for (line_no, line) in raw.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        values.push(
+            serde_json::from_str::<Value>(line)
+                .with_context(|| format!("invalid Gemini JSONL record at line {}", line_no + 1))?,
+        );
+    }
+    if values.is_empty() {
+        bail!("Gemini chat file has no JSON records");
+    }
+    parse_values(&values, path)
+}
+
+fn parse_values(values: &[Value], path: &Path) -> Result<GeminiParse> {
+    let field = |names: &[&str]| {
+        values.iter().rev().find_map(|value| {
+            names.iter().find_map(|name| {
+                value
+                    .get(*name)
+                    .or_else(|| value.get("$set").and_then(|set| set.get(*name)))
+            })
+        })
+    };
+    let session_id = field(&["sessionId", "session_id"])
         .and_then(Value::as_str)
         .map(ToString::to_string)
         .or_else(|| {
@@ -49,45 +84,76 @@ pub fn parse_file(raw: &str, path: &Path) -> Result<GeminiParse> {
                 .and_then(|stem| stem.to_str())
                 .map(ToString::to_string)
         });
-    let ai_project = value
-        .get("cwd")
-        .or_else(|| value.get("projectPath"))
-        .or_else(|| value.get("project_path"))
+    let ai_project = field(&["cwd", "projectPath", "project_path"])
         .and_then(Value::as_str)
         .map(ToString::to_string)
         .or_else(|| {
-            value
-                .get("projectHash")
-                .or_else(|| value.get("project_hash"))
+            field(&["projectHash", "project_hash"])
                 .and_then(Value::as_str)
                 .map(|hash| format!("gemini://project/{hash}"))
         });
-    let default_timestamp = value
-        .get("startTime")
-        .or_else(|| value.get("started_at"))
+    let default_timestamp = field(&["startTime", "started_at"])
         .and_then(Value::as_str)
         .map(ToString::to_string);
-    let Some(messages) = value.get("messages").and_then(Value::as_array) else {
+    let string_field = |names: &[&str]| {
+        field(names)
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+    };
+    let title = string_field(&["title", "displayName", "display_name"]);
+    let session_metadata = TranscriptSessionMetadata {
+        title_provenance: title.as_ref().map(|_| "provider".to_string()),
+        title,
+        model: string_field(&["model", "modelName", "model_name"]),
+        model_provider: Some("google".to_string()),
+        client_version: string_field(&["version", "clientVersion", "client_version"]),
+        entrypoint: Some("gemini-cli".to_string()),
+        source: Some("gemini-cli".to_string()),
+        source_format: Some(
+            if values.len() == 1 && path.extension().is_some_and(|ext| ext == "json") {
+                "gemini-legacy-json"
+            } else {
+                "gemini-patch-jsonl"
+            }
+            .to_string(),
+        ),
+        ..Default::default()
+    };
+    // `$set.messages` follows JSON patch replacement semantics. The last
+    // message array is authoritative; replaying earlier snapshots duplicates
+    // history and turns a growing journal into quadratic projection work.
+    let messages = values.iter().rev().find_map(|value| {
+        value
+            .get("messages")
+            .or_else(|| value.get("$set").and_then(|set| set.get("messages")))
+            .and_then(Value::as_array)
+    });
+    let Some(messages) = messages else {
         return Ok(GeminiParse {
             records: Vec::new(),
             skipped_empty: 0,
             missing_messages: true,
         });
     };
+
     let mut records = Vec::new();
+    let mut hash_occurrences = HashMap::<String, usize>::new();
     let mut skipped_empty = 0usize;
-    for (index, message) in messages.iter().enumerate() {
-        let Some(content) = extract_message(message) else {
-            skipped_empty += 1;
-            continue;
-        };
+    for message in messages {
         let serialized = serde_json::to_string(message)?;
+        let message_hash = hash_text(&serialized);
+        let occurrence = hash_occurrences.entry(message_hash.clone()).or_default();
         let record_key = message
             .get("id")
             .or_else(|| message.get("uuid"))
             .and_then(Value::as_str)
             .map(|id| format!("id:{id}"))
-            .unwrap_or_else(|| format!("message:{index}:hash:{}", hash_text(&serialized)));
+            .unwrap_or_else(|| format!("hash:{message_hash}:occurrence:{occurrence}"));
+        *occurrence += 1;
+        let Some(content) = extract_message(message) else {
+            skipped_empty += 1;
+            continue;
+        };
         let timestamp = message
             .get("timestamp")
             .or_else(|| message.get("created_at"))
@@ -101,7 +167,8 @@ pub fn parse_file(raw: &str, path: &Path) -> Result<GeminiParse> {
             session_id: session_id.clone(),
             ai_project: ai_project.clone(),
             event_kind: super::transcript_event_kind(message),
-            raw_value: None,
+            session_metadata: session_metadata.clone(),
+            raw_value: Some(message.clone()),
         });
     }
     Ok(GeminiParse {

@@ -144,6 +144,7 @@ Per-host (`DockerHostConfig`): `name`, `base_url`, `allow_insecure_http` (defaul
 | `authelia_source_ip` | `CORTEX_AUTHELIA_SOURCE_IP` | string | `None` | public | restart-only | — | — | IP prefix gate for Authelia severity reclassification |
 | `adguard_source_ip` | `CORTEX_ADGUARD_SOURCE_IP` | string | `None` | public | restart-only | — | — | IP prefix gate for AdGuard JSON tag classification |
 | `scrub_prompts` | `CORTEX_SCRUB_PROMPTS` | bool | `true` | tuning | restart-only | — | — | AI-source credential scrub |
+| `mcp.forwarding_agents.<principal>` | — | secret string | none | secret | restart-only | non-empty values enabled | `[mcp.forwarding_agents]` map of server-authoritative principals to bearer credentials accepted only by evidence-forwarding endpoints; values are redacted from Debug and serialization |
 | `fts_merge_pages` | `CORTEX_FTS_MERGE_PAGES` | u32 | `0` | tuning | restart-only | `0..=10_000` | — | `0` = force merge after every purge |
 
 ### `[agent_observatory]` — durable agent, Git, and telemetry projection

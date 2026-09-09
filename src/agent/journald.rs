@@ -22,7 +22,7 @@ pub async fn run_journald_forwarder(hostname: &str, sender: Arc<SyslogSender>) -
 
     while let Some(line) = lines.next_line().await? {
         if let Some(syslog_line) = parse_entry(hostname, &line) {
-            sender.try_send(syslog_line);
+            sender.send_from("journald", syslog_line).await?;
         }
     }
 

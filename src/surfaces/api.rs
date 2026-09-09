@@ -77,6 +77,64 @@ pub(super) const API_SURFACE_SPECS: &[SurfaceSpec] = &[
     api!("/api/integration-profile", Runtime, Canonical, Read),
     api!("/v1/integration/identity", Runtime, Canonical, Read),
     api!("/api/capabilities", Runtime, Canonical, Read),
+    // Agent Observatory is a first-class, authenticated read surface. Keep
+    // every mounted spelling here so router construction and qualification
+    // cannot drift apart.
+    api!(
+        "/api/agent-observatory/repositories",
+        Sessions,
+        Canonical,
+        Read
+    ),
+    api!(
+        "/api/repositories",
+        Sessions,
+        RetainedProtocolCompatibility,
+        Read
+    ),
+    api!(
+        "/api/agent-observatory/worktrees",
+        Sessions,
+        Canonical,
+        Read
+    ),
+    api!(
+        "/api/repositories/{repository_id}/worktrees",
+        Sessions,
+        RetainedProtocolCompatibility,
+        Read
+    ),
+    api!("/api/agent-observatory/runs", Sessions, Canonical, Read),
+    api!(
+        "/api/agent-runs",
+        Sessions,
+        RetainedProtocolCompatibility,
+        Read
+    ),
+    api!(
+        "/api/agent-observatory/runs/{run_key}/events",
+        Sessions,
+        Canonical,
+        Read
+    ),
+    api!(
+        "/api/agent-runs/{run_key}/events",
+        Sessions,
+        RetainedProtocolCompatibility,
+        Read
+    ),
+    api!(
+        "/api/agent-observatory/runs/{run_key}/telemetry",
+        Sessions,
+        Canonical,
+        Read
+    ),
+    api!(
+        "/api/agent-runs/{run_key}/telemetry",
+        Sessions,
+        RetainedProtocolCompatibility,
+        Read
+    ),
     api!("/api/streams/logs", Search, Canonical, Read),
     api!("/api/streams/sessions", Sessions, Canonical, Read),
     api!("/api/v1/investigation/version", Runtime, Canonical, Read),
@@ -205,6 +263,7 @@ pub(super) const API_SURFACE_SPECS: &[SurfaceSpec] = &[
         RetainedProtocolCompatibility,
         Read
     ),
+    api!("/api/recurring-error-comparison", Analysis, Canonical, Read),
     api!(
         "/api/incident-context",
         Analysis,

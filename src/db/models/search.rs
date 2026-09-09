@@ -7,6 +7,7 @@ pub struct SearchParams {
     pub host: Option<String>,
     pub source: Option<String>,
     pub source_ip_prefix: Option<String>,
+    pub source_ip_prefixes: Option<Vec<String>>,
     pub severity: Option<String>,
     pub severity_in: Option<Vec<String>>,
     pub app: Option<String>,
@@ -31,7 +32,14 @@ impl SearchParams {
     pub(crate) fn has_indexed_equality_filter(&self) -> bool {
         self.host.is_some()
             || self.source.is_some()
-            || self.source_ip_prefix.is_some()
+            || self
+                .source_ip_prefix
+                .as_ref()
+                .is_some_and(|prefix| !prefix.is_empty())
+            || self
+                .source_ip_prefixes
+                .as_ref()
+                .is_some_and(|prefixes| prefixes.iter().any(|prefix| !prefix.is_empty()))
             || self.app.is_some()
             || self.event_action.is_some()
             || self.ai_project.is_some()

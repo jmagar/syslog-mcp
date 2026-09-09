@@ -88,6 +88,102 @@ impl From<db::SimilarIncidentsResult> for SimilarIncidentsResponse {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Recurring error comparison — bounded, canonical-source evidence bundles
+// ---------------------------------------------------------------------------
+
+/// Compare recurring error signatures in a focal window with the immediately
+/// preceding window of the same duration.  Supplying `until` makes replay
+/// deterministic; without it, the server uses its current UTC clock.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecurringErrorComparisonRequest {
+    /// Restrict to one canonical signature hash when drilling down.
+    pub signature_hash: Option<String>,
+    /// Start of the focal comparison window. Defaults to `until - window_minutes`.
+    pub since: Option<String>,
+    /// End of the focal comparison window. Defaults to current UTC time.
+    pub until: Option<String>,
+    /// Focal-window width when `since` is omitted. Default 60, clamp 5..=1440.
+    pub window_minutes: Option<u32>,
+    /// Maximum ranked signatures. Default 10, clamp 1..=50.
+    pub limit: Option<u32>,
+    /// Include acknowledged signatures. Default false.
+    pub include_acknowledged: Option<bool>,
+}
+
+/// Redaction/version policy applied before a bundle crosses the service
+/// boundary.  The policy is part of both the response and bundle identity, so
+/// a caller cannot confuse a raw or differently redacted projection with this
+/// safe projection.
+pub const RECURRING_ERROR_PRIVACY_POLICY_V1: &str = "irreversible_redaction/v1";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RecurringErrorEvidenceBundle {
+    /// SHA-256 over canonical source keys, comparison bounds, evidence revision,
+    /// and the privacy policy. Never derived from display/sample strings.
+    pub bundle_id: String,
+    pub schema_version: String,
+    pub privacy_policy: String,
+    pub source_key: String,
+    pub evidence_revision: String,
+    /// Graph provenance handles. Follow them through `graph` mode `evidence`;
+    /// these are bounded and intentionally do not embed raw evidence payloads.
+    pub graph_evidence_ids: Vec<i64>,
+    pub graph_evidence_truncated: bool,
+    pub retention_or_projection_gap: bool,
+    pub focal_boundary_windows: i64,
+    pub baseline_boundary_windows: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecurringErrorComparisonEntry {
+    pub signature_hash: String,
+    pub normalizer_version: i64,
+    pub severity: String,
+    pub focal_count: i64,
+    pub baseline_count: i64,
+    pub count_delta: i64,
+    pub total_count: i64,
+    pub first_seen_at: String,
+    pub last_seen_at: String,
+    /// Irreversibly scrubbed and bounded display fields. The raw source row is
+    /// not placed in this model or a cache.
+    pub safe_template: String,
+    pub safe_sample_message: String,
+    pub safe_hostname: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub safe_app_name: Option<String>,
+    pub evidence: RecurringErrorEvidenceBundle,
+    /// An actionable, bounded follow-up. It is evidence-ranked, not a causal
+    /// explanation.
+    pub next_query: RecurringErrorNextQuery,
+    pub explanation: String,
+    pub open_questions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RecurringErrorNextQuery {
+    pub action: String,
+    pub mode: String,
+    pub entity_type: String,
+    pub key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecurringErrorComparisonResponse {
+    pub focal_from: String,
+    pub focal_to: String,
+    pub baseline_from: String,
+    pub baseline_to: String,
+    pub candidate_rows: usize,
+    pub candidate_cap: usize,
+    pub candidate_window_truncated: bool,
+    pub results_truncated: bool,
+    pub privacy_policy: String,
+    pub comparisons: Vec<RecurringErrorComparisonEntry>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IncidentContextRequest {

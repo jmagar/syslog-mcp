@@ -34,6 +34,8 @@ pub const OPTIONAL_ENV_KEYS: &[&str] = &[
     "CORTEX_AGENT_COMMAND_SPOOL",
     "CORTEX_AGENT_SHELL_HISTORY_FORWARD",
     "CORTEX_AGENT_SHELL_HISTORY_CHECKPOINT",
+    "CORTEX_AGENT_SYSLOG_FORWARD_SPOOL",
+    "CORTEX_AGENT_SYSLOG_FORWARD_TARGET",
     "CORTEX_AGENT_AUTO_UPDATE",
 ];
 
@@ -119,6 +121,11 @@ pub struct HeartbeatAgentConfig {
     pub file_tails: Vec<crate::agent::syslog_file::FileTailSource>,
     /// Override TCP syslog target (`host:port`).  Derived from `target` when absent.
     pub syslog_target: Option<String>,
+    /// Explicit HTTP endpoint for receipt-backed syslog forwarding. When
+    /// absent, the heartbeat target is used.
+    pub syslog_forward_target: Option<String>,
+    /// Local durable queue for receipt-backed syslog delivery.
+    pub syslog_forward_spool_path: PathBuf,
     /// Forward local AI transcript (Claude/Codex) changes to the central
     /// server's `/v1/ai-transcripts` endpoint using `target`/`token`.
     pub ai_transcripts: bool,
@@ -135,7 +142,7 @@ pub struct HeartbeatAgentConfig {
 }
 
 impl HeartbeatAgentConfig {
-    pub fn from_env(host_id_path: PathBuf) -> Self {
+    pub fn from_env(host_id_path: PathBuf) -> Result<Self> {
         let target = crate::env::var("CORTEX_HEARTBEAT_TARGET")
             .ok()
             .or_else(|| crate::env::var("CORTEX_URL").ok())
@@ -162,6 +169,32 @@ impl HeartbeatAgentConfig {
             .map(|spec| crate::agent::syslog_file::parse_file_tails(&spec))
             .unwrap_or_default();
         let syslog_target = crate::env::var("CORTEX_SYSLOG_TARGET").ok();
+        let explicit_syslog_forward_target = crate::env::var("CORTEX_AGENT_SYSLOG_FORWARD_TARGET")
+            .ok()
+            .filter(|value| !value.trim().is_empty());
+        let syslog_forward_target = if explicit_syslog_forward_target.is_some() {
+            explicit_syslog_forward_target
+        } else if syslog_target.is_some() {
+            tracing::warn!(
+                warning_code = "legacy_syslog_target_migrated",
+                legacy_env = "CORTEX_SYSLOG_TARGET",
+                replacement_env = "CORTEX_AGENT_SYSLOG_FORWARD_TARGET",
+                "legacy TCP syslog target is ignored; durable forwarding uses the heartbeat HTTP target"
+            );
+            target.clone()
+        } else {
+            None
+        };
+        let syslog_forward_spool_path = match crate::env::var(
+            "CORTEX_AGENT_SYSLOG_FORWARD_SPOOL",
+        ) {
+            Ok(path) => PathBuf::from(path),
+            Err(_) => crate::setup::cortex_home_dir()
+                .context(
+                    "cannot resolve a durable Cortex state directory for the syslog forwarding spool; set CORTEX_AGENT_SYSLOG_FORWARD_SPOOL explicitly",
+                )?
+                .join("syslog-forward-spool.json"),
+        };
         let current_transcript_forward = crate::env::var(AI_TRANSCRIPT_FORWARD_ENV).ok();
         let legacy_transcript_forward = crate::env::var(AI_TRANSCRIPT_FORWARD_LEGACY_ENV).ok();
         let transcript_forward = resolve_ai_transcript_forward_env(
@@ -218,7 +251,7 @@ impl HeartbeatAgentConfig {
                         .unwrap_or_else(|_| PathBuf::from("."))
                         .join("shell-history-forward-checkpoint.json")
                 });
-        Self {
+        Ok(Self {
             target,
             token,
             interval: Duration::from_secs(DEFAULT_INTERVAL_SECS),
@@ -235,13 +268,15 @@ impl HeartbeatAgentConfig {
             syslog_file,
             file_tails,
             syslog_target,
+            syslog_forward_target,
+            syslog_forward_spool_path,
             ai_transcripts,
             ai_transcript_checkpoint_path,
             agent_command_forward,
             agent_command_spool_path,
             shell_history_forward,
             shell_history_checkpoint_path,
-        }
+        })
     }
 }
 
@@ -1436,6 +1471,13 @@ pub async fn run_agent(config: HeartbeatAgentConfig) -> Result<()> {
             syslog_file: config.syslog_file.clone(),
             file_tails: config.file_tails.clone(),
             syslog_target,
+            syslog_forward_target: config
+                .syslog_forward_target
+                .clone()
+                .or_else(|| config.target.clone())
+                .unwrap_or_else(|| DEFAULT_TARGET.to_string()),
+            syslog_forward_token: config.token.clone(),
+            syslog_forward_spool_path: config.syslog_forward_spool_path.clone(),
             hostname: hostname(),
             ai_transcripts: config.ai_transcripts,
             ai_transcript_target: config

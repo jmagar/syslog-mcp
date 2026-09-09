@@ -1,8 +1,8 @@
 use super::*;
 use crate::config::StorageConfig;
 use crate::db::{
-    SearchAiSessionsParams, SearchParams, init_pool, list_ai_sessions, search_ai_sessions,
-    search_logs, tail_logs,
+    ListAiSessionsParams, SearchAiSessionsParams, SearchParams, init_pool, list_ai_sessions,
+    search_ai_sessions, search_logs, tail_logs,
 };
 use serial_test::serial;
 
@@ -62,7 +62,10 @@ fn force_reindexes_file_without_duplicate_logs() {
         &pool,
         &file,
         "explicit_file",
-        IndexFileOptions { force: true },
+        IndexFileOptions {
+            force: true,
+            ..Default::default()
+        },
         None,
     )
     .unwrap();
@@ -672,6 +675,58 @@ fn scanner_exposes_default_roots_and_supported_file_policy() {
     assert!(!is_supported_transcript_file(std::path::Path::new(
         ".gemini/tmp/hash/chats/notes.json"
     )));
+    assert!(is_supported_transcript_file(std::path::Path::new(
+        "/mounted/.gemini/antigravity/brain/session/.system_generated/logs/transcript.jsonl"
+    )));
+    assert!(!is_supported_transcript_file(std::path::Path::new(
+        "/mounted/.gemini/antigravity/brain/session/private-notes.jsonl"
+    )));
+}
+
+#[test]
+#[serial]
+fn antigravity_discovery_is_narrow_and_sessions_remain_queryable() {
+    let (pool, home) = test_pool();
+    let _home = HomeOverride::set(home.path());
+    let brain = home.path().join(".gemini/antigravity/brain");
+    let transcript = brain.join("session-1/.system_generated/logs/transcript.jsonl");
+    std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    std::fs::write(
+        &transcript,
+        concat!(
+            r#"{"source":"USER","type":"USER_INPUT","content":"investigate storage"}"#,
+            "\n",
+            r#"{"source":"MODEL","type":"PLANNER_RESPONSE","content":"checking storage"}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        brain.join("session-1/unrelated.jsonl"),
+        r#"{"source":"USER","content":"private unrelated artifact"}"#,
+    )
+    .unwrap();
+
+    let result = index_roots(&pool, Some(&brain)).unwrap();
+    assert_eq!(result.ingested, 2);
+    assert_eq!(result.unsupported_files, 1);
+
+    let sessions = list_ai_sessions(&pool, &ListAiSessionsParams::default()).unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].ai_project, "antigravity://desktop");
+    assert_eq!(sessions[0].ai_session_id, "session-1");
+    assert_eq!(sessions[0].event_count, 2);
+
+    let leaked: i64 = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM logs WHERE message LIKE '%private unrelated artifact%'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(leaked, 0);
 }
 
 #[test]
@@ -711,6 +766,8 @@ fn append_start_requires_stored_content_hash() {
         content_hash: None,
         last_offset: Some(10),
         last_error: None,
+        source_revision: None,
+        scan_state: checkpoint::SourceScanState::Complete,
     };
     let current = FileMetadata {
         size: 20,
@@ -751,6 +808,11 @@ fn rewritten_file_falls_back_to_duplicate_safe_full_scan() {
 fn index_roots_default_scans_claude_codex_codex_app_and_gemini_roots() {
     let (pool, dir) = test_pool();
     let _home = HomeOverride::set(dir.path());
+    // The default-root fixture is intentionally scoped to its temporary
+    // home. A caller-supplied CODEX_HOME is an additional supported root and
+    // must be covered in its own test rather than leaking real sessions into
+    // this denominator.
+    let _codex_home = EnvOverride::remove("CODEX_HOME");
 
     let claude_root = dir.path().join(".claude/projects/-tmp-default");
     std::fs::create_dir_all(&claude_root).unwrap();
@@ -1128,6 +1190,44 @@ fn index_file_normalizes_gemini_cwd_worktree_project() {
 }
 
 #[test]
+fn index_file_persists_scrubbed_gemini_session_metadata() {
+    let (pool, dir) = test_pool();
+    let file = dir.path().join("session-gemini-metadata.json");
+    std::fs::write(
+        &file,
+        r#"{
+          "sessionId": "gemini-metadata",
+          "title": "Useful session title",
+          "model": "gemini-test",
+          "version": "1.2.3",
+          "messages": [{
+            "id": "gemini-metadata-message",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "content": "hello"
+          }]
+        }"#,
+    )
+    .unwrap();
+
+    let result = index_file(&pool, &file, "gemini_session").unwrap();
+    assert_eq!(result.ingested, 1);
+    let conn = pool.get().unwrap();
+    let raw: String = conn
+        .query_row(
+            "SELECT metadata_json FROM logs WHERE ai_session_id = 'gemini-metadata'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let metadata: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(metadata["session"]["title"], "Useful session title");
+    assert_eq!(metadata["session"]["title_provenance"], "provider");
+    assert_eq!(metadata["session"]["model"], "gemini-test");
+    assert_eq!(metadata["session"]["client_version"], "1.2.3");
+    assert_eq!(metadata["session"]["source_format"], "gemini-legacy-json");
+}
+
+#[test]
 fn explicit_file_detects_codex_transcript_shape_outside_codex_root() {
     let (pool, dir) = test_pool();
     let file = dir.path().join("exported-codex.jsonl");
@@ -1294,6 +1394,850 @@ fn index_roots_since_skips_older_file_mtimes() {
     assert_eq!(search.sessions[0].ai_session_id, "new");
 }
 
+#[test]
+#[serial]
+fn bounded_snapshot_timeout_yields_to_later_source_without_late_persistence() {
+    let (pool, dir) = test_pool();
+    let _home = HomeOverride::set(dir.path());
+    let root = dir.path().join(".codex/sessions");
+    std::fs::create_dir_all(&root).unwrap();
+    let stalled = root.join("000-stalled-codex.jsonl");
+    let fast = root.join("999-fast-codex.jsonl");
+    std::fs::write(
+        &stalled,
+        concat!(
+            r#"{"type":"session_meta","payload":{"id":"stalled-session"}}"#,
+            "\n",
+            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":"must never persist after timeout"}}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        &fast,
+        concat!(
+            r#"{"type":"session_meta","payload":{"id":"fast-session"}}"#,
+            "\n",
+            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":"later source reached canonical ingestion"}}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+
+    let _delay = SnapshotDelayGuard::for_file(
+        "000-stalled-codex.jsonl",
+        std::time::Duration::from_millis(450),
+    );
+    let started = std::time::Instant::now();
+    let result = index_roots_with_options(
+        &pool,
+        IndexOptions {
+            root_override: Some(root.clone()),
+            scan_budget: Some(ScanBudget {
+                per_source_max_bytes: 4_096,
+                scan_max_bytes: 8_192,
+                per_source_deadline: std::time::Duration::from_millis(100),
+            }),
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(result.source_deadline_exceeded, 1, "result={result:#?}");
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(300),
+        "a stalled reader held the scan longer than its deadline"
+    );
+    let ingested_fast: i64 = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM logs WHERE message = 'later source reached canonical ingestion'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(ingested_fast, 1);
+
+    // The worker remains intentionally detached until the OS read returns.
+    // It owns no persistence capability, so completion cannot create a source
+    // or imports after the scanner classified it as deferred.
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let late_source_rows: i64 = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM transcript_sources WHERE canonical_path LIKE '%000-stalled-codex.jsonl'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        late_source_rows, 0,
+        "timed-out source persisted after return"
+    );
+}
+
+#[test]
+#[serial]
+fn bounded_gemini_snapshot_timeout_yields_to_later_gemini_without_late_persistence() {
+    let (pool, dir) = test_pool();
+    let _home = HomeOverride::set(dir.path());
+    let _codex_home = EnvOverride::remove("CODEX_HOME");
+    let root = dir.path().join(".gemini/tmp/hash/chats");
+    std::fs::create_dir_all(&root).unwrap();
+    let stalled = root.join("session-000-stalled.json");
+    let fast = root.join("session-999-fast.json");
+    std::fs::write(
+        &stalled,
+        r#"{"sessionId":"stalled","messages":[{"id":"stalled","content":"gemini must not persist late"}]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &fast,
+        r#"{"sessionId":"fast","messages":[{"id":"fast","content":"later Gemini source reached canonical ingestion"}]}"#,
+    )
+    .unwrap();
+
+    let _delay = SnapshotDelayGuard::for_file(
+        "session-000-stalled.json",
+        std::time::Duration::from_millis(450),
+    );
+    let result = index_roots_with_options(
+        &pool,
+        IndexOptions {
+            // Default provider roots preserve the `/var`↔`/private/var`
+            // identity used by the HOME override on macOS.
+            root_override: None,
+            scan_budget: Some(ScanBudget {
+                per_source_max_bytes: 4_096,
+                scan_max_bytes: 8_192,
+                per_source_deadline: std::time::Duration::from_millis(100),
+            }),
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(result.source_deadline_exceeded, 1, "result={result:#?}");
+    let fast_rows: i64 = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM logs WHERE message = 'later Gemini source reached canonical ingestion'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(fast_rows, 1);
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let late_rows: i64 = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM transcript_sources WHERE canonical_path LIKE '%session-000-stalled.json'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(late_rows, 0);
+}
+
+#[test]
+#[serial]
+fn saturated_snapshot_workers_defer_without_starving_later_source_on_retry() {
+    let (pool, dir) = test_pool();
+    let _home = HomeOverride::set(dir.path());
+    let root = dir.path().join(".codex/sessions");
+    std::fs::create_dir_all(&root).unwrap();
+    for name in ["000-stalled.jsonl", "001-stalled.jsonl"] {
+        std::fs::write(
+            root.join(name),
+            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":"stalled"}}"#,
+        )
+        .unwrap();
+    }
+    std::fs::write(
+        root.join("999-healthy.jsonl"),
+        r#"{"type":"response_item","payload":{"type":"message","role":"user","content":"healthy source after saturation"}}"#,
+    )
+    .unwrap();
+    let delay = SnapshotDelayGuard::for_files([
+        ("000-stalled.jsonl", std::time::Duration::from_millis(450)),
+        ("001-stalled.jsonl", std::time::Duration::from_millis(450)),
+    ]);
+    let options = IndexOptions {
+        root_override: Some(root),
+        scan_budget: Some(ScanBudget {
+            per_source_max_bytes: 4_096,
+            scan_max_bytes: 16_384,
+            per_source_deadline: std::time::Duration::from_millis(100),
+        }),
+        ..Default::default()
+    };
+    let first = index_roots_with_options(&pool, options.clone(), None).unwrap();
+    assert_eq!(first.source_deadline_exceeded, 2, "result={first:#?}");
+    assert_eq!(first.snapshot_capacity_deferred, 1, "result={first:#?}");
+    assert!(
+        first.next_scan_cursor.is_some(),
+        "attempted sources advance cursor"
+    );
+
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    drop(delay);
+    let second = index_roots_with_options(&pool, options, None).unwrap();
+    assert_eq!(second.snapshot_capacity_deferred, 0, "result={second:#?}");
+    let healthy_rows: i64 = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM logs WHERE message = 'healthy source after saturation'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(healthy_rows, 1, "later healthy source gets a fair retry");
+}
+
+#[test]
+#[serial]
+fn snapshot_bytes_count_when_gemini_utf8_validation_fails_before_records() {
+    let (pool, dir) = test_pool();
+    let _home = HomeOverride::set(dir.path());
+    let root = dir.path().join(".gemini/tmp/hash/chats");
+    std::fs::create_dir_all(&root).unwrap();
+    let invalid = root.join("session-invalid.json");
+    let later = root.join("session-later.json");
+    std::fs::write(&invalid, *b"{\xff}").unwrap();
+    std::fs::write(
+        &later,
+        r#"{"sessionId":"later","messages":[{"id":"later","content":"must defer after invalid bytes"}]}"#,
+    )
+    .unwrap();
+    let result = index_roots_with_options(
+        &pool,
+        IndexOptions {
+            root_override: None,
+            scan_budget: Some(ScanBudget {
+                per_source_max_bytes: 64,
+                scan_max_bytes: 3,
+                per_source_deadline: std::time::Duration::from_secs(1),
+            }),
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!(result.parse_errors, 1, "result={result:#?}");
+    assert_eq!(result.scanned_bytes, 3, "invalid source bytes must count");
+    assert!(result.scan_budget_cap_hit, "later source must be deferred");
+}
+
+#[test]
+fn oversized_gemini_session_is_deferred_without_whole_file_ingestion() {
+    let (pool, dir) = test_pool();
+    let file = dir.path().join("oversized-gemini.json");
+    std::fs::write(
+        &file,
+        format!(
+            r#"{{"sessionId":"large","messages":[{{"id":"m","content":"{}"}}]}}"#,
+            "x".repeat(512)
+        ),
+    )
+    .unwrap();
+
+    let result = index_file_with_options(
+        &pool,
+        &file,
+        "gemini_session",
+        IndexFileOptions {
+            scan_budget: Some(ScanBudget {
+                per_source_max_bytes: 64,
+                scan_max_bytes: 64,
+                per_source_deadline: std::time::Duration::from_secs(1),
+            }),
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(result.source_budget_cap_hits, 1);
+    assert_eq!(result.ingested, 0);
+    let checkpoints = list_checkpoints(&pool, &CheckpointListOptions::default()).unwrap();
+    assert_eq!(
+        checkpoints.len(),
+        1,
+        "source registration is not a scan cursor"
+    );
+    assert_eq!(checkpoints[0].last_offset, Some(0));
+    assert_eq!(checkpoints[0].file_size, None);
+}
+
+#[test]
+#[serial]
+fn bounded_discovery_yields_huge_provider_root_to_later_provider_root() {
+    let (pool, dir) = test_pool();
+    let _home = HomeOverride::set(dir.path());
+    // The scanner honors an operator-supplied alternate Codex root. Isolate
+    // this scheduling test from the developer's real `CODEX_HOME`, whose
+    // discovery cost is outside the fixture and would make the elapsed-time
+    // assertion non-deterministic.
+    let _codex_home = EnvOverride::remove("CODEX_HOME");
+    let huge_root = dir.path().join(".claude/projects");
+    std::fs::create_dir_all(&huge_root).unwrap();
+    for index in 0..=MAX_DISCOVERY_ENTRIES_PER_ROOT {
+        std::fs::write(huge_root.join(format!("noise-{index:04}.txt")), "noise").unwrap();
+    }
+    let deferred_claude = huge_root.join("zz-late-project/session.jsonl");
+    std::fs::create_dir_all(deferred_claude.parent().unwrap()).unwrap();
+    std::fs::write(
+        &deferred_claude,
+        r#"{"sessionId":"late-claude","content":"deferred root continuation completed"}"#,
+    )
+    .unwrap();
+    let gemini_root = dir.path().join(".gemini/tmp/hash/chats");
+    std::fs::create_dir_all(&gemini_root).unwrap();
+    std::fs::write(
+        gemini_root.join("session-later-provider.json"),
+        r#"{"sessionId":"later-provider","messages":[{"id":"later","content":"later provider discovered despite huge root"}]}"#,
+    )
+    .unwrap();
+    let _delay = SnapshotDelayGuard::for_file("projects", std::time::Duration::from_secs(3));
+    let result = index_roots_with_options(
+        &pool,
+        IndexOptions {
+            scan_budget: Some(ScanBudget {
+                per_source_max_bytes: 4_096,
+                scan_max_bytes: 16_384,
+                per_source_deadline: std::time::Duration::from_millis(25),
+            }),
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(result.discovery_cap_hits, 1, "result={result:#?}");
+    assert_eq!(result.discovery_deferred_roots, 1, "result={result:#?}");
+    let mut continuations = result.next_discovery_cursors.clone();
+    assert!(
+        !continuations.is_empty(),
+        "capped discovery records its last visited entry"
+    );
+    assert!(
+        !snapshot_test_delay_completed("projects"),
+        "a slow provider-root discovery blocked until the delayed worker completed"
+    );
+    let later_provider_rows: i64 = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM logs WHERE message = 'later provider discovered despite huge root'",
+            [],
+            |row| row.get(0),
+    )
+    .unwrap();
+    assert_eq!(later_provider_rows, 1);
+
+    // Only the first pass models a stalled root. Subsequent incremental work
+    // must prove that the recorded entry cursor itself, not another timeout,
+    // reaches the deferred descendant.
+    drop(_delay);
+    std::thread::sleep(std::time::Duration::from_millis(250));
+    for _ in 0..4 {
+        let pass = index_roots_with_options(
+            &pool,
+            IndexOptions {
+                discovery_start_after: continuations.clone(),
+                scan_budget: Some(ScanBudget {
+                    per_source_max_bytes: 4_096,
+                    scan_max_bytes: 16_384,
+                    per_source_deadline: std::time::Duration::from_secs(1),
+                }),
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+        let found: i64 = pool
+            .get()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM logs WHERE message = 'deferred root continuation completed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        if found == 1 {
+            break;
+        }
+        continuations = pass.next_discovery_cursors;
+        assert!(
+            !continuations.is_empty(),
+            "incomplete discovery produces a continuation cursor"
+        );
+    }
+    let continued_rows: i64 = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM logs WHERE message = 'deferred root continuation completed'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        continued_rows, 1,
+        "capped root resumes past its prior cursor"
+    );
+}
+
+#[test]
+#[serial]
+fn bounded_discovery_retains_continuations_for_multiple_capped_roots() {
+    let (pool, dir) = test_pool();
+    let _home = HomeOverride::set(dir.path());
+    let _codex_home = EnvOverride::remove("CODEX_HOME");
+    let claude_root = dir.path().join(".claude/projects");
+    let codex_root = dir.path().join(".codex/sessions");
+    for (root, message) in [
+        (&claude_root, "claude continuation survives"),
+        (&codex_root, "codex continuation survives"),
+    ] {
+        std::fs::create_dir_all(root).unwrap();
+        for index in 0..=MAX_DISCOVERY_ENTRIES_PER_ROOT {
+            std::fs::write(root.join(format!("noise-{index:04}.txt")), "noise").unwrap();
+        }
+        let deferred = root.join("zz-deferred/session.jsonl");
+        std::fs::create_dir_all(deferred.parent().unwrap()).unwrap();
+        let record = if root == &claude_root {
+            format!(r#"{{"sessionId":"late-claude","content":"{message}"}}"#)
+        } else {
+            format!(r#"{{"type":"response_item","payload":{{"content":"{message}"}}}}"#)
+        };
+        std::fs::write(deferred, record).unwrap();
+    }
+    let first = index_roots_with_options(
+        &pool,
+        IndexOptions {
+            scan_budget: Some(ScanBudget {
+                per_source_max_bytes: 4_096,
+                scan_max_bytes: 16_384,
+                per_source_deadline: std::time::Duration::from_secs(1),
+            }),
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+    // Discovery keys use canonical paths so `/var` and `/private/var` share
+    // one cursor on macOS rather than repeatedly scanning the same source.
+    let canonical_claude_root = claude_root.canonicalize().unwrap();
+    let canonical_codex_root = codex_root.canonicalize().unwrap();
+    assert!(
+        first
+            .next_discovery_cursors
+            .contains_key(&canonical_claude_root)
+    );
+    assert!(
+        first
+            .next_discovery_cursors
+            .contains_key(&canonical_codex_root)
+    );
+
+    let mut continuations = first.next_discovery_cursors;
+    for _ in 0..4 {
+        let pass = index_roots_with_options(
+            &pool,
+            IndexOptions {
+                discovery_start_after: continuations.clone(),
+                scan_budget: Some(ScanBudget {
+                    per_source_max_bytes: 4_096,
+                    scan_max_bytes: 16_384,
+                    per_source_deadline: std::time::Duration::from_secs(1),
+                }),
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+        let found: i64 = pool
+            .get()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM logs WHERE message IN \
+                 ('claude continuation survives', 'codex continuation survives')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        if found == 2 {
+            break;
+        }
+        continuations = pass.next_discovery_cursors;
+        assert!(
+            !continuations.is_empty(),
+            "incomplete multi-root discovery retains every outstanding cursor"
+        );
+    }
+    let found: i64 = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM logs WHERE message IN \
+             ('claude continuation survives', 'codex continuation survives')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        found, 2,
+        "both simultaneously capped roots eventually complete"
+    );
+}
+
+#[test]
+#[serial]
+fn bounded_root_scan_yields_from_a_valid_slow_source_to_the_next_source() {
+    let (pool, dir) = test_pool();
+    let _home = HomeOverride::set(dir.path());
+    let root = dir.path().join(".codex/sessions");
+    std::fs::create_dir_all(&root).unwrap();
+    let slow = root.join("000-slow-codex.jsonl");
+    let fast = root.join("999-fast-codex.jsonl");
+
+    let mut slow_records =
+        String::from(r#"{"type":"session_meta","payload":{"id":"slow-session"}}"#);
+    slow_records.push('\n');
+    for record in 0..200 {
+        slow_records.push_str(&format!(
+            r#"{{"type":"response_item","payload":{{"type":"message","role":"user","content":"slow valid record {record} {}"}}}}"#,
+            "x".repeat(160)
+        ));
+        slow_records.push('\n');
+    }
+    std::fs::write(&slow, slow_records).unwrap();
+    std::fs::write(
+        &fast,
+        concat!(
+            r#"{"type":"session_meta","payload":{"id":"fast-session"}}"#,
+            "\n",
+            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":"fast source reached canonical ingestion"}}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+
+    let result = index_roots_with_options(
+        &pool,
+        IndexOptions {
+            root_override: Some(root.clone()),
+            scan_budget: Some(ScanBudget {
+                per_source_max_bytes: 1_200,
+                scan_max_bytes: 8_000,
+                per_source_deadline: std::time::Duration::from_secs(30),
+            }),
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(result.source_budget_cap_hits, 1, "result={result:#?}");
+    assert_eq!(result.source_deadline_exceeded, 0);
+    assert!(!result.scan_budget_cap_hit);
+    let ingested_fast: i64 = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM logs WHERE message = 'fast source reached canonical ingestion'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        ingested_fast, 1,
+        "a valid but byte-capped source must yield before a later valid source is starved"
+    );
+}
+
+#[test]
+#[serial]
+fn bounded_root_scan_reports_scan_wide_cap_and_defers_remaining_sources() {
+    let (pool, dir) = test_pool();
+    let _home = HomeOverride::set(dir.path());
+    let root = dir.path().join(".codex/sessions");
+    std::fs::create_dir_all(&root).unwrap();
+    let slow = root.join("000-budget-source.jsonl");
+    let deferred = root.join("999-deferred-source.jsonl");
+    std::fs::write(
+        &slow,
+        concat!(
+            r#"{"type":"session_meta","payload":{"id":"budget-session"}}"#,
+            "\n",
+            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":""#,
+            "x",
+            "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "\"}}\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        &deferred,
+        concat!(
+            r#"{"type":"session_meta","payload":{"id":"deferred-session"}}"#,
+            "\n",
+            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":"must wait for next pass"}}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+
+    let result = index_roots_with_options(
+        &pool,
+        IndexOptions {
+            root_override: Some(root.clone()),
+            scan_budget: Some(ScanBudget {
+                per_source_max_bytes: 10_000,
+                scan_max_bytes: 120,
+                per_source_deadline: std::time::Duration::from_secs(1),
+            }),
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+
+    assert!(result.scan_budget_cap_hit);
+    assert_eq!(result.deferred_sources, 1);
+    let cursor = result
+        .next_scan_cursor
+        .clone()
+        .expect("a source was attempted before the scan-wide cap");
+    let deferred_ingested: i64 = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM logs WHERE message = 'must wait for next pass'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(deferred_ingested, 0);
+
+    let second = index_roots_with_options(
+        &pool,
+        IndexOptions {
+            root_override: Some(root),
+            start_after: Some(cursor),
+            scan_budget: Some(ScanBudget {
+                per_source_max_bytes: 10_000,
+                scan_max_bytes: 20_000,
+                per_source_deadline: std::time::Duration::from_secs(30),
+            }),
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+    assert!(second.next_scan_cursor.is_some());
+    let deferred_ingested: i64 = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM logs WHERE message = 'must wait for next pass'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        deferred_ingested, 1,
+        "the next bounded scan begins after the last attempted source"
+    );
+}
+
+#[test]
+fn oversized_jsonl_source_resumes_from_a_checkpointed_prefix() {
+    let (pool, dir) = test_pool();
+    let file = dir.path().join("oversized-session.jsonl");
+    std::fs::write(
+        &file,
+        concat!(
+            r#"{"sessionId":"s","content":"one"}"#,
+            "\n",
+            r#"{"sessionId":"s","content":"two"}"#,
+            "\n",
+            r#"{"sessionId":"s","content":"three"}"#,
+            "\n",
+            r#"{"sessionId":"s","content":"four"}"#,
+            "\n",
+            r#"{"sessionId":"s","content":"five"}"#,
+            "\n",
+            r#"{"sessionId":"s","content":"second bounded chunk becomes visible later"}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+    let options = IndexFileOptions {
+        scan_budget: Some(ScanBudget {
+            per_source_max_bytes: 132,
+            scan_max_bytes: 1_000,
+            per_source_deadline: std::time::Duration::from_secs(1),
+        }),
+        ..Default::default()
+    };
+
+    let first =
+        index_file_with_options(&pool, &file, "explicit_file", options.clone(), None).unwrap();
+    assert_eq!(first.source_budget_cap_hits, 1, "result={first:#?}");
+    let checkpoint = list_checkpoints(
+        &pool,
+        &CheckpointListOptions {
+            errors_only: false,
+            missing_only: false,
+            limit: Some(10),
+        },
+    )
+    .unwrap();
+    assert!(checkpoint[0].last_offset.unwrap_or_default() > 0);
+    assert!(
+        checkpoint[0].last_offset.unwrap_or_default() < checkpoint[0].file_size.unwrap_or_default(),
+        "partial checkpoints retain full source metadata plus a separate cursor: {checkpoint:#?}"
+    );
+
+    // Active transcripts normally grow between bounded passes. An append must
+    // preserve the already-imported prefix and continue from its exact line,
+    // rather than looking like an in-place rewrite and resetting to byte zero.
+    use std::io::Write as _;
+    writeln!(
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&file)
+            .unwrap(),
+        r#"{{"sessionId":"s","content":"appended while continuation is pending"}}"#
+    )
+    .unwrap();
+
+    let mut pass_results = Vec::new();
+    for _ in 0..3 {
+        let pass =
+            index_file_with_options(&pool, &file, "explicit_file", options.clone(), None).unwrap();
+        let found: i64 = pool
+            .get()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM logs WHERE message = 'second bounded chunk becomes visible later'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        if found == 1 {
+            break;
+        }
+        pass_results.push(pass.clone());
+        assert_eq!(pass.source_budget_cap_hits, 1, "result={pass:#?}");
+    }
+    let later_rows: i64 = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM logs WHERE message = 'second bounded chunk becomes visible later'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        later_rows,
+        1,
+        "first={first:#?} passes={pass_results:#?} checkpoint={:#?}",
+        list_checkpoints(
+            &pool,
+            &CheckpointListOptions {
+                errors_only: false,
+                missing_only: false,
+                limit: Some(10),
+            },
+        )
+        .unwrap()
+    );
+    let conn = pool.get().unwrap();
+    let first_row_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM logs WHERE message = 'one'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        first_row_count, 1,
+        "append must not delete/replay the prefix"
+    );
+    let recovered_line_no: i64 = conn
+        .query_row(
+            "SELECT json_extract(metadata_json, '$.line_no') FROM logs WHERE message = 'second bounded chunk becomes visible later'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        recovered_line_no, 5,
+        "metadata retains physical line numbers"
+    );
+}
+
+#[test]
+fn bounded_jsonl_discards_an_oversized_physical_record_across_passes() {
+    let (pool, dir) = test_pool();
+    let file = dir.path().join("physical-record-boundary.jsonl");
+    let trailing = r#"{"sessionId":"later","content":"visible after oversized physical record"}"#;
+    std::fs::write(&file, format!("{}\n{trailing}\n", "x".repeat(256))).unwrap();
+    let options = IndexFileOptions {
+        scan_budget: Some(ScanBudget {
+            per_source_max_bytes: 128,
+            scan_max_bytes: 1_024,
+            per_source_deadline: std::time::Duration::from_secs(1),
+        }),
+        ..Default::default()
+    };
+
+    for _ in 0..16 {
+        let result =
+            index_file_with_options(&pool, &file, "explicit_file", options.clone(), None).unwrap();
+        assert!(
+            result.scanned_bytes <= 128,
+            "one pass consumed more than its physical allowance: {result:#?}"
+        );
+        let found: i64 = pool
+            .get()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM logs WHERE message = 'visible after oversized physical record'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        if found == 1 {
+            break;
+        }
+    }
+    let found: i64 = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM logs WHERE message = 'visible after oversized physical record'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        found, 1,
+        "later JSONL records are not stranded by a giant row"
+    );
+}
+
 fn set_mtime(path: &std::path::Path, secs: u64, nanos: u32) {
     let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
     file.set_modified(std::time::UNIX_EPOCH + std::time::Duration::new(secs, nanos))
@@ -1316,6 +2260,29 @@ impl Drop for HomeOverride {
             crate::env::set_test_var("HOME", home);
         } else {
             crate::env::remove_test_var("HOME");
+        }
+    }
+}
+
+struct EnvOverride {
+    key: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl EnvOverride {
+    fn remove(key: &'static str) -> Self {
+        let previous = crate::env::var_os(key);
+        crate::env::remove_test_var(key);
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvOverride {
+    fn drop(&mut self) {
+        if let Some(value) = &self.previous {
+            crate::env::set_test_var(self.key, value);
+        } else {
+            crate::env::remove_test_var(self.key);
         }
     }
 }
@@ -1591,7 +2558,10 @@ fn reindexing_same_transcript_does_not_duplicate_skill_events() {
         &pool,
         &file,
         "explicit_file",
-        IndexFileOptions { force: true },
+        IndexFileOptions {
+            force: true,
+            ..Default::default()
+        },
         None,
     )
     .unwrap();
@@ -1786,4 +2756,36 @@ fn read_transcript_lines_recovers_requested_lines_and_skips_oversized() {
     // Line 3 is beyond EOF.
     assert!(!got.contains_key(&3), "out-of-range line must be omitted");
     assert_eq!(got.len(), 2);
+}
+
+#[test]
+fn session_metadata_scrubbing_neutralizes_terminal_controls_and_bounds_labels() {
+    let metadata = TranscriptSessionMetadata {
+        title: Some(format!("safe\u{1b}[31m title\nnext {}", "x".repeat(600))),
+        title_provenance: Some("provider\r\nspoofed".to_string()),
+        ..Default::default()
+    }
+    .scrubbed();
+
+    let title = metadata.title.expect("safe title should be retained");
+    let provenance = metadata
+        .title_provenance
+        .expect("safe provenance should be retained");
+    assert!(!title.chars().any(char::is_control));
+    assert!(!provenance.chars().any(char::is_control));
+    assert!(title.chars().count() <= MAX_SESSION_METADATA_CHARS);
+    assert!(provenance.contains("provider  spoofed"));
+}
+
+#[test]
+fn session_metadata_scrubbing_drops_control_only_labels() {
+    let metadata = TranscriptSessionMetadata {
+        title: Some("\u{1b}\n\r".to_string()),
+        title_provenance: Some("\t".to_string()),
+        ..Default::default()
+    }
+    .scrubbed();
+
+    assert!(metadata.title.is_none());
+    assert!(metadata.title_provenance.is_none());
 }

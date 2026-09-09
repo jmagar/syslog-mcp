@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::Result;
 use cortex::app::{IncidentResponse, ServiceLogsResponse};
 use cortex::scanner::{
     AiDoctorReport, CheckpointEntry, IndexResult, ParseErrorEntry, PruneCheckpointsResult,
@@ -9,6 +9,10 @@ use super::super::color::{cyan, error, muted, primary, success, violet, warn};
 use super::super::sessions_watch::AiSmokeWatchReport;
 use super::common::{local_ts, print_json, truncate};
 use cortex::app::AiWatchStatusReport;
+
+#[path = "sessions/validation.rs"]
+mod validation;
+pub(crate) use validation::{ensure_ai_doctor_success, ensure_index_success};
 
 pub(crate) fn print_checkpoints_response(response: &[CheckpointEntry], json: bool) -> Result<()> {
     if json {
@@ -235,7 +239,6 @@ pub(crate) fn print_sessions_watch_status_response(
         muted("process_start_time"),
         muted(response.process_start_time.as_deref().unwrap_or("-"))
     );
-    println!("{}: {}", muted("db_path"), primary(&response.db_path));
     match response.health.as_ref() {
         Some(h) => {
             println!(
@@ -273,6 +276,23 @@ pub(crate) fn print_sessions_watch_status_response(
                     "{}: {}",
                     muted("stale_indicators"),
                     warn(&h.stale_indicators.join(", "))
+                );
+            }
+            for provider in &h.provider_coverage {
+                let lanes = provider
+                    .lanes
+                    .iter()
+                    .map(|lane| format!("{}={}", lane.lane, lane.coverage))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                println!(
+                    "{}: {} sources={} successful={} failed={} [{}]",
+                    muted("provider_coverage"),
+                    primary(&provider.provider),
+                    provider.source_count,
+                    provider.successful_sources,
+                    provider.failed_sources,
+                    muted(&lanes)
                 );
             }
         }
@@ -405,7 +425,7 @@ pub(crate) fn print_index_response(response: &IndexResult, json: bool) -> Result
         return print_json(response);
     }
     println!(
-        "files={} ingested={} duplicates={} parse_errors={} skipped={} unsupported={} symlinks={} unsafe_paths={} storage_blocked_chunks={} dropped_metadata_fields={} checkpoint_updates={} file_errors={}",
+        "files={} ingested={} duplicates={} parse_errors={} skipped={} unsupported={} symlinks={} unsafe_paths={} storage_blocked_chunks={} dropped_metadata_fields={} checkpoint_updates={} scanned_bytes={} source_budget_cap_hits={} source_deadline_exceeded={} discovery_cap_hits={} discovery_deferred_roots={} scan_budget_cap_hit={} deferred_sources={} file_errors={}",
         cyan(&response.discovered_files.to_string()),
         cyan(&response.ingested.to_string()),
         muted(&response.skipped_dupes.to_string()),
@@ -425,6 +445,29 @@ pub(crate) fn print_index_response(response: &IndexResult, json: bool) -> Result
         },
         muted(&response.dropped_metadata_fields.to_string()),
         cyan(&response.checkpoint_updates.to_string()),
+        muted(&response.scanned_bytes.to_string()),
+        if response.source_budget_cap_hits > 0 {
+            warn(&response.source_budget_cap_hits.to_string())
+        } else {
+            muted(&response.source_budget_cap_hits.to_string())
+        },
+        if response.source_deadline_exceeded > 0 {
+            warn(&response.source_deadline_exceeded.to_string())
+        } else {
+            muted(&response.source_deadline_exceeded.to_string())
+        },
+        if response.discovery_cap_hits > 0 {
+            warn(&response.discovery_cap_hits.to_string())
+        } else {
+            muted(&response.discovery_cap_hits.to_string())
+        },
+        muted(&response.discovery_deferred_roots.to_string()),
+        if response.scan_budget_cap_hit {
+            warn("true")
+        } else {
+            muted("false")
+        },
+        muted(&response.deferred_sources.to_string()),
         if !response.file_errors.is_empty() {
             error(&response.file_errors.len().to_string())
         } else {
@@ -438,50 +481,6 @@ pub(crate) fn print_index_response(response: &IndexResult, json: bool) -> Result
             primary(&e.path),
             e.error
         );
-    }
-    Ok(())
-}
-
-pub(crate) fn ensure_index_success(response: &IndexResult) -> Result<()> {
-    if response.file_errors.is_empty()
-        && response.storage_blocked_chunks == 0
-        && response.parse_errors == 0
-    {
-        if response.dropped_metadata_fields > 0 {
-            eprintln!(
-                "warning: {} transcript metadata field(s) were dropped",
-                response.dropped_metadata_fields
-            );
-        }
-        Ok(())
-    } else if response.storage_blocked_chunks > 0 {
-        bail!(
-            "{} transcript chunk(s) blocked by storage guardrails",
-            response.storage_blocked_chunks
-        )
-    } else if response.parse_errors > 0 {
-        bail!(
-            "{} transcript record(s) failed to parse",
-            response.parse_errors
-        )
-    } else {
-        bail!(
-            "{} transcript file(s) failed to index",
-            response.file_errors.len()
-        )
-    }
-}
-
-pub(crate) fn ensure_ai_doctor_success(
-    response: &AiDoctorReport,
-    strict_permissions: bool,
-) -> Result<()> {
-    if strict_permissions
-        && ((response.claude_root.exists && !response.claude_root.strict_ok)
-            || (response.codex_root.exists && !response.codex_root.strict_ok)
-            || (response.gemini_root.exists && !response.gemini_root.strict_ok))
-    {
-        bail!("AI transcript root permission check failed");
     }
     Ok(())
 }
