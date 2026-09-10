@@ -83,12 +83,14 @@ impl CortexService {
     /// [`db_integrity_job_status`](Self::db_integrity_job_status).
     ///
     /// The check runs on its OWN pooled connection in an independently managed
-    /// OS thread — deliberately NOT via `run_db` (which
-    /// would hold a `db_permits` slot for the whole 147s and starve other reads)
-    /// and NOT via the maintenance permit (which would serialize behind retention
-    /// / optimize). `quick_check` is read-only, so it never blocks the ingest
-    /// writer. The outer `tokio::spawn` is what lets this method return now and
-    /// update the job row when the check finishes.
+    /// OS thread — deliberately NOT via `run_db`, which would hold a
+    /// `db_permits` slot for the whole 147s and starve other reads. It does hold
+    /// the maintenance permit, so it is single-flight with the other
+    /// maintenance operations, and releases it before recording the terminal
+    /// state: a caller that observes `done`/`failed` finds the gate free.
+    /// `quick_check` is read-only, so it never blocks the ingest writer. The
+    /// outer `tokio::spawn` is what lets this method return now and update the
+    /// job row when the check finishes.
     pub async fn db_integrity_start_background(
         &self,
         quick: bool,
@@ -106,6 +108,8 @@ impl CortexService {
         let worker_pool = Arc::clone(&pool);
         #[cfg(test)]
         let test_hook = self.integrity_test_hook.clone();
+        #[cfg(test)]
+        let before_terminal = self.integrity_before_terminal_hook.clone();
         let (done_tx, done_rx) = tokio::sync::oneshot::channel();
         #[cfg(test)]
         if self.integrity_test_spawn_failure {
@@ -123,7 +127,6 @@ impl CortexService {
         let spawn_result = std::thread::Builder::new()
             .name(format!("cortex-integrity-{job_id}"))
             .spawn(move || {
-                let _permit = permit;
                 let checked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     #[cfg(test)]
                     if let Some(hook) = test_hook {
@@ -155,6 +158,15 @@ impl CortexService {
                         serde_json::json!({ "error": e.to_string() }).to_string(),
                     ),
                 };
+                // Release the single-flight gate before recording the terminal
+                // state, so a caller that observes `done`/`failed` can start
+                // the next maintenance operation immediately instead of racing
+                // this thread's teardown into a `Busy` answer.
+                drop(permit);
+                #[cfg(test)]
+                if let Some(hook) = &before_terminal {
+                    hook();
+                }
                 let completion = db::finish_maintenance_job(&worker_pool, job_id, status, &result_json)
                     .map_err(|error| error.to_string());
                 if let Err(e) = &completion {
