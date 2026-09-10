@@ -359,11 +359,15 @@ jobs:
       - name: Install generated-CLI runtime
         # The surfaces phase generates a standalone CLI from the live server
         # with mcporter and refuses to continue without it. Pin the version
-        # the harness is developed against.
+        # the harness is developed against, and install it under its own
+        # prefix: a second `npm install --no-save` in the checkout prunes the
+        # playwright-core the browser sweep step installed there.
         run: |
-          npm install --no-save --no-audit --no-fund mcporter@0.13.0
-          echo "$PWD/node_modules/.bin" >>"$GITHUB_PATH"
-          "$PWD/node_modules/.bin/mcporter" --version
+          prefix="$RUNNER_TEMP/mcporter"
+          npm install --prefix "$prefix" --no-audit --no-fund mcporter@0.13.0
+          echo "$prefix/node_modules/.bin" >>"$GITHUB_PATH"
+          "$prefix/node_modules/.bin/mcporter" --version
+          [ -d "$LIVE_PLAYWRIGHT_CORE" ] || { echo "::error::playwright-core missing at $LIVE_PLAYWRIGHT_CORE"; exit 1; }
 
       - name: Run fail-closed live smoke
         env:
