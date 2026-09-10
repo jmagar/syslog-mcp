@@ -25,6 +25,10 @@ version_files = [
   { kind = "cargo_package", path = "xtask/Cargo.toml", package = "xtask" },
   { kind = "cargo_lock_package", path = "Cargo.lock", package = "cortex" },
   { kind = "cargo_lock_package", path = "Cargo.lock", package = "xtask" },
+  # Nested harness crates depend on cortex by path, so their lockfiles pin the
+  # cortex version too; untracked, they fell behind on every release.
+  { kind = "cargo_lock_package", path = "tests/live/surface-exporter/Cargo.lock", package = "cortex" },
+  { kind = "cargo_lock_package", path = "tests/live/services/oauth/Cargo.lock", package = "cortex" },
   { kind = "json_version", path = "server.json", json_pointer = "/version" },
   { kind = "json_version", path = "server.json", json_pointer = "/packages/0/version" },
   { kind = "json_version", path = "server.json", json_pointer = "/_meta/io.modelcontextprotocol.registry~1publisher-provided/buildInfo/version" },
