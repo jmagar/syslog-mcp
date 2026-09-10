@@ -11,6 +11,8 @@ pub(crate) use super::sessions_watch_legacy::{
     ai_index_timer_disabled_phase, legacy_ai_systemd_units_absent_phase,
 };
 use super::systemd::{systemctl_user_phase, systemctl_user_required_named_phase};
+use super::transcript_roots::ensure_transcript_roots_phase;
+pub(crate) use super::transcript_roots::transcript_root_permissions_phase;
 use super::{
     AI_WATCH_SERVICE_ACTIVE_PHASE, AI_WATCH_SERVICE_ENABLED_PHASE, PhaseTimer,
     SessionsWatchServiceAction, SetupIssueKind, SetupPhase, SetupReport, SetupStatus,
@@ -47,6 +49,7 @@ pub async fn run_sessions_watch_service_setup(
                 &db_path,
                 &user_home,
             )?);
+            phases.push(ensure_transcript_roots_phase(&user_home));
             phases.push(transcript_root_permissions_phase(&user_home));
             phases.push(run_ai_watch_initial_index_phase(
                 &cortex_bin,
@@ -290,67 +293,6 @@ pub(crate) fn ai_watch_service_unit(
     format!(
         "[Unit]\nDescription=cortex real-time local AI transcript watch\nDocumentation=https://github.com/dinglebear-ai/cortex\nAfter=default.target\nStartLimitIntervalSec=600\nStartLimitBurst=20\n\n[Service]\nType=simple\nEnvironmentFile={env_path}\nEnvironment=PATH={user_local_bin}:{user_cargo_bin}:/usr/local/bin:/usr/bin:/bin\nEnvironment=CARGO_TARGET_DIR={cargo_target_dir}\nWorkingDirectory=/\nExecStart={cortex_bin} sessions watch --no-initial-scan --json\nRestart=on-failure\nRestartSec=5\nUMask=0077\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\nProtectHome=read-only\nBindReadOnlyPaths=-{claude_root} -{codex_root} -{gemini_root} -{antigravity_root} -{antigravity_cli_root}\nBindPaths={db_dir} {state_dir}\nReadWritePaths={db_dir} {state_dir}\n\n[Install]\nWantedBy=default.target\n"
     )
-}
-
-pub(crate) fn transcript_root_permissions_phase(user_home: &Path) -> SetupPhase {
-    let timer = PhaseTimer::start("ai-transcript-root-permissions");
-    let roots = [
-        user_home.join(".claude/projects"),
-        user_home.join(".codex/sessions"),
-        user_home.join(".gemini/tmp"),
-        user_home.join(".gemini/antigravity/brain"),
-        user_home.join(".gemini/antigravity-cli/brain"),
-    ];
-    let failures: Vec<String> = roots
-        .iter()
-        .filter_map(|root| transcript_root_permission_error(root))
-        .collect();
-    if failures.is_empty() {
-        timer.finish(
-            SetupStatus::Ok,
-            "AI transcript roots are owned/readable/writable",
-        )
-    } else {
-        timer.finish(SetupStatus::Error, failures.join("; "))
-    }
-}
-
-fn transcript_root_permission_error(root: &Path) -> Option<String> {
-    let metadata = match std::fs::metadata(root) {
-        Ok(metadata) => metadata,
-        Err(error) => return Some(format!("{}: {error}", root.display())),
-    };
-    if !metadata.is_dir() {
-        return Some(format!("{} is not a directory", root.display()));
-    }
-    if std::fs::read_dir(root).is_err() {
-        return Some(format!("{} is not readable", root.display()));
-    }
-    let probe = root.join(format!(".cortex-write-check-{}", std::process::id()));
-    match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&probe)
-    {
-        Ok(_) => {
-            let _ = std::fs::remove_file(probe);
-        }
-        Err(error) => return Some(format!("{} is not writable: {error}", root.display())),
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let current_uid = unsafe { libc::geteuid() };
-        if metadata.uid() != current_uid {
-            return Some(format!(
-                "{} owner uid {} != current uid {}",
-                root.display(),
-                metadata.uid(),
-                current_uid
-            ));
-        }
-    }
-    None
 }
 
 pub(crate) fn run_ai_watch_initial_index_phase(cortex_bin: &Path, env_path: &Path) -> SetupPhase {

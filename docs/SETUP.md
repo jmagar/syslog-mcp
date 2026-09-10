@@ -107,8 +107,14 @@ events.
 
 On Linux, `cortex setup sessions-watch-service install` grants the hardened
 user service read-only access to all five provider root families above. The
-setup permission check covers both Antigravity roots as well as Claude, Codex,
-and Gemini CLI.
+watcher resolves its watch targets once at startup and refuses to start when no
+root exists, so install creates any missing root (`~/.claude/projects`,
+`~/.codex/sessions`, `~/.gemini/tmp`, and both Antigravity `brain` roots) as a
+private `0700` directory before the permission check. A provider installed
+later then writes into a directory the running watcher already observes.
+Existing roots are never modified; the setup permission check still reports
+any root that is missing, not a directory, unreadable, unwritable, or owned by
+another user.
 
 ## 5. Start locally
 

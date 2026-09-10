@@ -181,6 +181,74 @@ async fn run_ai_watch_service_setup_install_check_and_remove_round_trip() {
 #[cfg(unix)]
 #[tokio::test]
 #[serial]
+async fn run_ai_watch_service_setup_install_succeeds_on_fresh_home_and_creates_roots() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let cortex_home = home.join(".cortex");
+    let bin_dir = dir.path().join("bin");
+    let db_path = cortex_home.join("data/cortex.db");
+    // Deliberately seed no transcript roots: a HOME where no AI tool has run yet.
+    std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    write_executable(
+        &bin_dir.join("cortex"),
+        "#!/bin/sh\nif [ \"$1 $2\" = \"sessions index\" ]; then printf '{\"discovered_files\":0,\"ingested\":0,\"skipped_dupes\":0,\"parse_errors\":0,\"storage_blocked_chunks\":0,\"dropped_metadata_fields\":0,\"file_errors\":[]}\\n'; exit 0; fi\nexit 0\n",
+    );
+    write_executable(
+        &bin_dir.join("systemctl"),
+        "#!/bin/sh\ncase \"$*\" in\n  *is-active*cortex-sessions-index.timer*) printf 'inactive\\n' ;;\n  *is-enabled*cortex-sessions-index.timer*) printf 'disabled\\n' ;;\n  *is-enabled*cortex-sessions-watch.service*) printf 'enabled\\n' ;;\n  *is-active*cortex-sessions-watch.service*) printf 'active\\n' ;;\n  *) printf 'ok\\n' ;;\nesac\nexit 0\n",
+    );
+
+    let _home = EnvGuard::set("HOME", &home);
+    let _cortex_home = EnvGuard::set("CORTEX_HOME", &cortex_home);
+    let _db_path = EnvGuard::set("CORTEX_DB_PATH", &db_path);
+    let _path = EnvGuard::set("PATH", path_with_prepended(&bin_dir));
+
+    let install = run_sessions_watch_service_setup(SessionsWatchServiceAction::Install)
+        .await
+        .unwrap();
+
+    assert!(
+        !install.has_errors,
+        "fresh HOME install failed: {install:?}"
+    );
+    assert!(install.phases.iter().any(|phase| {
+        phase.name == "ai-transcript-roots"
+            && phase.status == SetupStatus::Ok
+            && phase
+                .detail
+                .starts_with("created missing AI transcript roots")
+    }));
+    assert!(install.phases.iter().any(|phase| {
+        phase.name == "ai-transcript-root-permissions" && phase.status == SetupStatus::Ok
+    }));
+    assert!(
+        install
+            .phases
+            .iter()
+            .any(|phase| phase.name == AI_WATCH_SERVICE_ACTIVE_PHASE && phase.detail == "active")
+    );
+    for root in [
+        ".claude/projects",
+        ".codex/sessions",
+        ".gemini/tmp",
+        ".gemini/antigravity/brain",
+        ".gemini/antigravity-cli/brain",
+    ] {
+        assert!(home.join(root).is_dir(), "{root} not created by install");
+    }
+
+    let check = run_sessions_watch_service_setup(SessionsWatchServiceAction::Check)
+        .await
+        .unwrap();
+    assert!(check.phases.iter().any(|phase| {
+        phase.name == "ai-transcript-root-permissions" && phase.status == SetupStatus::Ok
+    }));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+#[serial]
 async fn run_ai_watch_service_setup_rejects_relative_db_path_before_writing_files() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("home");
