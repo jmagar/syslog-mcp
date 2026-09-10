@@ -173,7 +173,7 @@ auth_oauth_live_service() {
     set -- $spec; name="$1"; action="$2"; status="$3"; expected="$4"; eval "token=\$OAUTH_${name}"
     body="$(jq -cn --arg a "$action" '{jsonrpc:"2.0",id:41,method:"tools/call",params:{name:"cortex",arguments:{action:$a}}}')"
     code="$(curl -sS --max-time 15 -o "$dir/oauth-live-$name-$action.json" -w '%{http_code}' -H 'Host: localhost:3100' -H "Authorization: Bearer $token" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' --data-binary "$body" "http://127.0.0.1:$port/mcp")"
-    [[ "$code" == "$status" ]]; [[ "$expected" == null ]] || jq -e --argjson expected "$expected" '.result.isError==$expected or (.error!=null and $expected)' "$dir/oauth-live-$name-$action.json" >/dev/null
+    [[ "$code" == "$status" ]] || { live_die "OAuth $name token calling $action answered HTTP $code, expected $status"; return 1; }; [[ "$expected" == null ]] || jq -e --argjson expected "$expected" '.result.isError==$expected or (.error!=null and $expected)' "$dir/oauth-live-$name-$action.json" >/dev/null
   done
   # Every machine-ingest route rejects a user OAuth token before payload parsing.
   : >"$dir/oauth-machine-ingest-ledger.jsonl"
@@ -181,7 +181,7 @@ auth_oauth_live_service() {
     # Populated by the OAuth token fixture above.
     # shellcheck disable=SC2154
     code="$(curl -sS --max-time 15 -o "$dir/oauth-machine-$(printf '%s' "$path" | tr '/' '-').json" -w '%{http_code}' -H 'Host: localhost:3100' -H "Authorization: Bearer $OAUTH_read" -H 'Content-Type: application/json' --data-binary '{}' "http://127.0.0.1:$port$path")"
-    [[ "$code" == 401 ]]
+    [[ "$code" == 401 ]] || { live_die "user OAuth token on machine-ingest $path answered HTTP $code, expected 401"; return 1; }
     jq -cn --arg path "$path" --arg evidence "artifacts/auth/oauth-machine-$(printf '%s' "$path" | tr '/' '-').json" '{path:$path,result:"denied",status:401,evidence:$evidence}' >>"$dir/oauth-machine-ingest-ledger.jsonl"
   done
   jq -se 'length==7 and ([.[].path]|unique|length)==7 and all(.[];.status==401)' "$dir/oauth-machine-ingest-ledger.jsonl" >/dev/null

@@ -172,7 +172,7 @@ mcp_phase_run() {
 
   python3 "$LIVE_PROJECT_ROOT/tests/live/phases/mcp/persistent_client.py" "$LIVE_HTTP_PORT" "$LIVE_CORTEX_TOKEN" "$LIVE_PROJECT_ROOT/tests/live/phases/mcp/discovery.json" "$dir"
   jq -e '.jsonrpc=="2.0" and .id==1 and (.result.protocolVersion|type=="string") and .result.serverInfo.name=="cortex"' "$dir/initialize.json" >/dev/null
-  jq -e '.result.tools|length==1 and .[0].name=="cortex" and (.[0].inputSchema.properties.action.enum|length)==58' "$dir/tools-list.json" >/dev/null
+  jq -e --slurpfile contract "$contract" '.result.tools|length==1 and .[0].name=="cortex" and (.[0].inputSchema.properties.action.enum|length)==([$contract[0].entries[]|select(.kind=="mcp")]|length)' "$dir/tools-list.json" >/dev/null
   jq -e '.result.resources|type=="array"' "$dir/resources-list.json" >/dev/null
   jq -e '.result.contents[0].uri=="ui://cortex/query-widget" and .result.contents[0].mimeType=="text/html;profile=mcp-app" and (.result.contents[0].text|contains("cortex"))' "$dir/widget-resource.json" >/dev/null
   mcp_seed_positive_fixtures "$dir"
@@ -287,10 +287,13 @@ mcp_phase_run() {
   done < <(jq -r '.entries[]|select(.kind=="mcp")|[.spelling,.auth]|@tsv' "$contract" | awk -F '\t' '$1=="artifact_evidence_record"{print "000\t"$0;next}$1=="artifact_evidence"{print "001\t"$0;next}$1=="notifications_test"{print "002\t"$0;next}$1=="notifications_recent"{print "003\t"$0;next}{print "100\t"$0}' | sort | cut -f2-)
 
   jq -se --slurpfile contract "$contract" '
-    length==58 and ([.[].action] as $actions | ($actions|length)==($actions|unique|length)) and all(.[];.result=="pass") and
+    length==([$contract[0].entries[]|select(.kind=="mcp")]|length) and ([.[].action] as $actions | ($actions|length)==($actions|unique|length)) and all(.[];.result=="pass") and
     ([.[].action]|sort)==([$contract[0].entries[]|select(.kind=="mcp")|.spelling]|sort)
   ' "$ledger" >/dev/null
-  jq -e -s '[.[]|select(.kind=="result" and (.payload.surface_id|startswith("mcp.")) and .payload.attempt_kind=="first_attempt")]|length==173 and ([.[].payload|(.surface_id+"/"+.case_kind)]|unique|length)==173 and all(.[];.payload.result=="pass")' "$(live_event_file)" >/dev/null
+  # Every action yields a semantic and a validation case, plus an authorization
+  # case when its contract entry requires one.
+  expected_mcp_results="$(jq '[.entries[]|select(.kind=="mcp")] | (length*2) + ([.[]|select(.required_cases|index("authorization"))]|length)' "$contract")"
+  jq -e -s --argjson expected "$expected_mcp_results" '[.[]|select(.kind=="result" and (.payload.surface_id|startswith("mcp.")) and .payload.attempt_kind=="first_attempt")]|length==$expected and ([.[].payload|(.surface_id+"/"+.case_kind)]|unique|length)==$expected and all(.[];.payload.result=="pass")' "$(live_event_file)" >/dev/null
 
   # Stateful qualification reuses the complete registry-driven semantic,
   # validation, and authorization sweep above, then owns its restart epochs.

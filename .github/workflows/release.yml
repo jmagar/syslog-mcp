@@ -161,6 +161,25 @@ jobs:
         run: |
           provider="docker-host:$(docker info --format '{{.ID}}')"
           bash tests/live/runner.sh --janitor --runs-root "$LIVE_RUNS_ROOT" --provider "$provider"
+      # The full profile runs the surfaces phase, whose browser sweep and
+      # generated-CLI qualification need the same runtimes CI's Live PR Smoke
+      # installs.
+      - name: Install browser sweep runtime
+        if: matrix.profile == 'full'
+        run: |
+          playwright_version="$(node -p "require('./web/package.json').devDependencies['@playwright/test']")"
+          npm install --no-save --no-audit --no-fund "playwright-core@$playwright_version"
+          echo "LIVE_PLAYWRIGHT_CORE=$PWD/node_modules/playwright-core" >>"$GITHUB_ENV"
+          browser="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          [ -n "$browser" ] || { echo "::error::no Chrome/Chromium on the runner for the browser sweep"; exit 1; }
+          echo "LIVE_BROWSER_EXECUTABLE=$browser" >>"$GITHUB_ENV"
+      - name: Install generated-CLI runtime
+        if: matrix.profile == 'full'
+        run: |
+          prefix="$RUNNER_TEMP/mcporter"
+          npm install --prefix "$prefix" --no-audit --no-fund mcporter@0.13.0
+          echo "$prefix/node_modules/.bin" >>"$GITHUB_PATH"
+          "$prefix/node_modules/.bin/mcporter" --version
       - name: Run release-blocking profile
         run: bash tests/live/run-profile.sh "${{ matrix.profile }}"
       - name: Reconcile leases

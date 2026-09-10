@@ -2,6 +2,7 @@
   "version": 1,
   "arguments": {
     "search": {"query":"cortex"},
+    "evidence_scope": {"branch":"main"},
     "host_state": {"host":"missing-live-host"},
     "correlate": {"query":"cortex","reference_time":"2026-08-27T12:00:00Z"},
     "correlate_state": {"reference_time":"2026-08-27T12:00:00Z"},
@@ -42,7 +43,7 @@
     "hook_investigate":"evidence","hosts":"hosts","incident_context":"total_logs","ingest_rate":"buckets","list_ai_projects":"projects",
     "list_ai_tools":"tools","llm_invocations":"$array","map":"schema","mcp_events":"events","mcp_incidents":"incidents","mcp_investigate":"evidence",
     "notifications_recent":"$array","patterns":"patterns","project_context":"project","search":"logs","search_sessions":"sessions","sessions":"sessions",
-    "silent_hosts":"hosts","similar_incidents":"clusters","skill_events":"events","skill_incidents":"incidents","skill_investigate":"evidence",
+    "evidence_scope":"items","recurring_error_comparison":"comparisons","silent_hosts":"hosts","similar_incidents":"clusters","skill_events":"events","skill_incidents":"incidents","skill_investigate":"evidence",
     "source_ips":"source_ips","stats":"total_logs","status":"status","tail":"logs","timeline":"points","topic_correlate":"topic",
     "unaddressed_errors":"signatures","usage_blocks":"blocks","ack_error":"signature_hash","unack_error":"signature_hash","host_state":"host_id","compose_doctor":"diagnostics","notifications_test":"result","graph":"resolved_entity"
   },

@@ -18,7 +18,9 @@ upgrade_mcp() {
 
 upgrade_snapshot_volume() {
   local name="$1" volume="${LIVE_COMPOSE_PROJECT}_state" dir="$LIVE_RUN_ROOT/artifacts/upgrade"
-  docker run --rm --network none --read-only --tmpfs /tmp --entrypoint sh -v "$volume:/state:ro" -v "$dir:/out" "$LIVE_ORACLE_IMAGE" -ceu "tar -C /state -cf /out/$name.tar ."
+  # Stream the archive to the host: the run's artifact dir is private (0700) to
+  # the harness user, so the oracle container's own user cannot write into it.
+  docker run --rm --network none --read-only --tmpfs /tmp --entrypoint sh -v "$volume:/state:ro" "$LIVE_ORACLE_IMAGE" -ceu "tar -C /state -cf - ." >"$dir/$name.tar"
   shasum -a 256 "$dir/$name.tar" | awk '{print $1}' >"$dir/$name.tar.sha256"
   chmod 400 "$dir/$name.tar" "$dir/$name.tar.sha256"
 }
@@ -26,7 +28,9 @@ upgrade_snapshot_volume() {
 upgrade_restore_volume() {
   local name="$1" volume="${LIVE_COMPOSE_PROJECT}_state" dir="$LIVE_RUN_ROOT/artifacts/upgrade"
   [[ "$(shasum -a 256 "$dir/$name.tar" | awk '{print $1}')" == "$(cat "$dir/$name.tar.sha256")" ]]
-  docker run --rm --network none --read-only --tmpfs /tmp --user 1000:1000 --cap-drop ALL --security-opt no-new-privileges --entrypoint sh -v "$volume:/state" -v "$dir:/in:ro" "$LIVE_ORACLE_IMAGE" -ceu "find /state -mindepth 1 -maxdepth 1 -exec rm -rf {} +; tar -C /state -xf /in/$name.tar"
+  # Feed the verified archive on stdin for the same reason the snapshot streams
+  # it out: uid 1000 cannot read the harness user's private artifact dir.
+  docker run -i --rm --network none --read-only --tmpfs /tmp --user 1000:1000 --cap-drop ALL --security-opt no-new-privileges --entrypoint sh -v "$volume:/state" "$LIVE_ORACLE_IMAGE" -ceu "find /state -mindepth 1 -maxdepth 1 -exec rm -rf {} +; tar -C /state -xf -" <"$dir/$name.tar"
 }
 
 upgrade_refuse_downgrade() {

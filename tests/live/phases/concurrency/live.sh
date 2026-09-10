@@ -8,18 +8,23 @@ for lib in common lock redact events command budgets wait docker; do
   source "$root/tests/live/lib/$lib.sh"
 done
 source "$root/tests/live/phases/ingest/run.sh"
+live_install_err_trap
 workers="${LIVE_CONCURRENCY_LIVE_WORKERS:-4}"; each="${LIVE_CONCURRENCY_LIVE_ITEMS:-30}"
 [[ "$workers" =~ ^[1-8]$ && "$each" =~ ^[1-9][0-9]*$ && "$each" -le 200 ]] || { echo 'unsafe concurrency bounds' >&2; exit 2; }
-prefix="conc-${LIVE_RUN_ID#cortex-e2e-}"; candidate="$(live_ingest_candidate_id)"; pids=()
+prefix="conc-${LIVE_RUN_ID#cortex-e2e-}"; candidate="$(live_ingest_candidate_id)"; pids=(); query_pids=()
 for n in $(seq 1 "$workers"); do python3 "$root/tests/live/phases/concurrency/producer.py" --port "${LIVE_SYSLOG_TCP_PORT:?}" --prefix "$prefix-w$n" --count "$each" >"$out/producer-$n.json" & pids+=("$!"); done
 # Queries and WAL-safe maintenance contend with writers. Every response is retained.
 for n in 1 2 3 4; do
   curl -sS --max-time 10 -H 'Host: localhost' -H "Authorization: Bearer $LIVE_CORTEX_TOKEN" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
-    --data-binary "{\"jsonrpc\":\"2.0\",\"id\":$n,\"method\":\"tools/call\",\"params\":{\"name\":\"cortex\",\"arguments\":{\"action\":\"stats\"}}}" "http://127.0.0.1:$LIVE_HTTP_PORT/mcp" >"$out/query-$n.json" & pids+=("$!")
+    --data-binary "{\"jsonrpc\":\"2.0\",\"id\":$n,\"method\":\"tools/call\",\"params\":{\"name\":\"cortex\",\"arguments\":{\"action\":\"stats\"}}}" "http://127.0.0.1:$LIVE_HTTP_PORT/mcp" >"$out/query-$n.json" & query_pids+=("$!")
 done
 docker exec "$candidate" cortex db checkpoint --json >"$out/checkpoint.json" 2>"$out/checkpoint.stderr" & maintenance_pid=$!
 sleep .08; docker restart "$candidate" >"$out/restart.txt"; live_wait_until 30 concurrency-restart-health _live_http_health_ready; live_wait_until 30 concurrency-restart-mcp _live_mcp_ready
 status=0; for pid in "${pids[@]}"; do wait "$pid" || status=1; done
+# A query cut off by the injected restart is expected contention; its response
+# file is retained as evidence and it is counted here, not as a worker failure.
+query_failures=0; for pid in "${query_pids[@]}"; do wait "$pid" || query_failures=$((query_failures+1)); done
+jq -cn --argjson failed "$query_failures" '{schema:"cortex-live-concurrency-queries-v1",queries:4,cut_off_by_restart:$failed}' >"$out/queries.json"
 maintenance_status=0; wait "$maintenance_pid" || maintenance_status=$?
 # A post-restart sentinel proves recovery independently of any in-flight loss.
 python3 "$root/tests/live/phases/concurrency/producer.py" --port "$LIVE_SYSLOG_TCP_PORT" --prefix "$prefix-recovery" --count 1 >"$out/recovery-producer.json"

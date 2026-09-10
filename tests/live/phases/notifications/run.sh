@@ -12,6 +12,7 @@ notification_control() {
 notification_capture() {
   docker compose -p "$LIVE_COMPOSE_PROJECT" -f "$LIVE_PROJECT_ROOT/tests/live/profiles/isolated/compose.yaml" -f "$LIVE_PROJECT_ROOT/tests/live/profiles/notifications/compose.yaml" exec -T apprise wget -qO- --header="Authorization: Bearer $LIVE_APPRISE_CONTROL_TOKEN" http://127.0.0.1:8000/capture
 }
+_notification_capture_ready() { notification_capture >/dev/null 2>&1; }
 notification_test_case() {
   local mode="$1" expected="$2" out="$3" body
   body="notify-$mode-$LIVE_RUN_ID"
@@ -23,6 +24,9 @@ notification_test_case() {
 notification_phase_run() {
   local dir="$LIVE_RUN_ROOT/artifacts/notifications" before after marker host
   mkdir -p "$dir"; live_event phase_started '{"phase":"notifications"}'
+  # Apprise is recreated alongside the candidate; its control API must be
+  # listening before the first capture, or wget gets connection refused.
+  live_wait_until 30 apprise-capture-ready _notification_capture_ready
   before="$(notification_capture | tee "$dir/capture-before.json" | jq -r .requests_total)"
   notification_test_case 202 pass "$dir/test-2xx.json"
   notification_test_case 400 fail "$dir/test-4xx.json"
@@ -51,6 +55,7 @@ notification_phase_run() {
   jq -e --arg host "$host" '[.records[]|select(.payload.title|contains($host))]|length==2' "$dir/capture-dedup.json" >/dev/null
   # Restart mock and prove delivery resumes without external redirect/egress.
   docker compose -p "$LIVE_COMPOSE_PROJECT" -f "$LIVE_PROJECT_ROOT/tests/live/profiles/isolated/compose.yaml" -f "$LIVE_PROJECT_ROOT/tests/live/profiles/notifications/compose.yaml" restart apprise >/dev/null
+  live_wait_until 30 apprise-capture-restarted _notification_capture_ready
   notification_test_case 207 pass "$dir/test-after-restart.json"
   notification_capture >"$dir/capture-final.json"; after="$(jq -r .requests_total "$dir/capture-final.json")"
   jq -e '.external_canary==0 and (.records|length)<=128 and all(.records[];.path=="/notify/" and (.payload.urls==["json://run-owned.invalid"]) and .payload.format=="markdown")' "$dir/capture-final.json" >/dev/null
