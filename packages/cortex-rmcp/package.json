@@ -1,6 +1,6 @@
 {
   "name": "@dinglebear/cortex",
-  "version": "3.16.0",
+  "version": "3.16.1",
   "license": "AGPL-3.0-only",
   "description": "Self-hosted log aggregation and investigation for homelabs: syslog, Docker, OTLP, and AI transcripts in SQLite/FTS, exposed over MCP, CLI, and REST.",
   "homepage": "https://github.com/dinglebear-ai/cortex#readme",
@@ -55,7 +55,7 @@
     "llm"
   ],
   "mcpName": "ai.dinglebear/cortex",
-  "binaryVersion": "3.16.0",
+  "binaryVersion": "3.16.1",
   "author": {
     "name": "dinglebear.ai",
     "url": "https://dinglebear.ai"

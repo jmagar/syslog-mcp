@@ -533,7 +533,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "cortex"
-version = "3.16.0"
+version = "3.16.1"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4525,7 +4525,7 @@ checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 
 [[package]]
 name = "xtask"
-version = "3.16.0"
+version = "3.16.1"
 dependencies = [
  "anyhow",
  "clap",
