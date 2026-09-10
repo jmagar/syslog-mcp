@@ -193,7 +193,14 @@ jobs:
           path: candidate
       - name: Create pinned candidate manifest
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          # A tag push qualifies the tagged version. A workflow_dispatch dry-run
+          # on a branch has no version in its ref, so qualify the checkout's.
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="$(awk -F'"' '/^version = / {print $2; exit}' Cargo.toml)"
+          fi
+          [ -n "$version" ] || { echo "::error::could not determine the release version"; exit 1; }
           archive="$GITHUB_WORKSPACE/candidate/cortex-linux-x86_64.tar.gz"
           digest="$(sha256sum "$archive" | cut -d' ' -f1)"
           jq -n --arg version "$version" --arg archive "$archive" --arg digest "$digest" \
