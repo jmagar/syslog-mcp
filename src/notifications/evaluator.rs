@@ -327,6 +327,21 @@ fn fetch_recent_logs(
 }
 
 /// Spawn the evaluator task. Returns None if notifications are disabled.
+/// Evaluator cadence. Production always uses the configured interval. The live
+/// E2E harness may shorten it only by setting both the explicit test-mode gate
+/// and a bounded override (1-60 s), mirroring `retention_initial_delay_from`
+/// in `src/runtime.rs`. The look-back window stays tied to the configured
+/// interval, so a shortened cadence re-scans the same events every cycle.
+fn evaluator_interval_from(test_mode: Option<&str>, raw: Option<&str>, configured: u64) -> u64 {
+    if test_mode == Some("1") {
+        raw.and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| (1..=60).contains(value))
+            .unwrap_or(configured)
+    } else {
+        configured
+    }
+}
+
 pub(crate) fn spawn_evaluator(
     pool: Arc<DbPool>,
     permit_sem: Arc<Semaphore>,
@@ -336,7 +351,13 @@ pub(crate) fn spawn_evaluator(
     if !cfg.enabled {
         return None;
     }
-    let interval_secs = cfg.evaluators.evaluator_interval_secs;
+    let interval_secs = evaluator_interval_from(
+        std::env::var("CORTEX_LIVE_TEST_MODE").ok().as_deref(),
+        std::env::var("CORTEX_LIVE_NOTIFICATIONS_EVALUATOR_INTERVAL_SECS")
+            .ok()
+            .as_deref(),
+        cfg.evaluators.evaluator_interval_secs,
+    );
     let handle = tokio::spawn(async move {
         let mut interval =
             crate::runtime::background_interval(tokio::time::Duration::from_secs(interval_secs));

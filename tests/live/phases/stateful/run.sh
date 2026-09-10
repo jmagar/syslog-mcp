@@ -6,6 +6,14 @@ stateful_mcp_call() {
   jq -e '.result.isError==false and .result.structuredContent!=null' "$output" >/dev/null
 }
 
+# Count oom_kill firings for this run's host. Reads $dir and $oom_host from the
+# calling stateful_phase_run (bash dynamic scope), so live_wait_until can poll it.
+_stateful_oom_firings_are() {
+  local want="$1"
+  stateful_mcp_call notifications_recent '{"rule_id":"oom_kill","limit":100}' "$dir/oom-firings.json" || return 1
+  [[ "$(jq --arg h "$oom_host" '[.result.structuredContent[]?|select(.hostname==$h)]|length' "$dir/oom-firings.json")" == "$want" ]]
+}
+
 stateful_phase_run() {
   local dir="$LIVE_RUN_ROOT/artifacts/stateful" before after candidate polls=0 started now marker pre_log_id pre_llm_id pre_watermark post_watermark
   mkdir -p "$dir"; chmod 700 "$dir"
@@ -94,6 +102,18 @@ stateful_phase_run() {
   jq -n --slurpfile before "$dir/stats-before.json" --slurpfile after "$dir/stats-after.json" --rawfile failure "$dir/dependency-failure.json" --arg pre "$pre_watermark" --arg post "$post_watermark" '{schema:"cortex-live-stateful-observability-v1",container_scoped:true,success_counters:{before:$before[0].result.structuredContent.runtime_observability,after:$after[0].result.structuredContent.runtime_observability},failure:{transport:"mcp-jsonrpc",structured_response:($failure|fromjson),error_kind:"fts-query-validation"},projection:{before:$pre,after:$post,monotonic:true},recovered:true}' >"$dir/observability.json"
   jq -e '.container_scoped and .recovered and (.failure.structured_response.result.isError==true) and (.success_counters.before|type=="object") and (.success_counters.after|type=="object")' "$dir/observability.json" >/dev/null
   live_result stateful.structured-observability stateful-structured-observability pass 0 artifacts/stateful/observability.json semantic-positive
+  # Evaluator idempotence: one OOM kill must notify once, however many evaluator
+  # cycles re-scan it. The stateful profile runs the evaluator every 2 s (live
+  # test mode); the dispatcher delivers every 30 s and suppresses a repeat of
+  # the same rule/host/dedup key within its 900 s window.
+  local oom_host="stateful-oom-${LIVE_RUN_ID#cortex-e2e-}"
+  printf '<2>1 %s %s kernel - - - Out of memory: Killed process 4242 (%s)\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$oom_host" "$oom_host" | nc -w 3 127.0.0.1 "$LIVE_SYSLOG_TCP_PORT"
+  live_wait_until 120 stateful-oom-first-firing _stateful_oom_firings_are 1
+  # A suppressed repeat leaves nothing observable over MCP, so outlast two more
+  # dispatcher cycles before asserting the count did not grow.
+  sleep 65
+  _stateful_oom_firings_are 1 || live_die "OOM kill notified more than once across evaluator cycles: $(jq -c . "$dir/oom-firings.json")"
+  live_result stateful.evaluator-idempotence stateful-evaluator-idempotence pass 0 artifacts/stateful/oom-firings.json semantic-positive
   now="$(date +%s)"
   jq -cn --arg host "$MCP_LIVE_HOST" --arg marker "$marker" --argjson log_id "$pre_log_id" --arg llm_id "$pre_llm_id" --arg pre "$pre_watermark" --arg post "$post_watermark" --argjson polls "$polls" --argjson wait "$((now-started))" --argjson before "$before" --argjson after "$after" \
     '{schema:"cortex-live-stateful-result-v2",marker:$host,exact_log:{message:$marker,id:$log_id},exact_llm_id:$llm_id,stages:{producer:"exact fixture queried",durable_store:"same ids after restart",scheduler:"projection watermark advanced",query:"exact semantic responses"},poll_count:$polls,cumulative_wait_seconds:$wait,projection_watermarks:{before:$pre,after:$post},logs_before_restart:$before,logs_after_restart:$after,secrets_present:false}' >"$dir/result.json"

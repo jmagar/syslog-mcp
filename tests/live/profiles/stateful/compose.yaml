@@ -7,3 +7,7 @@ services:
       CORTEX_INVENTORY_GRAPH_PROJECTION_ENABLED: "true"
       CORTEX_GRAPH_REFRESH_INTERVAL_SECS: "1"
       CORTEX_LLM_ENABLED: "false"
+      # Live test mode only: evaluate notification rules every 2 s so the
+      # stateful phase can observe several evaluator cycles over one event.
+      CORTEX_LIVE_TEST_MODE: "1"
+      CORTEX_LIVE_NOTIFICATIONS_EVALUATOR_INTERVAL_SECS: "2"

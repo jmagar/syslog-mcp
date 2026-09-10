@@ -245,3 +245,27 @@ async fn evaluation_cycle_skips_inserts_when_maintenance_semaphore_is_closed() {
     assert_eq!(inserted, 0);
     assert_eq!(pending, 0);
 }
+
+#[test]
+fn evaluator_interval_ignores_override_outside_test_mode() {
+    assert_eq!(evaluator_interval_from(None, Some("2"), 300), 300);
+    assert_eq!(evaluator_interval_from(Some("0"), Some("2"), 300), 300);
+}
+
+#[test]
+fn evaluator_interval_honours_bounded_override_in_test_mode() {
+    assert_eq!(evaluator_interval_from(Some("1"), Some("2"), 300), 2);
+    assert_eq!(evaluator_interval_from(Some("1"), Some("60"), 300), 60);
+}
+
+#[test]
+fn evaluator_interval_rejects_out_of_range_or_malformed_override() {
+    for raw in ["0", "61", "x", ""] {
+        assert_eq!(
+            evaluator_interval_from(Some("1"), Some(raw), 300),
+            300,
+            "{raw}"
+        );
+    }
+    assert_eq!(evaluator_interval_from(Some("1"), None, 300), 300);
+}
