@@ -236,7 +236,10 @@ auth_phase_run() {
   # /v1/logs speaks OTLP protobuf only; a JSON body is a 400 decode failure
   # that would hide the auth decision. An empty body is a valid, empty request.
   status="$(curl -sS --max-time 15 -o "$dir/otlp-api-token.json" -w '%{http_code}' -H 'Host: localhost' -H "Authorization: Bearer $LIVE_API_TOKEN" -H 'Content-Type: application/x-protobuf' --data-binary '' "http://127.0.0.1:$LIVE_HTTP_PORT/v1/logs")"; [[ "$status" == 401 ]]
-  status="$(curl -sS --max-time 15 -o "$dir/otlp-mcp-token.json" -w '%{http_code}' -H 'Host: localhost' -H "Authorization: Bearer $LIVE_CORTEX_TOKEN" -H 'Content-Type: application/x-protobuf' --data-binary '' "http://127.0.0.1:$LIVE_HTTP_PORT/v1/logs")"; [[ "$status" == 200 ]]
+  status="$(curl -sS --max-time 15 -o "$dir/otlp-mcp-token.body" -w '%{http_code}' -H 'Host: localhost' -H "Authorization: Bearer $LIVE_CORTEX_TOKEN" -H 'Content-Type: application/x-protobuf' --data-binary '' "http://127.0.0.1:$LIVE_HTTP_PORT/v1/logs")"; [[ "$status" == 200 ]]
+  # An accepted OTLP export answers 200 with an empty body; the policy ledger
+  # needs a non-empty record of what was sent and what came back.
+  jq -cn --argjson status "$status" '{route:"POST /v1/logs",credential:"CORTEX_TOKEN",request:"empty ExportLogsServiceRequest (protobuf)",status:$status}' >"$dir/otlp-mcp-token.json"
 
   auth_recreate "$LIVE_PROJECT_ROOT/tests/live/profiles/auth/compose.admin.yaml"
   status="$(auth_mcp_status "$LIVE_CORTEX_TOKEN" llm_invocations "$dir/mcp-static-admin.json")"; [[ "$status" == 200 ]]; jq -e '.result.isError==false' "$dir/mcp-static-admin.json" >/dev/null

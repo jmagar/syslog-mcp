@@ -1,0 +1,11 @@
+# cleanup-faults runs on the full profile's shared state volume, where earlier
+# phases leave ~3.4 MB that log trimming cannot reclaim. Under the 5/3 MiB
+# db-size budget the recovery target sits below that floor, so self-trim
+# deletes every deletable log row, the newest included. This budget keeps the
+# recovery target well above the floor so "newest marker preserved" is a valid
+# expectation, while a 2x fixture refill still overshoots the trigger.
+services:
+  candidate:
+    environment:
+      CORTEX_MAX_DB_SIZE_MB: "12"
+      CORTEX_RECOVERY_DB_SIZE_MB: "8"

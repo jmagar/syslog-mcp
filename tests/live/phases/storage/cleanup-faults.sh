@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 : "${LIVE_RUN_ROOT:?}" "${LIVE_COMPOSE_PROJECT:?}" "${LIVE_ORACLE_IMAGE:?}"
-root="${LIVE_PROJECT_ROOT:?}"; base="$root/tests/live/profiles/isolated/compose.yaml"; override="$root/tests/live/profiles/storage/compose.override.yaml"; fault_override="$root/tests/live/profiles/storage/cleanup-fault.override.yaml"
+root="${LIVE_PROJECT_ROOT:?}"; base="$root/tests/live/profiles/isolated/compose.yaml"; override="$root/tests/live/profiles/storage/compose.override.yaml"; fault_override="$root/tests/live/profiles/storage/cleanup-fault.override.yaml"; budget="$root/tests/live/profiles/storage/cleanup-budget.override.yaml"
 # shellcheck disable=SC1091
 source "$root/tests/live/lib/common.sh"; source "$root/tests/live/lib/lock.sh"; source "$root/tests/live/lib/redact.sh"; source "$root/tests/live/lib/events.sh"; source "$root/tests/live/lib/budgets.sh"; source "$root/tests/live/lib/wait.sh"; source "$root/tests/live/lib/docker.sh"
 live_install_err_trap
 mkdir -p "$LIVE_RUN_ROOT/artifacts/storage"
 state="$(docker volume ls -q --filter "label=com.docker.compose.project=$LIVE_COMPOSE_PROJECT" --filter label=cortex.live.kind=state)"
 fixture="$LIVE_RUN_ROOT/artifacts/storage/db-size-fixture.syslog"
-docker compose -f "$base" -f "$override" -f "$fault_override" -p "$LIVE_COMPOSE_PROJECT" up -d --no-build --force-recreate candidate >/dev/null
+docker compose -f "$base" -f "$override" -f "$budget" -f "$fault_override" -p "$LIVE_COMPOSE_PROJECT" up -d --no-build --force-recreate candidate >/dev/null
 live_wait_until 60 cleanup-fault-health _live_http_health_ready
 candidate="$(docker compose -f "$base" -f "$override" -f "$fault_override" -p "$LIVE_COMPOSE_PROJECT" ps -q candidate)"
 
-# Refill well above the 5 MiB trigger, then hold an external SQLite write lock across
+# Refill well above the 12 MiB trigger (cleanup-budget.override.yaml), then hold an external SQLite write lock across
 # a cleanup tick. The failure must be visible and the following tick recover.
 { cat "$fixture"; cat "$fixture"; } | nc -w 30 127.0.0.1 "$LIVE_SYSLOG_TCP_PORT"; live_connection_opened 1
 # nc only proves the socket accepted the bytes. Wait until the batch writer has
-# committed enough data to cross the configured 5 MiB enforcement threshold;
+# committed enough data to cross the configured 12 MiB enforcement threshold;
 # otherwise the external lock can precede the write and cleanup correctly has
 # no over-budget work to fail.
-_cleanup_pressure_ready() { docker compose -f "$base" -f "$override" -p "$LIVE_COMPOSE_PROJECT" exec -T -e RUST_LOG=error candidate cortex db status --json 2>/dev/null | jq -e '.logical_size_bytes>5242880' >/dev/null; }
+_cleanup_pressure_ready() { docker compose -f "$base" -f "$override" -p "$LIVE_COMPOSE_PROJECT" exec -T -e RUST_LOG=error candidate cortex db status --json 2>/dev/null | jq -e '.logical_size_bytes>12582912' >/dev/null; }
 live_wait_until 60 cleanup-pressure-ready _cleanup_pressure_ready
 lock_ev="$LIVE_RUN_ROOT/artifacts/storage/cleanup-lock.txt"
 docker run --rm --user 0:0 -v "$state:/data" --entrypoint python "$LIVE_ORACLE_IMAGE" -c '
@@ -32,10 +32,10 @@ live_wait_until 10 cleanup-lock-acquired grep -q LOCKED "$lock_ev"
 # busy timeout while the external lock is still owned, even under CI jitter.
 sleep 41; wait "$locker"
 docker logs "$candidate" 2>&1 | grep -F 'Failed to enforce storage budget' >"$LIVE_RUN_ROOT/artifacts/storage/cleanup-failure.log" || live_die "cleanup failure was not observed"
-docker compose -f "$base" -f "$override" -p "$LIVE_COMPOSE_PROJECT" up -d --no-build --force-recreate candidate >/dev/null
+docker compose -f "$base" -f "$override" -f "$budget" -p "$LIVE_COMPOSE_PROJECT" up -d --no-build --force-recreate candidate >/dev/null
 live_wait_until 60 cleanup-recovery-health _live_http_health_ready
 candidate="$(docker compose -f "$base" -f "$override" -p "$LIVE_COMPOSE_PROJECT" ps -q candidate)"
-_cleanup_recovered() { docker compose -f "$base" -f "$override" -p "$LIVE_COMPOSE_PROJECT" exec -T -e RUST_LOG=error candidate cortex db status --json 2>/dev/null | jq -e '.logical_size_bytes<=3145728' >/dev/null; }
+_cleanup_recovered() { docker compose -f "$base" -f "$override" -p "$LIVE_COMPOSE_PROJECT" exec -T -e RUST_LOG=error candidate cortex db status --json 2>/dev/null | jq -e '.logical_size_bytes<=8388608' >/dev/null; }
 live_wait_until 120 cleanup-failure-recovery _cleanup_recovered
 
 # Refill once more and restart as soon as the one-row cleanup loop begins. The
@@ -67,7 +67,7 @@ live_wait_until 60 cleanup-restart-health _live_http_health_ready
 # Replacing the process restarts a one-row-per-chunk cleanup profile from its
 # durable DB state. Loaded Docker Desktop runners can require several minutes;
 # keep the bounded wait inside the profile wall budget without weakening the
-# exact <=3 MiB recovery oracle.
+# exact <=8 MiB recovery oracle.
 live_wait_until 300 cleanup-restart-recovery _cleanup_recovered
 _live_ingest_ready "$marker" || live_die "newest committed marker lost across interrupted cleanup"
 docker compose -f "$base" -f "$override" -p "$LIVE_COMPOSE_PROJECT" exec -T -e RUST_LOG=error candidate cortex db integrity --quick --json >"$LIVE_RUN_ROOT/artifacts/storage/cleanup-recovery-integrity.json"
