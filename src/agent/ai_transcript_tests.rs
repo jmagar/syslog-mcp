@@ -265,7 +265,7 @@ fn is_current_in_a_fresh_process(path: &Path, position: &JsonlPosition) -> bool 
         &path.to_string_lossy(),
         Instant::now(),
     )
-    .is_some()
+    .is_ok_and(|check| matches!(check, PrefixCheck::Accepted { .. }))
 }
 
 #[test]
@@ -305,7 +305,6 @@ fn seekable_jsonl_position_reads_only_the_appended_tail() {
         prefix_digest: Some(jsonl_prefix_digest(&path, offset).unwrap()),
         observed_len: offset,
         modified_ns: path.metadata().ok().and_then(|m| file_modified_ns(&m)),
-        digest_offset: None,
     };
     assert!(is_current_in_a_fresh_process(&path, &position));
 
@@ -334,7 +333,6 @@ fn seekable_jsonl_position_rejects_replacement_truncation_and_prefix_rewrite() {
         prefix_digest: Some(jsonl_prefix_digest(&path, offset).unwrap()),
         observed_len: offset,
         modified_ns: path.metadata().ok().and_then(|m| file_modified_ns(&m)),
-        digest_offset: None,
     };
 
     write_file(&path, "short\n");
@@ -365,7 +363,6 @@ fn seekable_jsonl_position_rejects_a_middle_only_rewrite() {
         prefix_digest: Some(jsonl_prefix_digest(&path, offset).unwrap()),
         observed_len: offset,
         modified_ns: file_modified_ns(&metadata),
-        digest_offset: None,
     };
 
     let rewritten = format!(
@@ -417,7 +414,6 @@ fn seekable_jsonl_position_rejects_a_middle_rewrite_followed_by_append() {
         prefix_digest: Some(jsonl_prefix_digest(&path, offset).unwrap()),
         observed_len: offset,
         modified_ns: file_modified_ns(&metadata),
-        digest_offset: None,
     };
 
     let rewritten_and_appended = format!(
@@ -483,7 +479,6 @@ fn checkpoint_round_trips_through_disk() {
             prefix_digest: Some("sha256:digest".to_string()),
             observed_len: 1234,
             modified_ns: Some(123),
-            digest_offset: Some(1200),
         },
     );
     checkpoint
@@ -1876,8 +1871,8 @@ async fn scan_and_forward_replays_a_rewritten_gemini_acknowledged_prefix() {
 // ---------------------------------------------------------------------------
 // Cost of the append-only steady state, and the detection that remains.
 //
-// The forwarder's expensive construct is `jsonl_prefix_digest`, which reads
-// every acknowledged byte. These tests assert *how many bytes it read*, so a
+// The forwarder's expensive construct is reading acknowledged history back to
+// hash it. These tests assert *how many bytes prefix hashing read*, so a
 // regression that quietly puts a full-prefix hash back on the poll path fails
 // here rather than only on a production CPU graph.
 // ---------------------------------------------------------------------------
@@ -1939,19 +1934,50 @@ fn position_for(path: &Path) -> JsonlPosition {
         prefix_digest: Some(jsonl_prefix_digest(path, offset).unwrap()),
         observed_len: offset,
         modified_ns: file_modified_ns(&metadata),
-        digest_offset: Some(offset),
     }
 }
 
-/// A checkpoint that has already deep verified `path` in this process, which
-/// is the steady state a long-running agent spends essentially all its time
-/// in.
-fn checkpoint_already_deep_verified(path: &Path) -> Checkpoint {
+/// A checkpoint whose process has already read `position`'s prefix back,
+/// which is the steady state a long-running agent spends essentially all its
+/// time in.
+fn checkpoint_already_deep_verified(path: &Path, position: &JsonlPosition) -> Checkpoint {
     let mut checkpoint = Checkpoint::default();
+    checkpoint.verified_prefixes.insert(
+        path.to_string_lossy().to_string(),
+        VerifiedPrefix {
+            deep_verified_at: Instant::now(),
+            through: position.byte_offset,
+            digest: position.prefix_digest.clone().unwrap(),
+            hasher: jsonl_prefix_hasher(path, position.byte_offset).unwrap(),
+        },
+    );
     checkpoint
-        .prefix_verifications
-        .insert(path.to_string_lossy().to_string(), Instant::now());
-    checkpoint
+}
+
+async fn always_failing_server() -> wiremock::MockServer {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/v1/ai-transcripts"))
+        .respond_with(wiremock::ResponseTemplate::new(503).set_body_string("unavailable"))
+        .mount(&server)
+        .await;
+    server
+}
+
+fn append_raw(path: &Path, text: &str) {
+    let mut file = fs::OpenOptions::new().append(true).open(path).unwrap();
+    file.write_all(text.as_bytes()).unwrap();
+}
+
+/// Move `path`'s modification time well clear of anything recorded, so a
+/// same-size rewrite reads as one even on a coarse-grained filesystem.
+fn bump_mtime(path: &Path) {
+    let later = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
+        + 10;
+    filetime::set_file_mtime(path, filetime::FileTime::from_unix_time(later, 0)).unwrap();
 }
 
 #[tokio::test]
@@ -1968,15 +1994,15 @@ async fn append_only_poll_cycle_never_rereads_acknowledged_history() {
     let client = reqwest::Client::new();
     let mut checkpoint = Checkpoint::default();
 
-    // First sight of a file is a deep verification by definition: this
-    // process has never read those bytes, so it establishes the digest.
+    // First sight has no digest to verify against; establishing one hashes
+    // the acknowledged prefix once.
     assert_eq!(
         scan_and_forward(&config, &client, &mut checkpoint)
             .await
             .unwrap(),
         200
     );
-    let established = prefix_digest_bytes_read();
+    let established = prefix_hash_bytes_read();
     assert!(
         established >= history.len() as u64,
         "establishing the cursor must hash the acknowledged prefix once"
@@ -1984,7 +2010,9 @@ async fn append_only_poll_cycle_never_rereads_acknowledged_history() {
 
     // Three ordinary growth cycles, the shape a live session produces every
     // 15 seconds forever.
+    let mut appended = 0;
     for cycle in 0..3 {
+        appended += transcript_line(&format!("tail {cycle}")).len() as u64;
         append_line(&transcript_path, &format!("tail {cycle}"));
         assert_eq!(
             scan_and_forward(&config, &client, &mut checkpoint)
@@ -1995,18 +2023,19 @@ async fn append_only_poll_cycle_never_rereads_acknowledged_history() {
     }
 
     assert_eq!(
-        prefix_digest_bytes_read() - established,
-        0,
-        "an append-only cycle must not re-read the acknowledged prefix; cost \
-         has to track the appended region, not the whole transcript"
+        prefix_hash_bytes_read() - established,
+        appended,
+        "an append-only cycle must hash what it appended and nothing else; \
+         cost has to track the appended region, not the whole transcript"
     );
     let key = transcript_path.to_string_lossy().to_string();
     let position = &checkpoint.jsonl_positions[&key];
     assert_eq!(position.line, 203);
     assert_eq!(
-        position.digest_offset,
-        Some(history.len() as u64),
-        "the carried digest still names the prefix it actually covers"
+        position.prefix_digest,
+        Some(jsonl_prefix_digest(&transcript_path, position.byte_offset).unwrap()),
+        "the persisted digest covers every acknowledged byte, including those \
+         accepted without a read-back"
     );
 }
 
@@ -2052,7 +2081,7 @@ async fn rewrite_with_append_is_detected_and_replays_from_zero() {
 
     // Model the next deep verification falling due (equivalently, an agent
     // restart): the in-process ledger is what gates the exact read.
-    checkpoint.prefix_verifications.clear();
+    checkpoint.verified_prefixes.clear();
     assert_eq!(
         scan_and_forward(&config, &client, &mut checkpoint)
             .await
@@ -2064,27 +2093,259 @@ async fn rewrite_with_append_is_detected_and_replays_from_zero() {
 }
 
 #[test]
+fn an_append_is_accepted_without_rereading_history_this_process_verified() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.jsonl");
+    write_file(&path, &large_history());
+    let position = position_for(&path);
+    let mut checkpoint = checkpoint_already_deep_verified(&path, &position);
+    append_line(&path, "fresh");
+
+    let before = prefix_hash_bytes_read();
+    let check = verify_jsonl_position(
+        &path,
+        &position,
+        &mut checkpoint,
+        &path.to_string_lossy(),
+        Instant::now(),
+    )
+    .unwrap();
+    assert!(matches!(check, PrefixCheck::Accepted { deep: false, .. }));
+    assert_eq!(prefix_hash_bytes_read(), before);
+}
+
+#[test]
+fn hash_state_for_a_different_position_forces_a_read_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.jsonl");
+    write_file(&path, &large_history());
+    let position = position_for(&path);
+    let mut checkpoint = checkpoint_already_deep_verified(&path, &position);
+    // What a save that failed after a rejection leaves behind: this process
+    // recorded state for a cursor the checkpoint never adopted.
+    checkpoint
+        .verified_prefixes
+        .get_mut(path.to_string_lossy().as_ref())
+        .unwrap()
+        .digest = "sha256:some-other-cursor".to_string();
+    append_line(&path, "fresh");
+
+    let check = verify_jsonl_position(
+        &path,
+        &position,
+        &mut checkpoint,
+        &path.to_string_lossy(),
+        Instant::now(),
+    )
+    .unwrap();
+    assert!(
+        matches!(check, PrefixCheck::Accepted { deep: true, .. }),
+        "state that does not vouch for this exact position must not stand in for a read"
+    );
+}
+
+/// Acknowledge `history`, then two large lines appended on bounded evidence
+/// alone — bytes no read-back has covered yet. Returns the forwarder state.
+async fn acknowledged_with_recent_appends(
+    dir: &Path,
+    history: &str,
+    middle: &str,
+    tail: &str,
+) -> (
+    PathBuf,
+    AiTranscriptForwardConfig,
+    Checkpoint,
+    wiremock::MockServer,
+) {
+    let claude_dir = dir.join(".claude/projects/foo");
+    fs::create_dir_all(&claude_dir).unwrap();
+    let transcript_path = claude_dir.join("session.jsonl");
+    write_file(&transcript_path, history);
+    let server = always_accepting_server().await;
+    let config = forward_config(dir, server.uri());
+    let client = reqwest::Client::new();
+    let mut checkpoint = Checkpoint::default();
+    scan_and_forward(&config, &client, &mut checkpoint)
+        .await
+        .unwrap();
+    append_raw(&transcript_path, &format!("{middle}{tail}"));
+    assert_eq!(
+        scan_and_forward(&config, &client, &mut checkpoint)
+            .await
+            .unwrap(),
+        2
+    );
+    (transcript_path, config, checkpoint, server)
+}
+
+#[tokio::test]
+async fn in_place_rewrite_of_recently_appended_history_is_caught_next_cycle() {
+    let dir = tempfile::tempdir().unwrap();
+    let history = large_history();
+    let middle = transcript_line(&format!("middle {}", "b".repeat(8 * 1024)));
+    let tail = transcript_line(&format!("tail {}", "c".repeat(8 * 1024)));
+    let (path, config, mut checkpoint, _server) =
+        acknowledged_with_recent_appends(dir.path(), &history, &middle, &tail).await;
+    let acknowledged = checkpoint.jsonl_positions[&path.to_string_lossy().to_string()].clone();
+
+    // Same length, outside both guard windows, inside bytes that were only
+    // ever accepted on bounded evidence.
+    let rewritten = transcript_line(&format!("middle {}", "x".repeat(8 * 1024)));
+    write_file(&path, &format!("{history}{rewritten}{tail}"));
+    bump_mtime(&path);
+    assert_eq!(path.metadata().unwrap().len(), acknowledged.observed_len);
+    assert_eq!(
+        jsonl_prefix_guard(&path, acknowledged.byte_offset).unwrap(),
+        acknowledged.prefix_guard
+    );
+
+    assert_eq!(
+        scan_and_forward(&config, &reqwest::Client::new(), &mut checkpoint)
+            .await
+            .unwrap(),
+        202,
+        "a same-size rewrite of any acknowledged byte must replay the file"
+    );
+}
+
+#[tokio::test]
+async fn rewrite_and_append_of_recently_appended_history_is_caught_at_the_next_read_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let history = large_history();
+    let middle = transcript_line(&format!("middle {}", "b".repeat(8 * 1024)));
+    let tail = transcript_line(&format!("tail {}", "c".repeat(8 * 1024)));
+    let (path, config, mut checkpoint, _server) =
+        acknowledged_with_recent_appends(dir.path(), &history, &middle, &tail).await;
+    let acknowledged = checkpoint.jsonl_positions[&path.to_string_lossy().to_string()].clone();
+
+    let rewritten = transcript_line(&format!("middle {}", "x".repeat(8 * 1024)));
+    write_file(
+        &path,
+        &format!("{history}{rewritten}{tail}{}", transcript_line("appended")),
+    );
+    assert_eq!(
+        jsonl_prefix_guard(&path, acknowledged.byte_offset).unwrap(),
+        acknowledged.prefix_guard
+    );
+
+    // The read-back falling due (equivalently, a restart) must compare the
+    // whole acknowledged prefix — including what was appended since the last
+    // one — against what was actually forwarded.
+    checkpoint.verified_prefixes.clear();
+    assert_eq!(
+        scan_and_forward(&config, &reqwest::Client::new(), &mut checkpoint)
+            .await
+            .unwrap(),
+        203
+    );
+}
+
+#[tokio::test]
+async fn a_failed_delivery_cannot_launder_a_rejected_cursor() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude_dir = dir.path().join(".claude/projects/foo");
+    fs::create_dir_all(&claude_dir).unwrap();
+    let transcript_path = claude_dir.join("session.jsonl");
+    let head = transcript_line(&format!("head {}", "a".repeat(5 * 1024)));
+    let middle = transcript_line(&format!("middle {}", "b".repeat(4 * 1024)));
+    let tail = transcript_line(&format!("tail {}", "c".repeat(5 * 1024)));
+    write_file(&transcript_path, &format!("{head}{middle}{tail}"));
+    let server = always_accepting_server().await;
+    let config = forward_config(dir.path(), server.uri());
+    let client = reqwest::Client::new();
+    let mut checkpoint = Checkpoint::default();
+    scan_and_forward(&config, &client, &mut checkpoint)
+        .await
+        .unwrap();
+
+    let rewritten = transcript_line(&format!("middle {}", "x".repeat(4 * 1024)));
+    write_file(
+        &transcript_path,
+        &format!("{head}{rewritten}{tail}{}", transcript_line("appended")),
+    );
+    checkpoint.verified_prefixes.clear();
+    let failing = always_failing_server().await;
+    let failing_config = forward_config(dir.path(), failing.uri());
+    assert!(
+        scan_and_forward(&failing_config, &client, &mut checkpoint)
+            .await
+            .is_err()
+    );
+
+    // The next cycle falls well inside the read-back interval. The rejection
+    // must still stand, because the checkpoint never adopted the replay.
+    assert_eq!(
+        scan_and_forward(&config, &client, &mut checkpoint)
+            .await
+            .unwrap(),
+        4
+    );
+}
+
+#[tokio::test]
+async fn a_delivery_outage_never_brings_back_history_rereads() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude_dir = dir.path().join(".claude/projects/foo");
+    fs::create_dir_all(&claude_dir).unwrap();
+    let transcript_path = claude_dir.join("session.jsonl");
+    write_file(&transcript_path, &large_history());
+    let server = always_accepting_server().await;
+    let config = forward_config(dir.path(), server.uri());
+    let client = reqwest::Client::new();
+    let mut checkpoint = Checkpoint::default();
+    scan_and_forward(&config, &client, &mut checkpoint)
+        .await
+        .unwrap();
+
+    let failing = always_failing_server().await;
+    let failing_config = forward_config(dir.path(), failing.uri());
+    let before = prefix_hash_bytes_read();
+    let (mut pending, mut expected) = (0, 0);
+    for cycle in 0..3 {
+        pending += transcript_line(&format!("down {cycle}")).len() as u64;
+        append_line(&transcript_path, &format!("down {cycle}"));
+        assert!(
+            scan_and_forward(&failing_config, &client, &mut checkpoint)
+                .await
+                .is_err()
+        );
+        // The saved cursor has not moved, so each attempt re-hashes what is
+        // pending since it — and never the history before it.
+        expected += pending;
+    }
+    assert_eq!(prefix_hash_bytes_read() - before, expected);
+
+    assert_eq!(
+        scan_and_forward(&config, &client, &mut checkpoint)
+            .await
+            .unwrap(),
+        3
+    );
+    assert_eq!(prefix_hash_bytes_read() - before, expected + pending);
+}
+
+#[test]
 fn truncation_is_detected_without_rereading_history() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("session.jsonl");
     write_file(&path, &large_history());
     let position = position_for(&path);
-    let mut checkpoint = checkpoint_already_deep_verified(&path);
+    let mut checkpoint = checkpoint_already_deep_verified(&path, &position);
 
     write_file(&path, &transcript_line("truncated"));
-    let before = prefix_digest_bytes_read();
-    assert!(
+    let before = prefix_hash_bytes_read();
+    assert!(matches!(
         verify_jsonl_position(
             &path,
             &position,
             &mut checkpoint,
             &path.to_string_lossy(),
             Instant::now(),
-        )
-        .is_none()
-    );
+        ),
+        Ok(PrefixCheck::Rejected("truncated"))
+    ));
     assert_eq!(
-        prefix_digest_bytes_read(),
+        prefix_hash_bytes_read(),
         before,
         "a shrunk file is rejected on length alone; never pay O(prefix) for it"
     );
@@ -2097,27 +2358,27 @@ fn replacement_is_detected_without_rereading_history() {
     let history = large_history();
     write_file(&path, &history);
     let position = position_for(&path);
-    let mut checkpoint = checkpoint_already_deep_verified(&path);
+    let mut checkpoint = checkpoint_already_deep_verified(&path, &position);
 
-    // Same bytes, same length, new inode: only the source epoch separates a
+    // Same bytes, same length, new file identity: only the source epoch separates a
     // replaced file from an untouched one.
     fs::remove_file(&path).unwrap();
     write_file(&path, &history);
     assert_ne!(source_epoch(&path), position.source_epoch);
 
-    let before = prefix_digest_bytes_read();
-    assert!(
+    let before = prefix_hash_bytes_read();
+    assert!(matches!(
         verify_jsonl_position(
             &path,
             &position,
             &mut checkpoint,
             &path.to_string_lossy(),
             Instant::now(),
-        )
-        .is_none()
-    );
+        ),
+        Ok(PrefixCheck::Rejected("replaced"))
+    ));
     assert_eq!(
-        prefix_digest_bytes_read(),
+        prefix_hash_bytes_read(),
         before,
         "a replaced source is rejected on its epoch alone"
     );
@@ -2132,7 +2393,7 @@ fn same_size_rewrite_escalates_past_the_bounded_signals() {
     write_file(&path, &format!("{head}{}{tail}", "b".repeat(4 * 1024)));
     let position = position_for(&path);
     // Already deep verified, so only the ambiguity rule can force the read.
-    let mut checkpoint = checkpoint_already_deep_verified(&path);
+    let mut checkpoint = checkpoint_already_deep_verified(&path, &position);
 
     write_file(&path, &format!("{head}{}{tail}", "x".repeat(4 * 1024)));
     assert_eq!(path.metadata().unwrap().len(), position.observed_len);
@@ -2141,27 +2402,29 @@ fn same_size_rewrite_escalates_past_the_bounded_signals() {
         position.prefix_guard
     );
 
-    let before = prefix_digest_bytes_read();
+    let before = prefix_hash_bytes_read();
     assert!(
-        verify_jsonl_position(
-            &path,
-            &position,
-            &mut checkpoint,
-            &path.to_string_lossy(),
-            Instant::now(),
-        )
-        .is_none(),
+        matches!(
+            verify_jsonl_position(
+                &path,
+                &position,
+                &mut checkpoint,
+                &path.to_string_lossy(),
+                Instant::now(),
+            ),
+            Ok(PrefixCheck::Rejected("prefix_rewritten"))
+        ),
         "a same-size in-place rewrite is exactly what the sampled guard cannot \
          resolve, so it must escalate to the exact digest"
     );
     assert!(
-        prefix_digest_bytes_read() > before,
+        prefix_hash_bytes_read() > before,
         "the escalation must actually have read the prefix"
     );
 }
 
 #[tokio::test]
-async fn checkpoint_written_before_digest_offset_loads_and_tails_unchanged() {
+async fn checkpoint_written_by_the_previous_release_loads_and_tails_unchanged() {
     let dir = tempfile::tempdir().unwrap();
     let claude_dir = dir.path().join(".claude/projects/foo");
     fs::create_dir_all(&claude_dir).unwrap();
@@ -2171,8 +2434,8 @@ async fn checkpoint_written_before_digest_offset_loads_and_tails_unchanged() {
     let metadata = transcript_path.metadata().unwrap();
     let offset = metadata.len();
 
-    // Byte for byte the shape real deployed checkpoints are in today: a
-    // `prefix_digest` and no `digest_offset` at all.
+    // The shape checkpoints written before this change have on disk: a
+    // `prefix_digest` over the whole acknowledged prefix, and no hash state.
     let on_disk = serde_json::json!({
         "files": {key.clone(): 1},
         "fingerprints": {},
@@ -2191,7 +2454,6 @@ async fn checkpoint_written_before_digest_offset_loads_and_tails_unchanged() {
     write_file(&checkpoint_path, &on_disk.to_string());
 
     let mut checkpoint = load_checkpoint(&checkpoint_path).unwrap();
-    assert_eq!(checkpoint.jsonl_positions[&key].digest_offset, None);
 
     let server = always_accepting_server().await;
     let config = forward_config(dir.path(), server.uri());
@@ -2221,8 +2483,8 @@ fn saving_the_checkpoint_forgets_deleted_transcripts_only() {
     fs::create_dir_all(&root).unwrap();
     let present = root.join("present.jsonl");
     write_file(&present, "{}\n");
-    // Exists, but discovery never yields it — proving the sweep is driven by
-    // the filesystem, not by what the bounded scan happened to visit.
+    // Exists but is not a transcript: pruning keeps any present file,
+    // whether or not discovery would ever yield it.
     let unvisited = root.join("not-a-transcript.txt");
     write_file(&unvisited, "{}\n");
     let deleted = root.join("deleted.jsonl");
@@ -2245,7 +2507,6 @@ fn saving_the_checkpoint_forgets_deleted_transcripts_only() {
                 prefix_digest: Some("sha256:digest".into()),
                 observed_len: 1,
                 modified_ns: Some(1),
-                digest_offset: Some(1),
             },
         );
     }
@@ -2301,6 +2562,6 @@ fn saving_the_checkpoint_forgets_nothing_while_a_root_is_unavailable() {
     assert_eq!(
         checkpoint.files.get(&key),
         Some(&7),
-        "an unmounted home must not read as 5,000 deleted transcripts"
+        "an unmounted home must not read as every tracked transcript deleted"
     );
 }

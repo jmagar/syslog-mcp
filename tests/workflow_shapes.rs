@@ -223,7 +223,7 @@ fn release_please_opens_prs_and_fixes_up_regex_carriers() {
     assert!(
         release_please.contains("cargo xtask sync-version")
             && release_please.contains("cargo xtask check-release-versions"),
-        "the release-pr-fixup job must sync regex-based version carriers and re-verify them"
+        "the release-pr-fixup job must sync the version carriers release-please cannot reach and re-verify them"
     );
 
     assert!(
