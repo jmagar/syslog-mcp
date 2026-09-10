@@ -237,6 +237,7 @@ legacy_events="$(find "$noop_runs" -name events.jsonl -type f -exec grep -l 'leg
 bash "$ROOT/tests/live/phases/artifacts/selftest.sh"
 bash "$ROOT/tests/live/phases/surfaces/resource-selftest.sh"
 bash "$ROOT/tests/live/selftest/artifact-upload.sh"
+bash "$ROOT/tests/live/selftest/harness-guard.sh"
 bash "$ROOT/tests/live/lib/aggregate-selftest.sh"
 
 printf 'live foundation self-tests: %d passed\n' "$passes"

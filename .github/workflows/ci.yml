@@ -207,6 +207,7 @@ jobs:
         run: |
           bash tests/live/phases/artifacts/selftest.sh
           bash tests/live/lib/aggregate-selftest.sh
+          bash tests/live/selftest/harness-guard.sh
 
   session-query-benchmark:
     name: Session query benchmark

@@ -6,27 +6,70 @@ live_die() { printf 'live-e2e: %s\n' "$*" >&2; return 1; }
 # failing `[[ ... ]]` does not trigger errexit, so every bare assertion in a
 # phase is silently a no-op and a run can report green over checks that failed.
 # Refuse to run rather than produce an untrustworthy result.
+#
+# Everything from here to the end of live_require_modern_bash must stay
+# parseable and runnable by bash 3.2, because it is what refuses 3.2.
+live_bash_version_ok() {
+  local major="${1:-}" minor="${2:-}"
+  [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]] || return 1
+  (( major > 4 || (major == 4 && minor >= 1) ))
+}
+
 live_require_modern_bash() {
-  if (( BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 1) )); then
+  local path_bash path_version path_major='' path_minor=''
+  if ! live_bash_version_ok "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1]}"; then
+    # shellcheck disable=SC2016 # backticks and $PATH are literal advice text
     printf 'live-e2e: bash >= 4.1 required, found %s at %s. On older bash a failing [[ ]] does not stop the run, so assertions are not enforced. Install a newer bash (for example `brew install bash`) and put it first on PATH.\n' "$BASH_VERSION" "${BASH:-bash}" >&2
+    return 1
+  fi
+  # Child phases start through their `#!/usr/bin/env bash` shebang, which
+  # resolves bash from PATH again. A modern bash running this script is not
+  # enough if an older one is first on PATH.
+  path_bash="$(command -v bash 2>/dev/null)" || path_bash=''
+  if [[ -z "$path_bash" ]]; then
+    # shellcheck disable=SC2016 # backticks and $PATH are literal advice text
+    printf 'live-e2e: no bash on PATH. Child phases start through `#!/usr/bin/env bash`, so put a bash >= 4.1 (this one is %s) first on PATH.\n' "${BASH:-bash}" >&2
+    return 1
+  fi
+  [[ "$path_bash" != "${BASH:-}" ]] || return 0
+  # shellcheck disable=SC2016 # expanded by the child bash
+  path_version="$("$path_bash" -c 'echo "${BASH_VERSINFO[0]} ${BASH_VERSINFO[1]}"' 2>/dev/null)" || path_version=''
+  read -r path_major path_minor <<<"$path_version" || true
+  if ! live_bash_version_ok "$path_major" "$path_minor"; then
+    # shellcheck disable=SC2016 # backticks and $PATH are literal advice text
+    printf 'live-e2e: bash on PATH is %s (version %s), but bash >= 4.1 is required. Child phases start through `#!/usr/bin/env bash` and would run under it, where a failing [[ ]] does not stop the run. Put a newer bash first on PATH (for example `export PATH="%s:$PATH"`).\n' "$path_bash" "${path_version:-unknown}" "${BASH%/*}" >&2
     return 1
   fi
 }
 
 # Name the abort. Under errexit a failing command or bare `[[ ... ]]` ends the
-# run with no message of its own. Report where it happened: file and line
-# only, never the command text, which may contain an expanded credential.
-# Deliberate `set +e` regions stay quiet because errexit is off there.
+# run with no message of its own. Report where it happened, innermost frame
+# first and then each caller: file and line only, never the command text or a
+# variable, either of which may contain an expanded credential.
+# Deliberate `set +e` regions stay quiet because errexit is off there; `if`
+# conditions and `||`/`&&` lists stay quiet because bash does not run the ERR
+# trap for them.
+#
+# `set -E` makes subshells, pipeline stages, and background jobs inherit the
+# trap. Only the shell that installed it reports: a failing subshell makes its
+# parent's command fail, so the parent names the abort once, and a background
+# job cannot claim the run aborted while the main shell continues.
 live_err_trap() {
-  local status=$? frame=1
+  local status=$? i
   [[ $- == *e* ]] || return 0
-  # live_die has already said why; point at its call site, not its `return 1`.
-  [[ "${FUNCNAME[1]:-}" == live_die ]] && frame=2
+  [[ "${BASHPID:-}" == "${LIVE_ERR_TRAP_PID:-}" ]] || return 0
   printf 'live-e2e: aborted at %s:%s (status %s) in %s\n' \
-    "${BASH_SOURCE[$frame]:-$0}" "${BASH_LINENO[$((frame - 1))]}" "$status" "${FUNCNAME[$frame]:-main}" >&2
+    "${BASH_SOURCE[1]:-$0}" "${BASH_LINENO[0]}" "$status" "${FUNCNAME[1]:-main}" >&2
+  for (( i = 2; i < ${#FUNCNAME[@]}; i++ )); do
+    printf '  from %s:%s in %s\n' "${BASH_SOURCE[i]:-$0}" "${BASH_LINENO[i - 1]}" "${FUNCNAME[i]}" >&2
+  done
 }
 
-live_install_err_trap() { set -E; trap live_err_trap ERR; }
+live_install_err_trap() {
+  LIVE_ERR_TRAP_PID="$BASHPID"
+  set -E
+  trap live_err_trap ERR
+}
 
 live_require_tools() {
   local tool missing=0
