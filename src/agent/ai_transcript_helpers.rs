@@ -1,6 +1,7 @@
 //! Checkpoint, discovery, and record-normalization helpers.
 
 use super::*;
+#[cfg(test)]
 use std::cell::Cell;
 use std::io::{Read, Seek, SeekFrom};
 
@@ -353,20 +354,20 @@ pub(super) fn jsonl_prefix_guard(path: &Path, byte_offset: u64) -> Result<String
     Ok(format!("sha256:{:x}", hasher.finalize()))
 }
 
+#[cfg(test)]
 thread_local! {
     /// Bytes read by full-prefix digest computation on this thread.
     ///
     /// This is the cost the forwarder used to pay twice per poll for every
     /// growing transcript, and it is the thing the hot path must stop
-    /// paying. Counting it (one thread-local add next to a SHA-256 of the
-    /// same bytes, so it is free in relative terms) is what lets a test
-    /// assert the append-only cycle by cost rather than by inspection.
-    /// Per-thread rather than global so parallel tests cannot see each
-    /// other's reads; a scan runs its digests inline on one thread.
+    /// paying. Counting it is what lets a test assert the append-only cycle
+    /// by cost rather than by inspection. Per-thread so parallel tests cannot
+    /// see each other's reads; a scan runs its digests inline on one thread.
     static PREFIX_DIGEST_BYTES_READ: Cell<u64> = const { Cell::new(0) };
 }
 
 /// Bytes this thread has spent re-reading acknowledged transcript history.
+#[cfg(test)]
 pub(super) fn prefix_digest_bytes_read() -> u64 {
     PREFIX_DIGEST_BYTES_READ.with(Cell::get)
 }
@@ -380,6 +381,7 @@ pub(super) fn jsonl_prefix_digest(path: &Path, byte_offset: u64) -> Result<Strin
     let mut reader = file.take(byte_offset);
     let mut hasher = Sha256::new();
     let copied = std::io::copy(&mut reader, &mut hasher)?;
+    #[cfg(test)]
     PREFIX_DIGEST_BYTES_READ.with(|read| read.set(read.get().saturating_add(copied)));
     anyhow::ensure!(
         copied == byte_offset,
