@@ -354,6 +354,15 @@ jobs:
           [ -n "$browser" ] || { echo "::error::no Chrome/Chromium on the runner for the browser sweep"; exit 1; }
           echo "LIVE_BROWSER_EXECUTABLE=$browser" >>"$GITHUB_ENV"
 
+      - name: Install generated-CLI runtime
+        # The surfaces phase generates a standalone CLI from the live server
+        # with mcporter and refuses to continue without it. Pin the version
+        # the harness is developed against.
+        run: |
+          npm install --no-save --no-audit --no-fund mcporter@0.13.0
+          echo "$PWD/node_modules/.bin" >>"$GITHUB_PATH"
+          "$PWD/node_modules/.bin/mcporter" --version
+
       - name: Run fail-closed live smoke
         env:
           LIVE_RUNS_ROOT: ${{ github.workspace }}/.live-runs
