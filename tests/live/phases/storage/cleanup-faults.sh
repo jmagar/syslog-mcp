@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 : "${LIVE_RUN_ROOT:?}" "${LIVE_COMPOSE_PROJECT:?}" "${LIVE_ORACLE_IMAGE:?}"
-root="${LIVE_PROJECT_ROOT:?}"; base="$root/tests/live/profiles/isolated/compose.yaml"; override="$root/tests/live/profiles/storage/compose.override.yaml"; fault_override="$root/tests/live/profiles/storage/cleanup-fault.override.yaml"; budget="$root/tests/live/profiles/storage/cleanup-budget.override.yaml"
+root="${LIVE_PROJECT_ROOT:?}"; base="$root/tests/live/profiles/isolated/compose.yaml"; override="$root/tests/live/profiles/storage/compose.override.yaml"; fault_override="$root/tests/live/profiles/storage/cleanup-fault.override.yaml"; budget="$root/tests/live/profiles/storage/pressure-budget.override.yaml"
 # shellcheck disable=SC1091
 source "$root/tests/live/lib/common.sh"; source "$root/tests/live/lib/lock.sh"; source "$root/tests/live/lib/redact.sh"; source "$root/tests/live/lib/events.sh"; source "$root/tests/live/lib/budgets.sh"; source "$root/tests/live/lib/wait.sh"; source "$root/tests/live/lib/docker.sh"
 live_install_err_trap
@@ -12,7 +12,7 @@ docker compose -f "$base" -f "$override" -f "$budget" -f "$fault_override" -p "$
 live_wait_until 60 cleanup-fault-health _live_http_health_ready
 candidate="$(docker compose -f "$base" -f "$override" -f "$fault_override" -p "$LIVE_COMPOSE_PROJECT" ps -q candidate)"
 
-# Refill well above the 12 MiB trigger (cleanup-budget.override.yaml), then hold an external SQLite write lock across
+# Refill well above the 12 MiB trigger (pressure-budget.override.yaml), then hold an external SQLite write lock across
 # a cleanup tick. The failure must be visible and the following tick recover.
 { cat "$fixture"; cat "$fixture"; } | nc -w 30 127.0.0.1 "$LIVE_SYSLOG_TCP_PORT"; live_connection_opened 1
 # nc only proves the socket accepted the bytes. Wait until the batch writer has
