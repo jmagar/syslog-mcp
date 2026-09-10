@@ -7,11 +7,20 @@ use serial_test::serial;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+/// The agent resolves its own identity through the shared resolver
+/// (`crate::hostname`), which reaches `gethostname(2)` on every unix — so a host
+/// without `/proc` still reports a real name rather than a sentinel.
+///
+/// Was `assert_ne!(hostname(), "unknown")` against the agent's own private copy;
+/// that copy is gone, and so is `"unknown"` as the unresolved marker.
 #[cfg(unix)]
 #[test]
 fn unix_hostname_is_available_without_proc() {
     let _guard = EnvGuard::unset("HOSTNAME");
-    assert_ne!(hostname(), "unknown");
+    assert_ne!(
+        crate::hostname::local_hostname(),
+        crate::hostname::UNRESOLVED_HOSTNAME
+    );
 }
 
 #[cfg(target_os = "macos")]

@@ -1,6 +1,8 @@
 //! Checkpoint, discovery, and record-normalization helpers.
 
 use super::*;
+#[cfg(test)]
+use std::cell::Cell;
 use std::io::{Read, Seek, SeekFrom};
 
 #[path = "ai_transcript_helpers_checkpoint.rs"]
@@ -352,11 +354,35 @@ pub(super) fn jsonl_prefix_guard(path: &Path, byte_offset: u64) -> Result<String
     Ok(format!("sha256:{:x}", hasher.finalize()))
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Bytes read by full-prefix digest computation on this thread.
+    ///
+    /// This is the cost the forwarder used to pay twice per poll for every
+    /// growing transcript, and it is the thing the hot path must stop
+    /// paying. Counting it is what lets a test assert the append-only cycle
+    /// by cost rather than by inspection. Per-thread so parallel tests cannot
+    /// see each other's reads; a scan runs its digests inline on one thread.
+    static PREFIX_DIGEST_BYTES_READ: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Bytes this thread has spent re-reading acknowledged transcript history.
+#[cfg(test)]
+pub(super) fn prefix_digest_bytes_read() -> u64 {
+    PREFIX_DIGEST_BYTES_READ.with(Cell::get)
+}
+
+/// Hash every acknowledged byte. This is O(prefix) and unbounded by design:
+/// it is the only construct that can prove the already-forwarded history was
+/// not rewritten, so it belongs off the hot path, not on it. See
+/// [`verify_jsonl_position`] for when it is allowed to run.
 pub(super) fn jsonl_prefix_digest(path: &Path, byte_offset: u64) -> Result<String> {
     let file = fs::File::open(path)?;
     let mut reader = file.take(byte_offset);
     let mut hasher = Sha256::new();
     let copied = std::io::copy(&mut reader, &mut hasher)?;
+    #[cfg(test)]
+    PREFIX_DIGEST_BYTES_READ.with(|read| read.set(read.get().saturating_add(copied)));
     anyhow::ensure!(
         copied == byte_offset,
         "transcript became shorter while hashing acknowledged prefix"
@@ -373,27 +399,6 @@ pub(super) fn file_modified_ns(metadata: &fs::Metadata) -> Option<u64> {
         .as_nanos()
         .try_into()
         .ok()
-}
-
-pub(super) fn jsonl_position_is_current(path: &Path, position: &JsonlPosition) -> bool {
-    path.metadata().is_ok_and(|metadata| {
-        let len = metadata.len();
-        len >= position.byte_offset
-            && len >= position.observed_len
-            && position.observed_len != 0
-            && position.prefix_digest.is_some()
-            && if len > position.observed_len {
-                position.prefix_digest.as_ref().is_some_and(|expected| {
-                    jsonl_prefix_digest(path, position.byte_offset)
-                        .is_ok_and(|actual| actual == *expected)
-                })
-            } else {
-                position.modified_ns.is_some()
-                    && file_modified_ns(&metadata) == position.modified_ns
-            }
-    }) && source_epoch(path) == position.source_epoch
-        && jsonl_prefix_guard(path, position.byte_offset)
-            .is_ok_and(|guard| guard == position.prefix_guard)
 }
 
 /// Returns a fingerprint for the acknowledged logical prefix of a Gemini

@@ -82,7 +82,7 @@ impl AiTranscriptForwardConfig {
             roots: scanner::default_transcript_roots(),
             target,
             token,
-            hostname: scanner::local_hostname(),
+            hostname: crate::hostname::local_hostname(),
             checkpoint_path,
             poll_interval: Duration::from_secs(15),
         }
@@ -157,6 +157,7 @@ async fn scan_and_forward(
             .collect(),
     );
 
+    let now = Instant::now();
     let mut records = Vec::new();
     let mut new_totals: HashMap<String, usize> = HashMap::new();
     let mut new_fingerprints: HashMap<String, String> = HashMap::new();
@@ -266,14 +267,12 @@ async fn scan_and_forward(
         }
 
         let mut from_line = checkpoint.files.get(&key).copied().unwrap_or(0);
-        let mut byte_offset = 0;
-        if let Some(position) = checkpoint.jsonl_positions.get(&key) {
-            if jsonl_position_is_current(path, position) {
-                from_line = position.line;
-                byte_offset = position.byte_offset;
-            } else {
-                from_line = 0;
-            }
+        let byte_offset;
+        let mut carried_digest = None;
+        if let Some(resume) = resume_jsonl_position(path, checkpoint, &key, now) {
+            from_line = resume.line;
+            byte_offset = resume.byte_offset;
+            carried_digest = resume.carried_digest;
         } else {
             // One-time migration for checkpoints written before seekable JSONL
             // positions existed. Preserve the exact historical rewrite check.
@@ -429,12 +428,20 @@ async fn scan_and_forward(
                 continue;
             }
         };
-        let prefix_digest = match jsonl_prefix_digest(path, acknowledged_offset) {
-            Ok(value) => value,
-            Err(error) => {
-                tracing::warn!(path = %path.display(), error = %error, "ai transcript forwarder failed to digest acknowledged prefix");
-                continue;
-            }
+        // Recomputing a full-prefix digest every cycle was the other half of
+        // the cost: it is O(everything ever forwarded) per growing file, per
+        // poll. A cycle that accepted the cursor on bounded evidence alone
+        // never read the history, so it has nothing new to say about it —
+        // carry the digest and the offset it covers forward untouched.
+        let (prefix_digest, digest_offset) = match carried_digest {
+            Some(carried) => carried,
+            None => match refresh_prefix_digest(path, checkpoint, &key, acknowledged_offset, now) {
+                Ok(value) => value,
+                Err(error) => {
+                    tracing::warn!(path = %path.display(), error = %error, "ai transcript forwarder failed to digest acknowledged prefix");
+                    continue;
+                }
+            },
         };
         new_totals.insert(key.clone(), total_lines);
         let (observed_len, modified_ns) = path
@@ -451,6 +458,7 @@ async fn scan_and_forward(
                 prefix_digest: Some(prefix_digest),
                 observed_len,
                 modified_ns,
+                digest_offset: Some(digest_offset),
             },
         );
         if new_lines.is_empty() {
@@ -464,6 +472,7 @@ async fn scan_and_forward(
         save_checkpoint_updates(
             &config.checkpoint_path,
             checkpoint,
+            &config.roots,
             new_totals,
             new_fingerprints,
             new_jsonl_positions,
@@ -476,6 +485,7 @@ async fn scan_and_forward(
     save_checkpoint_updates(
         &config.checkpoint_path,
         checkpoint,
+        &config.roots,
         new_totals,
         new_fingerprints,
         new_jsonl_positions,

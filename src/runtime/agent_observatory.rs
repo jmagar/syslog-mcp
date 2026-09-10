@@ -1,8 +1,6 @@
 //! Bounded, cancellable Agent Observatory projector and Git reconcile workers.
 
-use crate::agent_observatory::projector::{
-    project_agent_source_with_cursor, project_log_row_with_cursor,
-};
+use crate::agent_observatory::projector::{project_agent_source_with_cursor, project_log_row};
 use crate::config::AgentObservatoryConfig;
 use crate::db::agent_observatory::{
     AgentSourceKind, advance_projection_cursor, page_agent_sources, projection_cursor,
@@ -14,7 +12,7 @@ use crate::db::{
 };
 use crate::git_observer::discovery::{DiscoveryOptions, discover_repositories};
 use crate::git_observer::reconcile::{ReconcileOptions, reconcile_one_repository};
-use crate::scanner::local_hostname;
+use crate::hostname::local_hostname;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -31,6 +29,7 @@ const SOURCE_KINDS: [AgentSourceKind; 7] = [
     AgentSourceKind::OtelMetric,
     AgentSourceKind::RepositoryObservation,
 ];
+const AGENT_SOURCE_PAGE_MAX: usize = 500;
 
 fn source_name(kind: AgentSourceKind) -> &'static str {
     kind.as_str()
@@ -188,6 +187,7 @@ fn run_projection_cycle(pool: &DbPool, limits: ProjectionLimits) -> ProjectionCy
     match log_page {
         Ok(rows) => {
             let mut page_bytes = 0usize;
+            let mut last_processed_log_id = None;
             for (processed, row) in rows.into_iter().enumerate() {
                 page_bytes = page_bytes.saturating_add(row.message.len());
                 if page_bytes > limits.page_bytes && processed > 0 {
@@ -195,14 +195,27 @@ fn run_projection_cycle(pool: &DbPool, limits: ProjectionLimits) -> ProjectionCy
                 }
                 cycle.oversized_first_rows +=
                     usize::from(page_bytes > limits.page_bytes && processed == 0);
-                match project_log_row_with_cursor(pool, &row) {
-                    Ok(()) => cycle.projected += 1,
+                match project_log_row(pool, &row) {
+                    Ok(_) => {
+                        cycle.projected += 1;
+                        last_processed_log_id = Some(row.id);
+                    }
                     Err(error) => {
                         cycle.record_error(&error);
                         tracing::error!(error = %error, "Agent Observatory log projection failed");
                         break;
                     }
                 }
+            }
+            // Projection writes are idempotent. Advancing once per successful
+            // page avoids one cursor transaction for every irrelevant log row;
+            // if this commit fails, replaying the page is safe.
+            if let Some(last_processed_log_id) = last_processed_log_id
+                && let Err(error) =
+                    advance_projection_cursor(pool, "logs", &last_processed_log_id.to_string())
+            {
+                cycle.record_error(&error);
+                tracing::error!(error = %error, "Agent Observatory log cursor advance failed");
             }
         }
         Err(error) => {
@@ -221,7 +234,12 @@ fn run_projection_cycle(pool: &DbPool, limits: ProjectionLimits) -> ProjectionCy
                 continue;
             }
         };
-        match page_agent_sources(pool, kind, &cursor, limits.page_rows) {
+        match page_agent_sources(
+            pool,
+            kind,
+            &cursor,
+            limits.page_rows.min(AGENT_SOURCE_PAGE_MAX),
+        ) {
             Ok(page) => {
                 let mut page_bytes = 0usize;
                 for (processed, record) in page.records.iter().enumerate() {

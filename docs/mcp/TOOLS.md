@@ -24,6 +24,7 @@ cortex exposes one MCP tool named `cortex`. The required
 | `correlate_state` | Correlate logs with heartbeat window summaries around a reference time |
 | `sessions` | AI transcript sessions by project |
 | `search_sessions` | Ranked grouped session search |
+| `evidence_scope` | Historical Agent Observatory evidence for a Git branch or worktree |
 | `abuse` | Abuse hits in AI transcripts with same-session context |
 | `abuse_incidents` | Groups abuse hits into scored incident candidates |
 | `abuse_investigate` | Expands incidents into deterministic evidence bundles |
@@ -180,6 +181,20 @@ Search AI transcript rows with FTS5 and return grouped session results ranked by
 Required arguments: `action = "search_sessions"`, `query`
 
 Optional arguments: `project`, `tool`, `from`, `to`, `limit`.
+
+## cortex evidence_scope
+
+Return a bounded historical page of Agent Observatory events associated with an
+exact Git branch or absolute worktree path. Structured Git attribution is the
+strongest match lane. For legacy events ingested before structured scope was
+captured, an exact reference in the scrubbed summary or payload is also included
+as reference evidence; callers must not treat that weaker lane as verified Git
+ownership. At least one of `branch` or `worktree` is required. Use `after_id` for durable ascending keyset pagination;
+the response includes `minimum_watermark`, `high_watermark`, and `next_after`.
+Optional `kinds`, `since`, `until`, `limit`, and `include_payload` filters apply.
+
+There is no live evidence stream yet; poll `evidence_scope` with the
+`next_after` cursor to pick up newly projected matches.
 
 ## cortex abuse
 

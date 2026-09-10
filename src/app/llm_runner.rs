@@ -203,11 +203,20 @@ impl LlmRunner {
             .unwrap_or(true)
     }
 
-    /// The resolved `[llm].timeout_secs` this runner enforces as its own
-    /// outer per-invocation timeout. Exposed so callers that also need an
-    /// inner, subprocess-level timeout (Task 6's `GeminiAssessConfig`) can
-    /// read the SAME value instead of resolving their own from a separate
-    /// env var — see the "timeout duplication" eng review fix in the plan.
+    /// Byte budget enforced by provider adapters before streaming output.
+    pub(crate) fn max_output_bytes(&self) -> usize {
+        self.config.max_output_bytes
+    }
+
+    /// Resolve the one provider selector captured during configuration loading.
+    pub(crate) fn backend(
+        &self,
+        model: Option<String>,
+    ) -> anyhow::Result<crate::llm_backend::LlmBackend> {
+        crate::llm_backend::LlmBackend::from_config(model, &self.config)
+    }
+
+    /// The same resolved timeout used by the runner and provider subprocess.
     pub fn timeout_secs(&self) -> u64 {
         self.config.timeout_secs
     }

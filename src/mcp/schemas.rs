@@ -172,6 +172,11 @@ pub(super) fn tool_definitions() -> Vec<Value> {
                     "type": "string",
                     "description": "For action=filter or ai_correlate: exact AI session id filter."
                 },
+                "branch": {"type":"string","maxLength":512,"description":"For action=evidence_scope: exact Git branch projected by Agent Observatory."},
+                "worktree": {"type":"string","maxLength":4096,"description":"For action=evidence_scope: exact absolute worktree path projected by Agent Observatory."},
+                "kinds": {"type":"array","maxItems":32,"items":{"type":"string"},"description":"For action=evidence_scope: optional Agent Observatory event kinds."},
+                "include_payload": {"type":"boolean","description":"For action=evidence_scope: include bounded scrubbed payloads."},
+                "after_id": {"type":"integer","minimum":0,"description":"For action=evidence_scope: durable event watermark for the next historical page."},
                 "ai_query": {
                     "type": "string",
                     "description": "For action=ai_correlate: FTS5 query over AI transcript anchor rows."

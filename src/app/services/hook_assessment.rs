@@ -1,7 +1,7 @@
 //! Service-layer hook assessment: resolves a hook filter to its
 //! highest-priority (or all, with `--all`) matching `HookIncidentEvidence`
 //! bundle(s) via `investigate_ai_hook_incidents`, and optionally runs the
-//! guarded Gemini assessment through `LlmRunner` using the inline hook
+//! guarded LLM assessment through `LlmRunner` using the inline hook
 //! assessment prompt (`crate::hook_assessment::build_hook_assessment_prompt`).
 //!
 //! Mirrors `super::skill_assessment` one-for-one. LLM invocation is CLI-only:
@@ -15,8 +15,8 @@ use crate::app::models::{
     AiHookInvestigateRequest, HookAssessRequest, HookAssessResponse, HookAssessResult,
     HookIncidentEvidence,
 };
-use crate::assessment::GeminiAssessConfig;
 use crate::hook_assessment::build_hook_assessment_prompt;
+use crate::llm_backend::LlmBackend;
 
 impl CortexService {
     pub async fn run_hook_assessment(
@@ -71,8 +71,10 @@ impl CortexService {
             )));
         }
 
-        let gemini_config =
-            GeminiAssessConfig::from_env(req.model.clone(), self.llm().timeout_secs());
+        let backend = run_llm
+            .then(|| self.llm().backend(req.model.clone()))
+            .transpose()
+            .map_err(|error| ServiceError::InvalidInput(error.to_string()))?;
         let mut results = Vec::with_capacity(invest_resp.evidence.len());
         for evidence in &invest_resp.evidence {
             let mut result = HookAssessResult {
@@ -81,9 +83,9 @@ impl CortexService {
                 assessment: None,
                 prompt_preview: None,
             };
-            if run_llm {
+            if let Some(backend) = backend.as_ref() {
                 result = self
-                    .run_one_hook_assessment(evidence, &gemini_config, &mut on_delta)
+                    .run_one_hook_assessment(evidence, backend, &mut on_delta)
                     .await?;
             }
             results.push(result);
@@ -102,7 +104,7 @@ impl CortexService {
     async fn run_one_hook_assessment<F>(
         &self,
         evidence: &HookIncidentEvidence,
-        gemini_config: &GeminiAssessConfig,
+        backend: &LlmBackend,
         on_delta: &mut F,
     ) -> ServiceResult<HookAssessResult>
     where
@@ -133,17 +135,16 @@ impl CortexService {
                     || evidence.nearby_errors_truncated,
             },
             prompt,
-            provider: "gemini-cli".to_string(),
-            model: gemini_config.model.clone(),
-            program: gemini_config.program.clone(),
+            provider: backend.provider().to_string(),
+            model: backend.model(),
+            program: backend.program(),
             extra_metadata: serde_json::json!({
                 "hook_event": evidence.incident.hook_event,
                 "hook_name": evidence.incident.hook_name,
                 "has_runtime_evidence": evidence.incident.has_runtime_evidence,
             }),
         };
-        let output =
-            super::run_gemini_with_delta(self.llm(), spec, gemini_config, on_delta).await?;
+        let output = super::run_llm_with_delta(self.llm(), spec, backend, on_delta).await?;
 
         Ok(HookAssessResult {
             incident_id: evidence.incident.incident_id.clone(),

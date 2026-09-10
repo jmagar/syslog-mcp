@@ -195,6 +195,10 @@ pub(crate) fn project_log_row(pool: &DbPool, row: &LogEntry) -> Result<bool> {
     }
 }
 
+// Retained as an atomic projection/cursor contract for focused tests and
+// callers that need single-row durability; the runtime backfill batches its
+// cursor commit after an idempotent page.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn project_log_row_with_cursor(pool: &DbPool, row: &LogEntry) -> Result<()> {
     let transcript_projects = matches!(
         classify_transcript_log(row),

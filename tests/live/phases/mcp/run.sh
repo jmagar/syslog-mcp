@@ -59,6 +59,25 @@ mcp_seed_positive_fixtures() {
   notify_message="Out of memory: Killed process 4242 (mcp-live-${LIVE_RUN_ID#cortex-e2e-})"
   printf '<11>1 %s %s kernel - - - %s\n' "$notify_timestamp" "$MCP_LIVE_NOTIFY_HOST" "$notify_message" | nc -w 2 127.0.0.1 "$LIVE_SYSLOG_TCP_PORT"
   candidate="$(live_ingest_candidate_id)"
+  # A container-owned Git repository gives the Agent Observatory Git reconcile
+  # worker something real to discover, so the repository and worktree read
+  # surfaces answer from projected topology instead of an empty database. It
+  # must be created inside the container: a host bind mount is owned by the
+  # host UID and Git refuses such a tree as dubious ownership. Discovery is
+  # bounded to this directory by CORTEX_AGENT_OBSERVATORY_GIT_ROOTS.
+  docker exec -e HOME=/tmp "$candidate" sh -ec '
+    rm -rf /tmp/cortex-observatory-repos
+    mkdir -p /tmp/cortex-observatory-repos/cortex-live
+    cd /tmp/cortex-observatory-repos/cortex-live
+    git init -q -b main .
+    git config user.email live@cortex.invalid
+    git config user.name cortex-live
+    printf "cortex live Agent Observatory fixture\n" >README.md
+    git add README.md
+    git commit -q -m "cortex live Agent Observatory fixture"
+    git rev-parse HEAD
+  ' >"$dir/seed-observatory-repository.txt"
+  [[ -s "$dir/seed-observatory-repository.txt" ]]
   # A run-owned transcript drives the session, abuse, skill, MCP, and hook
   # projections.  Keep stable IDs in every record so the action oracles can
   # prove relationships rather than merely accepting a response shape.

@@ -22,25 +22,27 @@ fn command_log_hostname_ignores_the_hostname_env_var() {
     let previous = crate::env::var("HOSTNAME").ok();
     // The test overlay avoids mutating libc's process environment. `#[serial]`
     // still prevents same-key semantic interference with neighboring tests.
+    crate::env::remove_test_var("HOSTNAME");
+    let without_env = hostname();
     crate::env::set_test_var("HOSTNAME", SENTINEL);
-
-    let resolved = hostname();
+    let with_env = hostname();
 
     match previous {
         Some(value) => crate::env::set_test_var("HOSTNAME", value),
         None => crate::env::remove_test_var("HOSTNAME"),
     }
 
-    if resolved == "localhost" {
-        // gethostname() genuinely failed on this host, so the env fallback is
-        // the documented behavior and there is nothing to assert.
+    if without_env == crate::hostname::UNRESOLVED_HOSTNAME {
+        // Neither gethostname() nor a platform source answers on this host, so
+        // `$HOSTNAME` is the documented fallback and there is nothing to assert.
         return;
     }
-    assert_ne!(
-        resolved, SENTINEL,
+    assert_eq!(
+        with_env, without_env,
         "hostname() must resolve via gethostname(), not $HOSTNAME"
     );
-    assert_eq!(resolved, crate::scanner::local_hostname());
+    assert_ne!(with_env, SENTINEL);
+    assert_eq!(with_env, crate::hostname::local_hostname());
 }
 
 #[test]

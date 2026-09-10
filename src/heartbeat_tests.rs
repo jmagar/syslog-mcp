@@ -387,9 +387,21 @@ fn platform_release_available_for_fleet_platforms() {
     assert!(platform_release_available("Linux", "x86_64"));
     assert!(platform_release_available("windows", "x86_64"));
     assert!(platform_release_available("windows", "amd64"));
+    assert!(platform_release_available("macos", "aarch64"));
+    assert!(platform_release_available("macos", "arm64"));
+    assert!(!platform_release_available("macos", "x86_64"));
     assert!(!platform_release_available("linux", "riscv64"));
     assert!(platform_self_servable("linux", "x86_64"));
     assert!(!platform_self_servable("windows", "x86_64"));
+    assert_eq!(
+        release_asset("macos", "aarch64", "binary").map(|asset| asset.0),
+        Some("cortex-macos-arm64")
+    );
+    assert_eq!(
+        release_asset("macos", "arm64", "checksum").map(|asset| asset.0),
+        Some("cortex-macos-arm64.sha256")
+    );
+    assert!(release_asset("macos", "x86_64", "binary").is_none());
 }
 
 #[test]
@@ -420,6 +432,16 @@ fn directive_for_decisions() {
     assert_eq!(windows.version, SERVER_VERSION);
     assert!(windows.path.contains("os=windows"));
     assert!(windows.path.contains("arch=x86_64"));
+    assert_eq!(windows.os, "windows");
+    assert_eq!(windows.arch, "x86_64");
+
+    let macos = release
+        .directive_for("macos", "arm64", "0.0.0")
+        .expect("stale macOS arm64 agent gets an exact release directive");
+    assert_eq!(macos.os, "macos");
+    assert_eq!(macos.arch, "aarch64");
+    assert!(macos.path.contains("os=macos"));
+    assert!(macos.path.contains("arch=aarch64"));
 
     // No sha (binary unreadable) → never advertise.
     let no_sha = AgentReleaseInfo {
@@ -437,6 +459,10 @@ async fn heartbeat_ack_advertises_update_for_stale_linux_agent() {
         post_json(app, "/v1/heartbeats", Some("secret"), heartbeat_payload()).await;
     assert_eq!(status, StatusCode::ACCEPTED);
     assert_eq!(body["server_version"], json!(SERVER_VERSION));
+    assert_eq!(
+        body["agent_update_status"],
+        json!("available_checksum_integrity_only")
+    );
     let update = &body["agent_update"];
     assert_eq!(update["version"], json!(SERVER_VERSION));
     assert!(update["path"].as_str().unwrap().contains("os=linux"));
@@ -445,7 +471,22 @@ async fn heartbeat_ack_advertises_update_for_stale_linux_agent() {
 
 #[tokio::test]
 async fn heartbeat_ack_advertises_server_mediated_release_for_stale_windows_agent() {
-    let (app, _pool, _dir) = test_app(Some("secret"));
+    let dir = tempfile::tempdir().unwrap();
+    let storage = StorageConfig::for_test(dir.path().join("heartbeat-test.db"));
+    let pool = Arc::new(crate::db::init_pool(&storage).unwrap());
+    let state = HeartbeatState::new(
+        pool,
+        Some("secret".to_string()),
+        AuthPolicy::Mounted { auth_state: None },
+    );
+    state.release_availability.lock().await.insert(
+        format!("windows:x86_64:{SERVER_VERSION}"),
+        ReleaseAvailability {
+            available: true,
+            expires: Instant::now() + Duration::from_secs(60),
+        },
+    );
+    let app = router(state).layer(MockConnectInfo(SocketAddr::from(([10, 0, 0, 7], 41000))));
     let mut payload = heartbeat_payload();
     payload["host"]["os"] = json!("windows");
     let (status, body) = post_json(app, "/v1/heartbeats", Some("secret"), payload).await;
@@ -453,6 +494,10 @@ async fn heartbeat_ack_advertises_server_mediated_release_for_stale_windows_agen
     let update = &body["agent_update"];
     assert_eq!(update["version"], json!(SERVER_VERSION));
     assert_eq!(update["format"], json!("binary"));
+    assert_eq!(
+        body["agent_update_status"],
+        json!("available_checksum_integrity_only")
+    );
     assert_eq!(
         update["path"],
         json!(format!(
@@ -475,6 +520,7 @@ async fn heartbeat_ack_omits_update_for_matching_version() {
     let (status, body) = post_json(app, "/v1/heartbeats", Some("secret"), payload).await;
     assert_eq!(status, StatusCode::ACCEPTED);
     assert_eq!(body["server_version"], json!(SERVER_VERSION));
+    assert_eq!(body["agent_update_status"], json!("current"));
     assert!(body.get("agent_update").is_none() || body["agent_update"].is_null());
 }
 
@@ -547,6 +593,75 @@ async fn agent_release_endpoint_proxies_authenticated_release_asset() {
         to_bytes(response.into_body(), 4096).await.unwrap(),
         "a".repeat(64)
     );
+}
+
+#[tokio::test]
+async fn macos_release_availability_requires_exact_binary_and_checksum_assets() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let upstream = MockServer::start().await;
+    Mock::given(method("HEAD"))
+        .and(path(format!("/v{SERVER_VERSION}/cortex-macos-arm64")))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    Mock::given(method("HEAD"))
+        .and(path(format!(
+            "/v{SERVER_VERSION}/cortex-macos-arm64.sha256"
+        )))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let storage = StorageConfig::for_test(dir.path().join("heartbeat-test.db"));
+    let pool = Arc::new(crate::db::init_pool(&storage).unwrap());
+    let mut state = HeartbeatState::new(
+        pool,
+        Some("secret".to_string()),
+        AuthPolicy::Mounted { auth_state: None },
+    );
+    state.release_base_url = upstream.uri();
+    assert!(state.release_assets_available("macos", "arm64").await);
+    // A second lookup is served by the bounded success cache.
+    assert!(state.release_assets_available("macos", "arm64").await);
+}
+
+#[tokio::test]
+async fn macos_release_availability_negative_caches_missing_checksum() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let upstream = MockServer::start().await;
+    Mock::given(method("HEAD"))
+        .and(path(format!("/v{SERVER_VERSION}/cortex-macos-arm64")))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    Mock::given(method("HEAD"))
+        .and(path(format!(
+            "/v{SERVER_VERSION}/cortex-macos-arm64.sha256"
+        )))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let storage = StorageConfig::for_test(dir.path().join("heartbeat-test.db"));
+    let pool = Arc::new(crate::db::init_pool(&storage).unwrap());
+    let mut state = HeartbeatState::new(
+        pool,
+        Some("secret".to_string()),
+        AuthPolicy::Mounted { auth_state: None },
+    );
+    state.release_base_url = upstream.uri();
+    assert!(!state.release_assets_available("macos", "aarch64").await);
+    assert!(!state.release_assets_available("macos", "aarch64").await);
 }
 
 // --- Connection-pool contention (bead syslog-mcp-2yhfy) ---

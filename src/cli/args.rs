@@ -209,6 +209,7 @@ pub(crate) struct ShellAgentWrapArgs {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HeartbeatAgentArgs {
+    pub env_file: Option<String>,
     pub target: Option<String>,
     pub token: Option<String>,
     pub interval_secs: u64,

@@ -154,7 +154,7 @@ subsystem).
 
 `cortex assess skill` / `cortex assess abuse` / `cortex assess hooks` are
 CLI-only in this phase (no REST route) — see README "Skill, abuse, and hook
-assessment". LLM assessment spawns Gemini on the local host via `LlmRunner`
+assessment". LLM assessment runs the provider selected by `CORTEX_LLM` locally via `LlmRunner`
 and is never exposed over MCP or REST; this mirrors the existing
 `cortex sessions assess` (no `/api/sessions/assess` route either).
 

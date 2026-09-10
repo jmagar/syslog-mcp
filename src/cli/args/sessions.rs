@@ -461,7 +461,7 @@ pub(crate) struct SessionsAssessArgs {
     pub terms: Vec<String>,
     pub limit: Option<u32>,
     /// When true, preview the prompt/evidence bundle via
-    /// `LlmRunner::dry_run` instead of invoking Gemini — see GH issue #94.
+    /// `LlmRunner::dry_run` instead of invoking the selected LLM — see GH issue #94.
     pub dry_run: bool,
 }
 
