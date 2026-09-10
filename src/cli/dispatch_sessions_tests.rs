@@ -51,7 +51,7 @@ mod assess {
         let err = dispatch::run_assess_skill(&http_mode, args)
             .await
             .unwrap_err();
-        assert!(format!("{err}").contains("spawns Gemini CLI on the local host"));
+        assert!(format!("{err}").contains("runs the LLM selected by CORTEX_LLM on the local host"));
     }
 
     #[tokio::test]
@@ -63,13 +63,15 @@ mod assess {
             ..Default::default()
         };
         // Deterministic-only path is not local-only; it must NOT fail with the
-        // Gemini local-only message (it is expected to bail with
+        // provider local-only message (it is expected to bail with
         // "not yet implemented" today, since no HTTP route/client method
         // exists for assess skill in this phase).
         let err = dispatch::run_assess_skill(&http_mode, args)
             .await
             .unwrap_err();
-        assert!(!format!("{err}").contains("spawns Gemini CLI on the local host"));
+        assert!(
+            !format!("{err}").contains("runs the LLM selected by CORTEX_LLM on the local host")
+        );
     }
 
     #[tokio::test]
@@ -82,6 +84,6 @@ mod assess {
         let err = dispatch::run_assess_abuse(&http_mode, args)
             .await
             .unwrap_err();
-        assert!(format!("{err}").contains("spawns Gemini CLI on the local host"));
+        assert!(format!("{err}").contains("runs the LLM selected by CORTEX_LLM on the local host"));
     }
 }

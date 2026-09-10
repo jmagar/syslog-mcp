@@ -51,6 +51,18 @@ filter-bound durable row-ID cursors, `Last-Event-ID` resume, typed retention
 gap/expiry/overload termination, and bounded replay batches;
 durable resumable SSE is owned by the separate streaming delivery slice.
 
+## Palette session contract
+
+The runtime now exposes authenticated `GET /api/capabilities`,
+`GET /api/sessions/rendered`, `GET /api/streams/logs`,
+and `GET /api/streams/sessions`. Rendered session pages normalize semantic event
+kinds, redaction annotations, and parse warnings over a durable ascending
+`logs.id` cursor. Polls are bounded to 200 events and 256 KiB with an explicit
+2-second retry hint. Native log and session streams use principal- and
+filter-bound durable row-ID cursors, `Last-Event-ID` resume, typed retention
+gap/expiry/overload termination, and bounded replay batches;
+durable resumable SSE is owned by the separate streaming delivery slice.
+
 ## MCP tools
 
 cortex exposes one MCP tool named `cortex`. The required `action`
@@ -74,6 +86,7 @@ that registry by `src/mcp/schemas.rs::tool_definitions()`.
 | `status` | Lightweight runtime status: DB health, queue/backpressure state, listener/writer counters, OTLP counters | no |
 | `sessions` | AI transcript sessions grouped by project/tool/session/host | no |
 | `search_sessions` | Ranked grouped session search | no |
+| `evidence_scope` | Historical Agent Observatory evidence for a Git branch or worktree | no |
 | `abuse` | Abuse-term detector with same-session context | no |
 | `abuse_incidents` | Groups abuse hits into scored incident candidates | no |
 | `abuse_investigate` | Expands incidents into deterministic evidence bundles | no |

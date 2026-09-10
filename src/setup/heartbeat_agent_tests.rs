@@ -33,7 +33,7 @@ impl Drop for EnvGuard {
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "macos")))]
 fn write_executable(path: &std::path::Path, body: &str) {
     use std::os::unix::fs::PermissionsExt;
 
@@ -43,6 +43,7 @@ fn write_executable(path: &std::path::Path, body: &str) {
     std::fs::set_permissions(path, perms).unwrap();
 }
 
+#[cfg(all(unix, not(target_os = "macos")))]
 fn path_with_prepended(dir: &std::path::Path) -> std::ffi::OsString {
     let mut paths = vec![dir.to_path_buf()];
     if let Some(existing) = crate::env::var_os("PATH") {
@@ -59,8 +60,8 @@ fn unit_runs_heartbeat_agent_with_private_host_id_path() {
         Path::new("/home/me/.cortex/heartbeat-host-id"),
     )
     .unwrap();
-    assert!(unit.contains("ExecStart=/usr/local/bin/cortex heartbeat agent --host-id-path /home/me/.cortex/heartbeat-host-id"));
-    assert!(unit.contains("EnvironmentFile=/home/me/.cortex/heartbeat-agent.env"));
+    assert!(unit.contains("ExecStart=/usr/local/bin/cortex heartbeat agent --env-file /home/me/.cortex/heartbeat-agent.env --host-id-path /home/me/.cortex/heartbeat-host-id"));
+    assert!(!unit.contains("EnvironmentFile="));
     assert!(unit.contains("ReadWritePaths=/home/me/.cortex"));
 }
 
@@ -74,7 +75,7 @@ fn compose_runs_baked_image_with_host_network_and_private_id_path() {
     .unwrap();
 
     assert!(compose.contains("network_mode: host"));
-    assert!(compose.contains("env_file: /home/me/.cortex/heartbeat-agent.env"));
+    assert!(compose.contains("- --env-file\n      - /home/me/.cortex/heartbeat-agent.env"));
     // Runs the published image with the binary baked in — no host binary is
     // staged or bind-mounted. Only the host-id data dir is mounted.
     assert!(compose.contains(&format!(
@@ -188,7 +189,7 @@ fn write_heartbeat_agent_unit_creates_parent_and_expected_content() {
     assert!(matches!(phase.status, SetupStatus::Ok));
     assert!(raw.contains("[Service]\nType=simple"));
     assert!(raw.contains(
-        "ExecStart=/usr/local/bin/cortex heartbeat agent --host-id-path /home/me/.cortex/heartbeat-host-id"
+        "ExecStart=/usr/local/bin/cortex heartbeat agent --env-file /home/me/.cortex/heartbeat-agent.env --host-id-path /home/me/.cortex/heartbeat-host-id"
     ));
     assert!(raw.contains("ReadWritePaths=/home/me/.cortex /usr/local/bin"));
 }
@@ -272,7 +273,7 @@ fn content_phase_detects_matching_and_stale_units() {
     );
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "macos")))]
 #[tokio::test]
 #[serial]
 async fn run_heartbeat_agent_setup_install_check_and_remove_with_systemd() {
@@ -334,6 +335,30 @@ async fn run_heartbeat_agent_setup_install_check_and_remove_with_systemd() {
 }
 
 #[test]
+fn backend_selection_is_pure_and_never_falls_back_after_selection() {
+    assert_eq!(
+        select_backend("macos", false, true, false),
+        ServiceBackend::Launchd
+    );
+    assert_eq!(
+        select_backend("macos", false, false, false),
+        ServiceBackend::Unsupported
+    );
+    assert_eq!(
+        select_backend("linux", true, false, true),
+        ServiceBackend::Systemd
+    );
+    assert_eq!(
+        select_backend("linux", false, false, true),
+        ServiceBackend::Compose
+    );
+    assert_eq!(
+        select_backend("linux", false, false, false),
+        ServiceBackend::Unsupported
+    );
+}
+
+#[test]
 #[serial]
 fn write_heartbeat_agent_env_reads_setup_env_fallbacks_and_optional_syslog() {
     let dir = tempfile::tempdir().unwrap();
@@ -343,6 +368,11 @@ fn write_heartbeat_agent_env_reads_setup_env_fallbacks_and_optional_syslog() {
     std::fs::write(
         cortex_home.join(".env"),
         "CORTEX_TOKEN=from-setup-env\nCORTEX_HEARTBEAT_TARGET=http://from-env-file/heartbeat\n",
+    )
+    .unwrap();
+    std::fs::write(
+        cortex_home.join("agent-ai-transcript-checkpoint.json"),
+        "{\"files\":{}}",
     )
     .unwrap();
     let env_path = dir.path().join("heartbeat-agent.env");
@@ -358,6 +388,7 @@ fn write_heartbeat_agent_env_reads_setup_env_fallbacks_and_optional_syslog() {
     let _command_forward = EnvGuard::set("CORTEX_AGENT_COMMAND_FORWARD", "true");
     let _shell_history = EnvGuard::set("CORTEX_AGENT_SHELL_HISTORY_FORWARD", "true");
     let _auto_update = EnvGuard::set("CORTEX_AGENT_AUTO_UPDATE", "false");
+    let _transcript_checkpoint = EnvGuard::remove("CORTEX_AGENT_AI_TRANSCRIPT_CHECKPOINT");
 
     write_heartbeat_agent_env(&env_path).unwrap();
     let raw = std::fs::read_to_string(&env_path).unwrap();
@@ -372,4 +403,38 @@ fn write_heartbeat_agent_env_reads_setup_env_fallbacks_and_optional_syslog() {
     assert!(raw.contains("CORTEX_AGENT_COMMAND_FORWARD=true\n"));
     assert!(raw.contains("CORTEX_AGENT_SHELL_HISTORY_FORWARD=true\n"));
     assert!(raw.contains("CORTEX_AGENT_AUTO_UPDATE=false\n"));
+    assert!(raw.contains(&format!(
+        "CORTEX_AGENT_AI_TRANSCRIPT_CHECKPOINT={}\n",
+        cortex_home.join("agent-ai-transcript-checkpoint.json").display()
+    )));
+}
+
+#[test]
+#[serial]
+fn capability_check_is_redacted_and_reports_fresh_transcript_delivery() {
+    let dir = tempfile::tempdir().unwrap();
+    let env_path = dir.path().join("heartbeat-agent.env");
+    let checkpoint = dir.path().join("checkpoint.json");
+    std::fs::write(&checkpoint, "{\"files\":{}}").unwrap();
+    std::fs::write(
+        &env_path,
+        format!(
+            "CORTEX_HEARTBEAT_TOKEN=top-secret\nCORTEX_AGENT_AI_TRANSCRIPT_FORWARD=true\nCORTEX_AGENT_AI_TRANSCRIPT_CHECKPOINT={}\nCORTEX_AGENT_DOCKER=false\nCORTEX_AGENT_SHELL_HISTORY_FORWARD=false\n",
+            checkpoint.display()
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&env_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let phases = check_capabilities_and_delivery(&env_path, ServiceBackend::Launchd);
+    assert_eq!(phases.len(), 2);
+    assert!(phases[0].detail.contains("transcripts=enabled"));
+    assert!(phases[0].detail.contains("journald=n/a"));
+    assert_eq!(phases[1].status, SetupStatus::Ok);
+    let rendered = serde_json::to_string(&phases).unwrap();
+    assert!(!rendered.contains("top-secret"));
+    assert!(!rendered.contains(&checkpoint.to_string_lossy().to_string()));
 }

@@ -1404,7 +1404,7 @@ fn rfc3339(value: DateTime<Utc>) -> String {
 }
 
 fn hostname() -> String {
-    crate::scanner::local_hostname()
+    crate::hostname::local_hostname()
 }
 
 fn username() -> Option<String> {

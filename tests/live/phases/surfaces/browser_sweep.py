@@ -7,6 +7,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import shutil
 import urllib.error
 import urllib.request
@@ -117,6 +118,11 @@ def main() -> int:
     result["failures"] = failures
     output.write_text(json.dumps(result, indent=2) + "\n")
     os.chmod(output, 0o600)
+    # A fail-closed sweep must say what failed: these identifiers are the only
+    # way a hosted run can be diagnosed, because the observation file carries
+    # raw page content and is deliberately excluded from uploaded artifacts.
+    for failure in failures:
+        print(f"live-e2e: browser surface case failed: {failure}", file=sys.stderr)
     return 1 if failures else 0
 
 

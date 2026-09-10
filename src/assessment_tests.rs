@@ -132,7 +132,7 @@ fn isolated_gemini_home_clears_side_effect_settings_and_installs_skill() {
 
 #[test]
 fn stream_parser_accepts_deltas_and_result_text() {
-    let mut parser = GeminiStreamState::default();
+    let mut parser = GeminiStreamState::new(262_144);
     let mut streamed = String::new();
     parser
         .handle_line(
@@ -152,7 +152,7 @@ fn stream_parser_accepts_deltas_and_result_text() {
 
 #[test]
 fn stream_parser_rejects_unexpected_tool_call() {
-    let mut parser = GeminiStreamState::default();
+    let mut parser = GeminiStreamState::new(262_144);
     let err = parser
         .handle_line(
             r#"{"type":"tool_use","tool_name":"shell","parameters":{"cmd":"date"}}"#,
@@ -165,7 +165,7 @@ fn stream_parser_rejects_unexpected_tool_call() {
 
 #[test]
 fn stream_parser_recovers_markdown_from_write_file_tool_call() {
-    let mut parser = GeminiStreamState::default();
+    let mut parser = GeminiStreamState::new(262_144);
     parser
         .handle_line(
             r##"{"type":"tool_use","tool_name":"write_file","parameters":{"file_path":"/tmp/syslog-gemini-headless-x/.gemini/tmp/session/plans/frustration_assessment.md","content":"# Frustration Assessment\n\nRecovered report."}}"##,
@@ -183,7 +183,7 @@ fn stream_parser_recovers_markdown_from_write_file_tool_call() {
 
 #[test]
 fn stream_parser_prefers_write_file_assessment_over_preamble() {
-    let mut parser = GeminiStreamState::default();
+    let mut parser = GeminiStreamState::new(262_144);
     let mut streamed = String::new();
     parser
         .handle_line(
@@ -232,7 +232,7 @@ async fn gemini_assessment_timeout_kills_and_reaps_child() {
         source_home: Some(source.path().to_path_buf()),
         timeout_secs: 1,
     };
-    let err = run_gemini_assessment("prompt", &config, |_| Ok(()))
+    let err = run_gemini_assessment("prompt", &config, 262_144, |_| Ok(()))
         .await
         .unwrap_err()
         .to_string();
@@ -270,7 +270,7 @@ async fn gemini_assessment_reports_child_stderr_before_stdin_pipe_error() {
         timeout_secs: 30,
     };
     let large_prompt = "x".repeat(2 * 1024 * 1024);
-    let err = run_gemini_assessment(&large_prompt, &config, |_| Ok(()))
+    let err = run_gemini_assessment(&large_prompt, &config, 262_144, |_| Ok(()))
         .await
         .unwrap_err()
         .to_string();
@@ -280,12 +280,12 @@ async fn gemini_assessment_reports_child_stderr_before_stdin_pipe_error() {
 
 #[test]
 #[serial]
-fn env_config_uses_syslog_specific_knobs() {
+fn adapter_uses_command_override_but_ignores_legacy_model_env() {
     let _cmd = EnvGuard::set("CORTEX_HEADLESS_GEMINI_CMD", "custom-gemini");
     let _model = EnvGuard::set("CORTEX_HEADLESS_GEMINI_MODEL", "gemini-custom");
     let config = GeminiAssessConfig::from_env(None, 42);
     assert_eq!(config.program, "custom-gemini");
-    assert_eq!(config.model, "gemini-custom");
+    assert_eq!(config.model, DEFAULT_GEMINI_MODEL);
     assert_eq!(config.timeout_secs, 42);
 }
 

@@ -1,14 +1,48 @@
 use anyhow::{Result, anyhow, bail};
 use serde_json::Value;
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt};
 
-#[derive(Default)]
+pub(super) const MAX_FRAME_BYTES: usize = 2 * 1024 * 1024;
+
+pub(super) async fn read_frame<R: AsyncBufRead + Unpin>(reader: &mut R) -> Result<Option<String>> {
+    let mut bytes = Vec::new();
+    let read = reader
+        .take((MAX_FRAME_BYTES + 1) as u64)
+        .read_until(b'\n', &mut bytes)
+        .await?;
+    if read > MAX_FRAME_BYTES {
+        bail!("Gemini stdout frame exceeds assessment limit");
+    }
+    if read == 0 {
+        return Ok(None);
+    }
+    Ok(Some(String::from_utf8(bytes)?))
+}
+
 pub(super) struct GeminiStreamState {
+    max_output_bytes: usize,
     text: String,
     result_text: Option<String>,
     saw_success: bool,
 }
 
 impl GeminiStreamState {
+    pub(super) fn new(max_output_bytes: usize) -> Self {
+        Self {
+            max_output_bytes,
+            text: String::new(),
+            result_text: None,
+            saw_success: false,
+        }
+    }
+
+    fn check_output_size(&self, size: usize) -> Result<()> {
+        if size > self.max_output_bytes {
+            bail!("Gemini assessment output exceeds limit");
+        }
+        Ok(())
+    }
+
     pub(super) fn handle_line<F>(&mut self, line: &str, on_delta: &mut F) -> Result<()>
     where
         F: FnMut(&str) -> Result<()> + Send,
@@ -24,7 +58,7 @@ impl GeminiStreamState {
             Some("tool_result") => {}
             Some("error") => bail!("Gemini headless stream error: {value}"),
             Some("message") if value.get("role").and_then(Value::as_str) == Some("assistant") => {
-                if let Some(delta) = message_content(&value) {
+                if let Some(delta) = message_content(&value, self.max_output_bytes)? {
                     self.push_delta(&delta, on_delta)?;
                 }
             }
@@ -44,6 +78,7 @@ impl GeminiStreamState {
         if let Some(text) = value.get("response").and_then(Value::as_str)
             && !text.trim().is_empty()
         {
+            self.check_output_size(text.len())?;
             self.result_text = Some(text.to_string());
         }
         self.saw_success = true;
@@ -68,6 +103,7 @@ impl GeminiStreamState {
                         "Gemini headless emitted write_file without assessment content; raw event: {value}"
                     );
                 };
+                self.check_output_size(content.len())?;
                 self.result_text = Some(content.to_string());
                 Ok(())
             }
@@ -85,6 +121,7 @@ impl GeminiStreamState {
         if delta.is_empty() {
             return Ok(());
         }
+        self.check_output_size(self.text.len().saturating_add(delta.len()))?;
         self.text.push_str(delta);
         on_delta(delta)
     }
@@ -105,22 +142,29 @@ impl GeminiStreamState {
     }
 }
 
-fn message_content(value: &Value) -> Option<String> {
+fn message_content(value: &Value, max_bytes: usize) -> Result<Option<String>> {
     if let Some(content) = value.get("content").and_then(Value::as_str) {
-        return Some(content.to_string());
+        if content.len() > max_bytes {
+            bail!("Gemini assessment output exceeds limit");
+        }
+        return Ok(Some(content.to_string()));
     }
     if let Some(parts) = value.get("content").and_then(Value::as_array) {
         let mut out = String::new();
         for part in parts {
-            if let Some(text) = part.as_str() {
-                out.push_str(text);
-            } else if let Some(text) = part.get("text").and_then(Value::as_str) {
+            if let Some(text) = part
+                .as_str()
+                .or_else(|| part.get("text").and_then(Value::as_str))
+            {
+                if out.len().saturating_add(text.len()) > max_bytes {
+                    bail!("Gemini assessment output exceeds limit");
+                }
                 out.push_str(text);
             }
         }
-        return (!out.is_empty()).then_some(out);
+        return Ok((!out.is_empty()).then_some(out));
     }
-    None
+    Ok(None)
 }
 
 fn contains_tool_event(value: &Value) -> bool {
@@ -139,3 +183,7 @@ fn contains_tool_event(value: &Value) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+#[path = "gemini_stream_tests.rs"]
+mod tests;

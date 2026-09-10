@@ -150,6 +150,30 @@ fn validate_list(values: &[String], name: &str) -> ServiceResult<()> {
 }
 
 impl CortexService {
+    pub async fn scoped_evidence(
+        &self,
+        query: ao::EvidenceScopeQuery,
+        after_id: i64,
+        requested: usize,
+    ) -> ServiceResult<ao::EvidenceScopePage> {
+        validate_text(&query.branch, "branch")?;
+        validate_text(&query.worktree, "worktree")?;
+        validate_list(&query.kinds, "kinds")?;
+        validate_range(&query.since, &query.until)?;
+        if query.branch.is_none() && query.worktree.is_none() {
+            return Err(ServiceError::InvalidInput(
+                "branch_or_worktree_required".into(),
+            ));
+        }
+        if after_id < 0 {
+            return Err(ServiceError::InvalidInput("invalid_after_id".into()));
+        }
+        self.run_db("observatory.scoped_evidence", move |pool| {
+            ao::scoped_evidence_events(pool, &query, after_id, limit(requested, 500))
+        })
+        .await
+    }
+
     pub async fn observatory_repositories(
         &self,
         query: ao::RepositoryQuery,

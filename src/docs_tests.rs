@@ -119,3 +119,53 @@ fn live_smoke_keeps_deterministic_admin_rest_coverage() {
         "live smoke should cover semantic, validation, and authorization cases for admin routes"
     );
 }
+
+#[test]
+fn macos_heartbeat_agent_contract_has_exact_commands_and_security_boundaries() {
+    let setup = include_str!("../docs/SETUP.md");
+    for command in [
+        "cortex setup heartbeatagent install",
+        "cortex setup heartbeatagent check",
+        "cortex setup heartbeatagent remove",
+    ] {
+        assert!(
+            setup.contains(command),
+            "setup guide should document {command}"
+        );
+    }
+    for required in [
+        "ai.dinglebear.cortex-heartbeat-agent",
+        "gui/$UID",
+        "~/Library/LaunchAgents/ai.dinglebear.cortex-heartbeat-agent.plist",
+        "~/.cortex/heartbeat-agent.env",
+        "CORTEX_HEARTBEAT_TOKEN",
+        "CORTEX_API_TOKEN",
+        "delivery health",
+        "migration journal",
+        "CORTEX_AGENT_AI_TRANSCRIPTS",
+        "CORTEX_AGENT_AI_TRANSCRIPT_FORWARD",
+    ] {
+        assert!(
+            setup.contains(required),
+            "operator contract should mention {required}"
+        );
+    }
+    assert!(
+        !setup.contains("cortex setup heartbeat-agent"),
+        "docs must use the parser's heartbeatagent spelling"
+    );
+}
+
+#[test]
+fn macos_heartbeat_agent_short_docs_link_to_authoritative_contract() {
+    let setup = include_str!("../docs/SETUP.md");
+    let readme = include_str!("../README.md");
+    let cli = include_str!("../docs/CLI.md");
+    let env = include_str!("../.env.example");
+
+    assert_eq!(setup.matches("## 10. macOS heartbeat agent").count(), 1);
+    assert!(readme.contains("docs/SETUP.md#10-macos-heartbeat-agent"));
+    assert!(cli.contains("SETUP.md#10-macos-heartbeat-agent"));
+    assert!(env.contains("CORTEX_AGENT_AI_TRANSCRIPT_FORWARD=false"));
+    assert!(env.contains("CORTEX_AGENT_AUTO_UPDATE=false"));
+}

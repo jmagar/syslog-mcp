@@ -111,11 +111,23 @@ else
   docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" logs --no-color >"$artifact_dir/cli-compose-failure.log" 2>&1 || true
 fi
 set -e
-docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" down -v --remove-orphans >/dev/null 2>&1 || cli_sweep_status=1
+# A fail-closed stage must say which step failed. Discarding teardown output
+# turned any failure here into a bare exit 1 minutes into the phase, with the
+# reason left on the runner: the CLI sweep reports its own failing cases, so
+# silence here is indistinguishable from a sweep that passed.
+if ! docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" down -v --remove-orphans \
+    >"$artifact_dir/cli-compose-down.log" 2>&1; then
+  echo "live-e2e: surface CLI fixture teardown failed for project $COMPOSE_PROJECT_NAME" >&2
+  tail -n 20 "$artifact_dir/cli-compose-down.log" >&2 || true
+  cli_sweep_status=1
+fi
 if ((cli_sweep_status == 0)); then
   surface_cli_resource_verified_removed "$COMPOSE_PROJECT_NAME"
 fi
-((cli_sweep_status == 0)) || exit "$cli_sweep_status"
+if ((cli_sweep_status != 0)); then
+  echo "live-e2e: surfaces CLI stage failed (status $cli_sweep_status)" >&2
+  exit "$cli_sweep_status"
+fi
 python3 "$surface_dir/browser_sweep.py"
 
 # Generate the standalone HTTP CLI from the live server. Credentials live in
