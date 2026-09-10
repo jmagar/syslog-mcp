@@ -246,14 +246,29 @@ CONTRACTS = {
 }
 CONTRACTS = {key: (kind, set(fields.split())) for key, (kind, fields) in CONTRACTS.items()}
 
-# Admin routes that serialise on MAINTENANCE_PERMIT and may answer 409 while
-# another maintenance operation holds it.
+# Routes that serialise on MAINTENANCE_PERMIT. While another maintenance
+# operation (a sweep case or the server's own scheduled maintenance) holds it,
+# they answer with a documented contention outcome: 409 for the admin routes,
+# 503 `db maintenance already in progress` for the integrity routes.
 MAINTENANCE_SINGLE_FLIGHT = {
     "/api/db/vacuum",
     "/api/db/checkpoint",
+    "/api/db/integrity",
     "/api/db/integrity/background",
     "/api/sessions/prune-checkpoints",
 }
+MAINTENANCE_BUSY = "db maintenance already in progress"
+
+
+def maintenance_contended(status: int, payload: bytes) -> bool:
+    if status == 409:
+        return True
+    if status != 503:
+        return False
+    try:
+        return json.loads(payload).get("error") == MAINTENANCE_BUSY
+    except (UnicodeDecodeError, json.JSONDecodeError, AttributeError):
+        return False
 
 
 def semantic_postconditions(method: str, path: str, parsed: object, fixture_host: str,
@@ -458,14 +473,14 @@ def main() -> int:
             body = {"prompt": f"What emitted logs for {fixture_host}?", "host": fixture_host, "limit": 5}
         admin = admin_token if entry["auth"] == "admin" else None
         status, payload, headers = request(base, method, path, read_token, admin, body)
-        # The admin maintenance routes single-flight on MAINTENANCE_PERMIT and
-        # answer 409 on contention *by contract* (see the MAINTENANCE_PERMIT
-        # docs in src/api.rs). That is a documented outcome, not a contract
-        # violation, so a positive probe has to outlast contention rather than
-        # record it as a failure. Bounded: it must still reach 200.
-        if status == 409 and raw_path in MAINTENANCE_SINGLE_FLIGHT:
+        # The maintenance routes single-flight on MAINTENANCE_PERMIT and answer
+        # contention with a documented status (see MAINTENANCE_SINGLE_FLIGHT).
+        # That is a documented outcome, not a contract violation, so a
+        # positive probe has to outlast contention rather than record it as a
+        # failure. Bounded: it must still reach 200.
+        if raw_path in MAINTENANCE_SINGLE_FLIGHT and maintenance_contended(status, payload):
             deadline = time.monotonic() + 30
-            while status == 409 and time.monotonic() < deadline:
+            while maintenance_contended(status, payload) and time.monotonic() < deadline:
                 time.sleep(0.5)
                 status, payload, headers = request(base, method, path, read_token, admin, body)
         observed = evidence(status, payload, headers)

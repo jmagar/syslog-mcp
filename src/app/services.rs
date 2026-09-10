@@ -170,6 +170,10 @@ pub struct CortexService {
         Option<Arc<dyn Fn() -> anyhow::Result<Vec<String>> + Send + Sync + 'static>>,
     #[cfg(test)]
     integrity_test_spawn_failure: bool,
+    /// Runs on the integrity worker immediately before it records the job's
+    /// terminal state, so tests can observe what a poller would see then.
+    #[cfg(test)]
+    integrity_before_terminal_hook: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     acquire_timeout: Duration,
     /// OS-level adapter for journalctl / systemd shell-outs.
     pub(super) os: Arc<dyn OsAdapter + Send + Sync>,
@@ -217,6 +221,8 @@ impl CortexService {
             integrity_test_hook: None,
             #[cfg(test)]
             integrity_test_spawn_failure: false,
+            #[cfg(test)]
+            integrity_before_terminal_hook: None,
             acquire_timeout: DB_ACQUIRE_TIMEOUT,
             os: Arc::new(SystemOsAdapter),
             file_tail_registry: None,
@@ -250,6 +256,7 @@ impl CortexService {
             integrity_task_failed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             integrity_test_hook: None,
             integrity_test_spawn_failure: false,
+            integrity_before_terminal_hook: None,
             acquire_timeout: DB_ACQUIRE_TIMEOUT,
             os,
             file_tail_registry: None,
@@ -321,6 +328,15 @@ impl CortexService {
         hook: Arc<dyn Fn() -> anyhow::Result<Vec<String>> + Send + Sync + 'static>,
     ) -> Self {
         self.integrity_test_hook = Some(hook);
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_integrity_before_terminal_hook(
+        mut self,
+        hook: Arc<dyn Fn() + Send + Sync + 'static>,
+    ) -> Self {
+        self.integrity_before_terminal_hook = Some(hook);
         self
     }
 
