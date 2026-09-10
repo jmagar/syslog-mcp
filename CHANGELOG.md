@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.16.1](https://github.com/dinglebear-ai/cortex/compare/v3.16.0...v3.16.1) (2026-09-10)
+
+
+### Fixed
+
+* **api:** answer 404 for events on an unknown observatory run ([#236](https://github.com/dinglebear-ai/cortex/issues/236)) ([9ad4898](https://github.com/dinglebear-ai/cortex/commit/9ad489862d299452ce1a1969550df533785bfa55))
+* **api:** key the integration credential fingerprint with a server secret ([#235](https://github.com/dinglebear-ai/cortex/issues/235)) ([e8dab0e](https://github.com/dinglebear-ai/cortex/commit/e8dab0e31268a654ff8047ebd11952b8b0305396))
+* **ci:** restore main by scrubbing a private host identifier and resyncing the package README ([#230](https://github.com/dinglebear-ai/cortex/issues/230)) ([596f6c8](https://github.com/dinglebear-ai/cortex/commit/596f6c8ef3e588e468a52936b132e8bb5734f7d2))
+* **deploy:** report ssh's real error when a remote exits before reading its script ([#237](https://github.com/dinglebear-ai/cortex/issues/237)) ([c70a688](https://github.com/dinglebear-ai/cortex/commit/c70a6884bbcf45f5717d183558b764daf8700107))
+* **live:** stop depending on jq 1.7 exit status for multi-line select ([#241](https://github.com/dinglebear-ai/cortex/issues/241)) ([a3e93f3](https://github.com/dinglebear-ai/cortex/commit/a3e93f384392b1c14b2931c318e555225e651576))
+* **release:** keep nested harness lockfiles on the release version ([#232](https://github.com/dinglebear-ai/cortex/issues/232)) ([1b7bc05](https://github.com/dinglebear-ai/cortex/commit/1b7bc05a5acbb8a829b2954c94940d87dc3a3754))
+* **setup:** create the AI transcript roots sessionswatch install requires ([#233](https://github.com/dinglebear-ai/cortex/issues/233)) ([69bb27d](https://github.com/dinglebear-ai/cortex/commit/69bb27d6a043087c57f54d5ff1ba92b54cdbab08))
+
+
+### Changed
+
+* **agent:** stop re-hashing acknowledged transcript history every poll ([#229](https://github.com/dinglebear-ai/cortex/issues/229)) ([11c60ca](https://github.com/dinglebear-ai/cortex/commit/11c60ca63465ad31b035d51358bd9a7455ea1fa8))
+
 ## [3.16.0](https://github.com/dinglebear-ai/cortex/compare/v3.15.0...v3.16.0) (2026-09-10)
 
 
