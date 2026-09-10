@@ -14,25 +14,25 @@ prs: cortex#210, cortex#211, cortex#212
 
 ## User request
 
-Audit `~/workspace/cortex` on `dookie`, preserve and land all outstanding work on `main`, synchronize the MacBook checkout, remove obsolete branches and worktrees, review the merged changes with the Lavra and PR Review Toolkit workflows, and address every actionable finding. The user authorized bypassing unavailable CI when necessary.
+Audit `~/workspace/cortex` on the primary workstation, preserve and land all outstanding work on `main`, synchronize the MacBook checkout, remove obsolete branches and worktrees, review the merged changes with the Lavra and PR Review Toolkit workflows, and address every actionable finding. The user authorized bypassing unavailable CI when necessary.
 
 The final request used the deprecated `save-to-md` compatibility alias to create this coding-session record through the canonical `log-code-session` workflow.
 
 ## Session overview
 
-Outstanding Cortex work from the remote `dookie` workspace was consolidated, verified, and merged through PR #210. The synchronized result was then reviewed in two successive comprehensive review workflows. Findings were fixed through PRs #211 and #212.
+Outstanding Cortex work from the remote the primary workstation workspace was consolidated, verified, and merged through PR #210. The synchronized result was then reviewed in two successive comprehensive review workflows. Findings were fixed through PRs #211 and #212.
 
 Both `/Users/jmagar/workspace/cortex` and `/home/jmagar/workspace/cortex` ended with one clean `main` worktree at commit `63df9d6223d51db93a17ce05f6d1d32ef73b3066`. The Git remote ended with only the `main` branch.
 
 ## Sequence of events
 
-1. Audited the `dookie` repository with `vibin:repo-status`. The audit found 14 worktrees, 24 branches, one dirty shared GitHub Action file, active PR branches, and stale branches.
+1. Audited the the primary workstation repository with `vibin:repo-status`. The audit found 14 worktrees, 24 branches, one dirty shared GitHub Action file, active PR branches, and stale branches.
 2. Committed the dirty Kache action change as `5490be02` (`ci: pin Kache 0.15.1 in shared setup action`).
 3. Built a temporary consolidation branch from `origin/main`, merged the relevant active work, and resolved graph projector and heartbeat-agent conflicts.
 4. Fixed an adapter mismatch in `src/runtime.rs` during consolidation.
 5. Verified the consolidated branch with formatting, workspace checks, the library test suite, and the pre-push/clippy gates.
 6. Opened PR #210. Because repository protection required the unavailable `Repository Contract` check, temporarily removed that required check, merged the verified PR, restored the complete protection policy, and verified its settings.
-7. Closed superseded PRs #207, #208, and #209. Removed obsolete worktrees and branches on `dookie`.
+7. Closed superseded PRs #207, #208, and #209. Removed obsolete worktrees and branches on the primary workstation.
 8. Synchronized the MacBook checkout. Its dirty Kache file was byte-identical to the merged blob, so it was safely restored before fast-forwarding `main`.
 9. Ran `lavra:lavra-review` over the PR #210 range. The security pass found no actionable issue. Architecture, performance, and simplicity passes found five unique concurrency, serialization, test-maintainability, and classification issues.
 10. Fixed those findings and merged PR #211 as commit `143461ec`.
@@ -40,7 +40,7 @@ Both `/Users/jmagar/workspace/cortex` and `/home/jmagar/workspace/cortex` ended 
 12. The iterative review identified a critical flaw in the first admission-gate design: graph TEMP staging could block all writers or recreate a pool/write-lock cycle.
 13. Reworked graph staging to use an opaque dedicated SQLite connection outside r2d2, serialized persistent progress updates, improved timeout telemetry, added bounded concurrency tests, and verified pragma parity.
 14. Repeated review waves until code, tests, error handling, type design, comments, and simplification returned no actionable findings.
-15. Merged PR #212 as commit `63df9d62`, restored branch protection, synchronized `dookie`, and verified both machines and the remote branch inventory.
+15. Merged PR #212 as commit `63df9d62`, restored branch protection, synchronized the primary workstation, and verified both machines and the remote branch inventory.
 
 ## Key findings
 
@@ -170,7 +170,7 @@ After:
 | Final notification dispatcher group | 10 passed | Passed |
 | Final review waves | No actionable code, test, comment, error, type, or simplification findings | Passed |
 | MacBook repository state | Clean `main` at `63df9d62` | Passed |
-| `dookie` repository state | Clean `main` at `63df9d62` | Passed |
+| the primary workstation repository state | Clean `main` at `63df9d62` | Passed |
 | Remote branch inventory | Only `main` | Passed |
 | Restored branch protection | Required check and policy fields matched saved state | Passed |
 
