@@ -371,12 +371,11 @@ def main() -> int:
         tail = [replacements.get(item, item) for item in tail]
         if entry["spelling"] in {"setup sessionswatch check", "setup doctor", "doctor"}:
             (Path(os.environ["LIVE_RUN_TMP"]) / "systemctl-state" / "sessions-index-enabled").unlink(missing_ok=True)
-            # `doctor` reports a warning, and exits non-zero, for appdata this
-            # run's synthetic HOME has never had: .cortex/.env, the compose
-            # assets and the debug wrapper. `setup repair` is the idempotent
-            # command doctor's own warning text tells the operator to run, so
-            # establish that state first rather than assert a doctor that is
-            # correctly complaining about a half-built home.
+            # Doctor inspects managed appdata this run's synthetic HOME has
+            # never had: .cortex/.env, the compose assets and the debug
+            # wrapper. `setup repair` is the idempotent command doctor's own
+            # guidance names, so establish that state first and assert doctor
+            # against a set-up home rather than a half-built one.
             repair = run(binary_path, "setup repair", ["--json"], local_only=True)
             if repair["exit"] != 0:
                 raise RuntimeError(f"setup repair prerequisite failed: {repair.get('terminal', '')}")
