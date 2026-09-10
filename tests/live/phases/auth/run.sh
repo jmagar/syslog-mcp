@@ -58,7 +58,9 @@ auth_policy_execution_ledger() {
     jq -cn --arg id "$id" --arg kind "$kind" --arg auth "$auth" --argjson required "$required" --arg disposition "$disposition" --arg evidence "$evidence" --arg rationale "$rationale" \
       '{surface_id:$id,kind:$kind,auth:$auth,required_authorization:$required,disposition:$disposition,result:"pass",evidence:$evidence,rationale:$rationale}' >>"$output"
   done < <(jq -r '.entries[]|[.id,.kind,.auth,.required_authorization,.required_cases[0]]|@tsv' "$inventory")
-  jq -se --slurpfile inventory "$inventory" 'length==345 and ([.[].surface_id]|unique|length)==345 and all(.[];.result=="pass" and (.disposition=="executed" or .disposition=="contract-correct-n/a")) and ([.[].surface_id]|sort)==([$inventory[0].entries[].id]|sort)' "$output" >/dev/null
+  # Reconcile against the compiled SurfaceContract itself; a fixed count goes
+  # stale every time a surface is added.
+  jq -se --slurpfile inventory "$inventory" '($inventory[0].entries|length) as $n | length==$n and ([.[].surface_id]|unique|length)==$n and all(.[];.result=="pass" and (.disposition=="executed" or .disposition=="contract-correct-n/a")) and ([.[].surface_id]|sort)==([$inventory[0].entries[].id]|sort)' "$output" >/dev/null
 }
 
 # Emit the aggregate ledger only from raw, route-specific first attempts.  The
@@ -280,7 +282,8 @@ auth_phase_run() {
 
   auth_policy_execution_ledger
 
-  jq -cn '{schema:"cortex-live-auth-result-v1",static_read:true,static_admin:true,token_separation:true,oauth_metadata:true,jwks_persisted:true,oauth_pre_restart_token_survived:true,oauth_negative_classes:7,machine_ingest_denials:7,trusted_gateway:true,untrusted_gateway_refused:true,unsafe_startup_refused:true,release_fake_switch_absent:true,oauth_secrets_destroyed:true,policy_entries_reconciled:345}' >"$dir/result.json"
+  jq -cn --argjson machine "$(jq -s length "$dir/oauth-machine-ingest-ledger.jsonl")" --argjson reconciled "$(jq -s length "$LIVE_RUN_ROOT/artifacts/auth-policy-execution-ledger.jsonl")" \
+    '{schema:"cortex-live-auth-result-v1",static_read:true,static_admin:true,token_separation:true,oauth_metadata:true,jwks_persisted:true,oauth_pre_restart_token_survived:true,oauth_negative_classes:7,machine_ingest_denials:$machine,trusted_gateway:true,untrusted_gateway_refused:true,unsafe_startup_refused:true,release_fake_switch_absent:true,oauth_secrets_destroyed:true,policy_entries_reconciled:$reconciled}' >"$dir/result.json"
   live_terminal_disposition auth.policy-table pass artifacts/auth-policy-ledger.json
   live_terminal_disposition auth.live-matrix pass artifacts/auth/result.json
   live_terminal_disposition auth pass artifacts/auth/result.json
