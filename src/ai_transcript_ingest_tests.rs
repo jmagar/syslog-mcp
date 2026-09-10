@@ -143,42 +143,6 @@ async fn forwarded_codex_skill_is_available_to_reflection_queries() {
 }
 
 #[tokio::test]
-async fn forwarded_codex_skill_is_available_to_reflection_queries() {
-    let (app, dir) = test_app(Some("secret"));
-    let mut record = sample_record();
-    record["ai_tool"] = json!("codex");
-    record["message"] = json!("<skill><name>cortex:skill-improvement-assessment</name></skill>");
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/ai-transcripts")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::AUTHORIZATION, "Bearer secret")
-                .body(Body::from(json!({"records": [record]}).to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let conn = rusqlite::Connection::open(dir.path().join("ai-transcript-ingest-test.db")).unwrap();
-    let events: i64 = conn
-        .query_row(
-            "SELECT count(*) FROM ai_skill_events s JOIN logs l ON l.id = s.log_id
-         WHERE s.skill_name = 'cortex:skill-improvement-assessment'
-           AND s.ai_tool = 'codex' AND s.ai_session_id = 'sess-1'
-           AND s.hostname = 'devhost' AND s.timestamp = l.timestamp",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(
-        events, 1,
-        "remote skill evidence must retain its source log and session"
-    );
-}
-
-#[tokio::test]
 async fn rejects_missing_bearer_token() {
     let (app, _dir) = test_app(Some("secret"));
     let response = app

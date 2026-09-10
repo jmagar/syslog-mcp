@@ -55,7 +55,7 @@ durable resumable SSE is owned by the separate streaming delivery slice.
 
 The runtime now exposes authenticated `GET /api/capabilities`,
 `GET /api/sessions/rendered`, `GET /api/streams/logs`,
-`GET /api/streams/sessions`, and `GET /api/streams/evidence`. Rendered session pages normalize semantic event
+and `GET /api/streams/sessions`. Rendered session pages normalize semantic event
 kinds, redaction annotations, and parse warnings over a durable ascending
 `logs.id` cursor. Polls are bounded to 200 events and 256 KiB with an explicit
 2-second retry hint. Native log and session streams use principal- and

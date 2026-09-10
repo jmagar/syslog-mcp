@@ -384,7 +384,7 @@ pub(super) const ACTION_SPECS: &[ActionSpec] = &[
     action_spec!(
         "evidence_scope",
         Read,
-        "Historical Agent Observatory evidence for one Git branch or worktree; use /api/streams/evidence to follow new matches",
+        "Historical Agent Observatory evidence for one Git branch or worktree",
         Moderate,
         EvidenceScope,
         exact: {

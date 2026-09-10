@@ -476,7 +476,7 @@ Cortex exposes one MCP tool named `cortex`. Its required `action` field selects 
 
 The current scope split is:
 
-- 52 read actions requiring `cortex:read`
+- 53 read actions requiring `cortex:read`
 - 6 admin actions requiring `cortex:admin`: `artifact_evidence_record`, `ack_error`, `unack_error`, `file_tails`, `notifications_test`, and `llm_invocations`
 - 1 informational action, `help`, which requires an authenticated context when authentication is mounted but no read/admin scope
 

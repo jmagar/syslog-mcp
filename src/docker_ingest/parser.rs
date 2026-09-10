@@ -331,7 +331,7 @@ fn extract_keyed_level(message: &str, key: &str) -> Option<&'static str> {
 fn normalize_level(level: &str) -> Option<&'static str> {
     match level.to_ascii_lowercase().as_str() {
         "trace" | "debug" => Some("debug"),
-        "info" | "information" | "log" => Some("info"),
+        "info" | "information" => Some("info"),
         "notice" => Some("notice"),
         "warn" | "warning" => Some("warning"),
         "error" | "err" => Some("err"),

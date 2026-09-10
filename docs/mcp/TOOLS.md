@@ -193,10 +193,8 @@ ownership. At least one of `branch` or `worktree` is required. Use `after_id` fo
 the response includes `minimum_watermark`, `high_watermark`, and `next_after`.
 Optional `kinds`, `since`, `until`, `limit`, and `include_payload` filters apply.
 
-For historical plus live follow, connect to authenticated
-`GET /api/streams/evidence` with the same scope. The SSE stream emits a snapshot
-boundary, historical `evidence` events, new matching events as Cortex projects
-them, opaque resumable event IDs, and explicit gap/truncation control events.
+There is no live evidence stream yet; poll `evidence_scope` with the
+`next_after` cursor to pick up newly projected matches.
 
 ## cortex abuse
 

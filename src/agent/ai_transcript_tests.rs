@@ -35,8 +35,6 @@ async fn skill_read_recovery_uses_stable_receipts_without_rewinding_live_checkpo
     assert!(!body.contains("/skills/limetech-ai-review"));
 }
 use std::io::Write;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn write_file(path: &Path, content: &str) {
     let mut file = fs::File::create(path).unwrap();

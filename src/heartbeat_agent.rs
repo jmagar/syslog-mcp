@@ -176,8 +176,8 @@ impl HeartbeatAgentConfig {
             .map(|spec| crate::agent::syslog_file::parse_file_tails(&spec))
             .unwrap_or_default();
         let syslog_target = get("CORTEX_SYSLOG_TARGET");
-        let explicit_syslog_forward_target = get("CORTEX_AGENT_SYSLOG_FORWARD_TARGET")
-            .filter(|value| !value.trim().is_empty());
+        let explicit_syslog_forward_target =
+            get("CORTEX_AGENT_SYSLOG_FORWARD_TARGET").filter(|value| !value.trim().is_empty());
         let syslog_forward_target = if explicit_syslog_forward_target.is_some() {
             explicit_syslog_forward_target
         } else if syslog_target.is_some() {

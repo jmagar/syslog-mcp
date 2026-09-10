@@ -1010,10 +1010,7 @@ exit 0
     assert_eq!(phase.name, "compose-up");
     assert_eq!(phase.detail, "compose ok");
     let logged = std::fs::read_to_string(log).unwrap();
-    assert!(logged.contains(&format!(
-        "cwd={}",
-        compose_dir.canonicalize().unwrap().display()
-    )));
+    assert!(logged.contains(&format!("cwd={}", compose_dir.display())));
     assert!(logged.contains(&format!("--env-file {}", env_path.display())));
     assert!(logged.contains(&format!(
         "-f {}",
