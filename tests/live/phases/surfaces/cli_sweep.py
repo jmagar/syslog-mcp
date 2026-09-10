@@ -73,6 +73,9 @@ def run(binary: str, spelling: str, tail: list[str], authenticated: bool = True,
                                       "CORTEX_PORT": str(isolated_port),
                                       "CORTEX_RECEIVER_PORT": str(isolated_port + 1000),
                                       "LIVE_DOCKER_BIN": os.environ["LIVE_DOCKER_BIN"],
+                                      # The Docker fixtures report the candidate's version from this
+                                      # contract; the explicit env would otherwise drop it.
+                                      "LIVE_CANDIDATE_VERSION": os.environ["LIVE_CANDIDATE_VERSION"],
                                       "LIVE_DOCKER_COMPOSE_BIN": os.environ["LIVE_DOCKER_COMPOSE_BIN"],
                                       "LIVE_DOCKER_TRACE": os.path.join(os.environ["LIVE_RUN_TMP"], "docker-child-trace.log"),
                                       "CORTEX_COMPOSE_PROGRAM": os.environ["CORTEX_COMPOSE_PROGRAM"],
@@ -90,6 +93,7 @@ def run_long_lived(binary: str, spelling: str) -> dict:
     command_key = hashlib.sha256(spelling.encode()).hexdigest()[:12]
     port = 41000 + int(command_key[:3], 16) % 1000
     env = {"PATH": os.environ.get("PATH", ""), "HOME": os.environ["LIVE_RUN_HOME"],
+           "LIVE_CANDIDATE_VERSION": os.environ["LIVE_CANDIDATE_VERSION"],
            "TMPDIR": os.environ["LIVE_RUN_TMP"], "CORTEX_URL": os.environ["LIVE_CORTEX_URL"],
            "CORTEX_API_TOKEN": os.environ["LIVE_API_TOKEN"], "CORTEX_API_ADMIN_TOKEN": os.environ["LIVE_ADMIN_TOKEN"],
            "CORTEX_TOKEN": os.environ["LIVE_CORTEX_TOKEN"],
