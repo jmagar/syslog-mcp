@@ -32,7 +32,11 @@ cargo xtask check-release-versions
 ```
 
 Version-bearing files are declared in `release/components.toml`: `Cargo.toml`
-(canonical), `Cargo.lock`, `server.json` (version + `cortex:vX.Y.Z` image tag),
+(canonical), `xtask/Cargo.toml`, `Cargo.lock` (`cortex` and `xtask` entries),
+the nested harness lockfiles `tests/live/surface-exporter/Cargo.lock` and
+`tests/live/services/oauth/Cargo.lock` (`cortex` entry), `server.json`
+(version fields, `cortex:vX.Y.Z` image tag, and npm package reference),
+`packages/cortex-rmcp/package.json` (`version` + `binaryVersion`),
 `mcpb/manifest.json`, `docker-compose.prod.yml` (`${CORTEX_VERSION:-X.Y.Z}`),
 and `CHANGELOG.md`. Plugin manifests are intentionally unversioned —
 `check-version-sync` rejects a top-level `version` key in
