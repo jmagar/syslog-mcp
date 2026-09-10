@@ -8,6 +8,8 @@ export COMPOSE_ASSUME_YES=true COMPOSE_MENU=false
 LIVE_PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"; export LIVE_PROJECT_ROOT
 # shellcheck disable=SC1090
 for lib in common lock redact events command lease resources report artifacts contracts budgets wait diagnostics docker platform; do source "$LIVE_PROJECT_ROOT/tests/live/lib/$lib.sh"; done
+live_require_modern_bash || exit 64
+live_install_err_trap
 # shellcheck disable=SC1091
 source "$LIVE_PROJECT_ROOT/tests/live/phases/ingest/run.sh"
 # shellcheck disable=SC1091
@@ -54,7 +56,13 @@ live_runner_cleanup() {
     current_docker_id="$(docker info --format '{{.ID}}' 2>/dev/null || true)"
     [[ "docker-host:$current_docker_id" == "$cleanup_provider" ]] || cleanup_provider="docker-host:identity-mismatch"
   fi
-  live_cleanup_resources "$cleanup_provider" >/dev/null 2>&1 || status=$?
+  # Keep cleanup quiet when it succeeds, but never discard why it failed: this
+  # is the last thing a run does, so a silent failure here is a bare exit.
+  cleanup_output="$(live_cleanup_resources "$cleanup_provider" 2>&1)" || {
+    status=$?
+    printf 'live-e2e: run cleanup failed for provider %s (status %s)\n' "$cleanup_provider" "$status" >&2
+    printf '%s\n' "$cleanup_output" | tail -n 20 >&2 || true
+  }
   exit "$status"
 }
 trap live_runner_cleanup HUP INT TERM EXIT
