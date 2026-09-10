@@ -24,7 +24,8 @@ The "data directory" is the **parent directory of `[storage].db_path`**. With th
 ├── auth.db                       # OAuth state (only when auth.mode = oauth)  — SECRET
 ├── auth.db-wal                   # WAL sidecar for auth.db — transient
 ├── auth.db-shm                   # shared-memory sidecar for auth.db — transient
-└── auth-jwt.pem                  # JWT signing private key (PEM)  — SECRET
+├── auth-jwt.pem                  # JWT signing private key (PEM)  — SECRET
+└── integration-credential.key    # HMAC key for auth.credential_generation  — SECRET
 ```
 
 **No log files live here.** All ingested log records are stored *inside* `cortex.db`. The data dir contains only the DB and auth state; this is a deliberate property of the design so a single mount is the entire backup surface.
@@ -51,6 +52,7 @@ These are agent-side files; the server data dir does **not** contain them.
 | `<DATA_DIR>/auth.db` | lab-auth via SQLx | **`0600` enforced** (`src/runtime.rs::enforce_restrictive_permissions`) | runtime UID | **SECRET** | Contains issued OAuth tokens / sessions. Created only when `auth.mode = oauth`. |
 | `<DATA_DIR>/auth.db-wal`, `auth.db-shm` | lab-auth | inherited | runtime UID | **SECRET (transient)** | Same as syslog WAL/SHM. |
 | `<DATA_DIR>/auth-jwt.pem` | lab-auth | **`0600` enforced** | runtime UID | **SECRET — most sensitive file** | JWT signing private key. Losing this invalidates all issued tokens. Compromising this lets an attacker forge tokens. |
+| `<DATA_DIR>/integration-credential.key` | server (`src/api/credential_generation.rs`) | **`0600` enforced** (created `0600`; tightened on load) | runtime UID | **SECRET** | 32 random bytes (hex). Keys the HMAC-SHA256 that publishes `auth.credential_generation` in the integration profile, so the value cannot be brute-forced from the API token alone. Created on first start with `CORTEX_API_TOKEN` set; symlinks refused; a corrupt file fails startup instead of regenerating. Back it up with `cortex.db`. |
 | `~/.cortex/.env` (on the operator account, not under DATA_DIR) | `cortex setup` | `0600` written by setup | operator user | **SECRET** (contains tokens, OAuth secret) | Read by `src/config.rs::load_setup_env_file`. Refused if it is a symlink. |
 | `~/.cortex/config.toml` | operator-edited | `0600` recommended | operator user | mixed | Layered before env per config-schema §2. |
 | Agent host: `~/.config/cortex/agent-token` | agent binary | **`0600`** | agent UID | **SECRET** | Long-lived bearer-equivalent. Replace immediately after `cortex agent rotate`. |
@@ -148,6 +150,7 @@ Include the `-wal` and `-shm` sidecars when offline — together they form one c
 | `auth.db` | **No** (active sessions held) | **Yes** | All OAuth sessions invalidated. Users must re-authenticate via Google; refresh tokens stop working. |
 | `auth.db-wal` / `auth.db-shm` | **No** | **Yes** | Same WAL/SHM rules as syslog. |
 | `auth-jwt.pem` | **No** (signing key in active use) | **Yes (regenerates on start)** | Catastrophic: **all** issued OAuth access tokens AND refresh tokens become unverifiable. Forces every user to re-authenticate. lab-auth regenerates a new key on next start. |
+| `integration-credential.key` | **No** (profile already published from it) | **Yes (regenerates on start)** | `auth.credential_generation` changes once, so every pinned integration must re-trust. The API token itself is unaffected. |
 | `agent-token` (agent host) | **No** | rotates instead | Forces re-enrollment with `cortex agent enroll <token>`. |
 | `agent-buffer.redb` (agent host) | tolerated; agent recreates | safe | Loses any logs buffered locally during a server outage that hadn't yet been replayed. |
 

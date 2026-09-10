@@ -52,6 +52,7 @@ use crate::db::agent_observatory as observatory;
 use crate::mcp::{AuthPolicy, build_auth_layer};
 use crate::surfaces::{get, post};
 
+mod credential_generation;
 mod investigation;
 
 /// Crate version cached at compile time (CARGO_PKG_VERSION).
@@ -469,10 +470,7 @@ pub fn resolved_integration_profile(
         format!("cortex_{:x}", Sha256::digest(seed.as_bytes()))
     };
     let public_url = config.mcp.auth.public_url.clone();
-    let token_generation = config.api.api_token.as_deref().map_or_else(
-        || "none".to_string(),
-        |token| format!("{:x}", Sha256::digest(token.as_bytes()))[..16].to_string(),
-    );
+    let token_generation = credential_generation::resolve(config)?;
     let modes = if config.mcp.auth.mode == crate::config::AuthMode::OAuth {
         serde_json::json!(["static_bearer", "oauth2"])
     } else {
