@@ -111,7 +111,7 @@ cortex db backup --output /path/to/backup.db
 ```
 
 `scripts/backup.sh` performs a WAL-safe checkpoint and SQLite `.backup` from
-the host and also captures `auth.db` / `auth-jwt.pem` when present. For
+the host and also captures `auth.db` / `auth-jwt.pem` / `integration-credential.key` when present. For
 scheduled backups, see "Automated backups (systemd timer)" below.
 
 ## Heavy SQLite Migration Upgrade
@@ -180,12 +180,14 @@ docker run --rm \
   'cp /backups/syslog-<timestamp>.db /data/cortex.db && \
    test ! -f /backups/auth-<timestamp>.db || cp /backups/auth-<timestamp>.db /data/auth.db; \
    test ! -f /backups/auth-jwt-<timestamp>.pem || cp /backups/auth-jwt-<timestamp>.pem /data/auth-jwt.pem; \
+   test ! -f /backups/integration-credential-<timestamp>.key || cp /backups/integration-credential-<timestamp>.key /data/integration-credential.key; \
    rm -f /data/cortex.db-wal /data/cortex.db-shm /data/auth.db-wal /data/auth.db-shm'
 
 # 2b. Bind-mounted /data: copy directly to the configured host directory.
 cp /path/to/backups/syslog-<timestamp>.db /absolute/data/path/cortex.db
 cp /path/to/backups/auth-<timestamp>.db /absolute/data/path/auth.db
 cp /path/to/backups/auth-jwt-<timestamp>.pem /absolute/data/path/auth-jwt.pem
+cp /path/to/backups/integration-credential-<timestamp>.key /absolute/data/path/integration-credential.key
 rm -f /absolute/data/path/cortex.db-wal /absolute/data/path/cortex.db-shm
 
 # 3. Fix bind-mount ownership. The container runs as a non-root UID (1000 by
@@ -193,7 +195,8 @@ rm -f /absolute/data/path/cortex.db-wal /absolute/data/path/cortex.db-shm
 #    done as root or your login user leaves files the container cannot open.
 docker run --rm -v "${CORTEX_VOLUME_NAME:-cortex-data}:/data" debian:bookworm-slim \
   chown 1000:1000 /data/cortex.db
-#    (also restore + chown auth.db / auth-jwt.pem if you backed them up)
+#    (also restore + chown auth.db / auth-jwt.pem / integration-credential.key
+#    if you backed them up)
 
 # 4. Verify integrity before starting (direct SQLite — the HTTP API is down).
 ( unset CORTEX_USE_HTTP; cortex db integrity )   # PRAGMA integrity_check

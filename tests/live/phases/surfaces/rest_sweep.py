@@ -291,18 +291,19 @@ def semantic_postconditions(method: str, path: str, parsed: object, fixture_host
         checks.append(("ok:true", parsed.get("ok") is True))
     elif route in {"GET /api/agent-observatory/runs/{run_key}/events",
                    "GET /api/agent-runs/{run_key}/events"}:
-        # The run key was resolved from a projected run, so an empty page here
-        # would mean the endpoint answered about a different run than the one
-        # requested — which is exactly what the literal `{run_key}` template
-        # used to hide behind a well-formed empty envelope.
+        # The run key was resolved from a projected run (see RESOURCES below).
+        # An unknown run answers `404 run_not_found`, so a 200 page already
+        # proves the run resolved; still assert the page names the requested
+        # run and carries its projected events, since a known run with zero
+        # events answers a well-formed empty page.
         checks.append(("run_key:requested", parsed.get("run_key") == run_key))
         checks.append(("events:projected", bool(parsed.get("events"))))
     elif route in {"GET /api/agent-observatory/runs/{run_key}/telemetry",
                    "GET /api/agent-runs/{run_key}/telemetry"}:
-        # This endpoint answers 404 for an unknown run, unlike its `events`
-        # sibling, so reaching a two-page body is itself proof that the run
-        # resolved. Assert the pair and both page envelopes: the array shape
-        # carries no top-level keys for the generic contract to require.
+        # Like its `events` sibling, this endpoint answers `404 run_not_found`
+        # for an unknown run, so reaching a two-page body is itself proof that
+        # the run resolved. Assert the pair and both page envelopes: the array
+        # shape carries no top-level keys for the generic contract to require.
         pages = parsed if isinstance(parsed, list) else []
         checks.append(("telemetry:span_and_metric_pages", len(pages) == 2))
         checks.append(("telemetry:page_envelopes", bool(pages) and all(

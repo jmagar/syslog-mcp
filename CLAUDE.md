@@ -422,7 +422,7 @@ bd close <id>         # Complete work
 
 ## Version Bumping
 
-**Versioning is driven by [release-please](https://github.com/googleapis/release-please), not by hand.** Feature branches do NOT need to bump the version — just use a [Conventional Commits](https://www.conventionalcommits.org/) prefix. On every green `CI` run on `main`, `release-please.yml` opens/updates a single release PR that bumps `Cargo.toml`/`Cargo.lock` (native `release-type: rust`) and the `server.json`/`mcpb/manifest.json` `"version"` fields (`extra-files` in `release-please-config.json`), and writes a `CHANGELOG.md` entry from the commits since the last release. A `release-pr-fixup` job then runs `cargo xtask sync-version` on that PR branch to patch the two files release-please's schema can't reach directly — server.json's `cortex:vX.Y.Z` image tag and `docker-compose.prod.yml`'s `CORTEX_VERSION:-X.Y.Z` default — and `cargo xtask check-release-versions` to verify everything agrees before pushing a follow-up fixup commit.
+**Versioning is driven by [release-please](https://github.com/googleapis/release-please), not by hand.** Feature branches do NOT need to bump the version — just use a [Conventional Commits](https://www.conventionalcommits.org/) prefix. On every green `CI` run on `main`, `release-please.yml` opens/updates a single release PR that bumps `Cargo.toml`/`Cargo.lock` (native `release-type: rust`) and the `server.json`/`mcpb/manifest.json` `"version"` fields (`extra-files` in `release-please-config.json`), and writes a `CHANGELOG.md` entry from the commits since the last release. A `release-pr-fixup` job then runs `cargo xtask sync-version` on that PR branch to sync every carrier release-please's schema can't reach directly — the `regex_version` patterns (e.g. server.json's `cortex:vX.Y.Z` image tag and `docker-compose.prod.yml`'s `CORTEX_VERSION:-X.Y.Z` default), the other server.json JSON pointers, and the nested harness lockfiles under `tests/live/` — and `cargo xtask check-release-versions` to verify everything agrees before pushing a follow-up fixup commit.
 
 Merging the release PR creates the `vX.Y.Z` tag and a GitHub Release, which triggers `release.yml` to build and publish the Linux/Windows archives.
 
@@ -443,8 +443,11 @@ cargo xtask pre-push                         # local pre-push gate (see xtask/sr
 
 **Version-bearing files (declared in `release/components.toml`):**
 - `Cargo.toml` — `version = "X.Y.Z"` in `[package]` (canonical source; release-please native)
-- `Cargo.lock` — the `cortex` package entry (release-please native)
-- `server.json` — MCP Registry `"version"` (release-please `extra-files`) plus the `cortex:vX.Y.Z` image tag (`cargo xtask sync-version` fixup)
+- `xtask/Cargo.toml` — the `xtask` `[package]` version (release-please native)
+- `Cargo.lock` — the `cortex` and `xtask` package entries (release-please native)
+- `tests/live/surface-exporter/Cargo.lock`, `tests/live/services/oauth/Cargo.lock` — the `cortex` package entry; these harness crates depend on cortex by path (`cargo xtask sync-version` fixup)
+- `server.json` — MCP Registry `"version"` (release-please `extra-files`) plus `/packages/0/version`, the publisher `buildInfo` version, the `cortex:vX.Y.Z` image tag, the `@dinglebear/cortex@X.Y.Z` reference, and the `"placeholder": "vX.Y.Z"` value (`cargo xtask sync-version` fixup)
+- `packages/cortex-rmcp/package.json` — `"version"` and `"binaryVersion"` (release-please `extra-files`)
 - `mcpb/manifest.json` — MCP Bundle `"version"` (release-please `extra-files`)
 - `docker-compose.prod.yml` — `${CORTEX_VERSION:-X.Y.Z}` default image tag (`cargo xtask sync-version` fixup)
 - `CHANGELOG.md` — new entry under the bumped version (release-please native)

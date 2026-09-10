@@ -66,7 +66,7 @@ pub use read::{
     ObservatoryWorktreeRow, RepositoryQuery, RunTelemetryIdentity, TelemetryQuery,
     list_observatory_events, list_observatory_metrics, list_observatory_repositories,
     list_observatory_runs, list_observatory_spans, list_observatory_worktrees,
-    scoped_evidence_events,
+    resolve_observatory_run, scoped_evidence_events,
 };
 
 use crate::db::pool::DbPool;
