@@ -41,7 +41,10 @@ live_wait_until 120 cleanup-failure-recovery _cleanup_recovered
 # Refill once more and restart as soon as the one-row cleanup loop begins. The
 # replacement must resume cleanup, preserve the newest marker, and remain sound.
 marker="cleanup-interrupt-${LIVE_RUN_ID#cortex-e2e-}"; { cat "$fixture"; cat "$fixture"; printf '<134>1 %s cortex-live cleanup - - - %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$marker"; } | nc -w 30 127.0.0.1 "$LIVE_SYSLOG_TCP_PORT"; live_connection_opened 1
-live_wait_until 30 cleanup-interrupt-marker _live_ingest_ready "$marker"
+# The marker lands behind two copies of the pressure fixture while one-row
+# cleanup trims under the storage budget; give it the same bound as the
+# recovery wait above, not a 30 s window hosted runners cannot meet.
+live_wait_until 120 cleanup-interrupt-marker _live_ingest_ready "$marker"
 _cleanup_started() { docker logs "$candidate" 2>&1 | grep -F 'self-trimming oldest telemetry chunk' >/dev/null; }
 live_wait_until 30 cleanup-started _cleanup_started
 docker compose -f "$base" -f "$override" -p "$LIVE_COMPOSE_PROJECT" restart candidate >/dev/null

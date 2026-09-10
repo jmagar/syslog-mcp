@@ -177,14 +177,15 @@ auth_oauth_live_service() {
   done
   # Every machine-ingest route rejects a user OAuth token before payload parsing.
   : >"$dir/oauth-machine-ingest-ledger.jsonl"
-  for path in /v1/logs /v1/metrics /v1/traces /v1/heartbeats /v1/agent-commands /v1/ai-transcripts /v1/shell-history /v1/syslog-forward /v1/file-tails; do
+  local machine_routes=(/v1/logs /v1/metrics /v1/traces /v1/heartbeats /v1/agent-commands /v1/ai-transcripts /v1/shell-history /v1/syslog-forward /v1/file-tails)
+  for path in "${machine_routes[@]}"; do
     # Populated by the OAuth token fixture above.
     # shellcheck disable=SC2154
     code="$(curl -sS --max-time 15 -o "$dir/oauth-machine-$(printf '%s' "$path" | tr '/' '-').json" -w '%{http_code}' -H 'Host: localhost:3100' -H "Authorization: Bearer $OAUTH_read" -H 'Content-Type: application/json' --data-binary '{}' "http://127.0.0.1:$port$path")"
     [[ "$code" == 401 ]] || { live_die "user OAuth token on machine-ingest $path answered HTTP $code, expected 401"; return 1; }
     jq -cn --arg path "$path" --arg evidence "artifacts/auth/oauth-machine-$(printf '%s' "$path" | tr '/' '-').json" '{path:$path,result:"denied",status:401,evidence:$evidence}' >>"$dir/oauth-machine-ingest-ledger.jsonl"
   done
-  jq -se 'length==7 and ([.[].path]|unique|length)==7 and all(.[];.status==401)' "$dir/oauth-machine-ingest-ledger.jsonl" >/dev/null
+  jq -se --argjson n "${#machine_routes[@]}" 'length==$n and ([.[].path]|unique|length)==$n and all(.[];.status==401)' "$dir/oauth-machine-ingest-ledger.jsonl" >/dev/null
   kill -TERM "$pid"; wait "$pid" 2>/dev/null || true
   local last; last="$(jq -sr --arg key "$key" '[.[]|select(.key==$key)]|last' "$LIVE_RUN_ROOT/resources.jsonl")"
   live_resource_transition "$key" process CLEANING "$LIVE_RESOURCE_PROVIDER" "$pid" "$(jq -c .cleanup_argv <<<$last)" "$digest" "$labels" "$verify"
