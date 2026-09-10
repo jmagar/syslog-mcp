@@ -13,6 +13,9 @@ workers="${LIVE_CONCURRENCY_LIVE_WORKERS:-4}"; each="${LIVE_CONCURRENCY_LIVE_ITE
 [[ "$workers" =~ ^[1-8]$ && "$each" =~ ^[1-9][0-9]*$ && "$each" -le 200 ]] || { echo 'unsafe concurrency bounds' >&2; exit 2; }
 prefix="conc-${LIVE_RUN_ID#cortex-e2e-}"; candidate="$(live_ingest_candidate_id)"; pids=(); query_pids=()
 for n in $(seq 1 "$workers"); do python3 "$root/tests/live/phases/concurrency/producer.py" --port "${LIVE_SYSLOG_TCP_PORT:?}" --prefix "$prefix-w$n" --count "$each" >"$out/producer-$n.json" & pids+=("$!"); done
+# Receipt-backed records travel through the same restart. Only these carry a
+# server acknowledgement, so only these are held to zero loss after accept.
+python3 "$root/tests/live/phases/concurrency/forward_producer.py" --port "${LIVE_HTTP_PORT:?}" --token "$LIVE_CORTEX_TOKEN" --prefix "$prefix-f" --count "$each" >"$out/forward-producer.json" & pids+=("$!")
 # Queries and WAL-safe maintenance contend with writers. Every response is retained.
 for n in 1 2 3 4; do
   curl -sS --max-time 10 -H 'Host: localhost' -H "Authorization: Bearer $LIVE_CORTEX_TOKEN" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
@@ -36,8 +39,20 @@ persisted="$(jq --arg prefix "$prefix-w" '[.result.structuredContent.logs[]?|sel
 loss=$((accepted-persisted)); (( loss >= 0 )) || loss=0
 jq -cn --argjson offered "$offered" --argjson accepted "$accepted" --argjson rejected "$rejected" --argjson persisted "$persisted" --argjson loss "$loss" --argjson duplicates "$duplicates" --argjson worker_status "$status" --argjson maintenance_status "$maintenance_status" \
   '{schema:"cortex-live-direct-concurrency-v1",offered:$offered,accepted:$accepted,rejected:$rejected,persisted:$persisted,lost_after_accept:$loss,duplicates:$duplicates,retries:0,lock_contention_exercised:true,cas_restart_generation:1,worker_failure:$worker_status,maintenance_failure:$maintenance_status,accounted:($persisted+$rejected+$loss),bounds:{workers:8,items_per_worker:200}}' >"$out/accounting.json"
-jq -e '.offered==.accepted+.rejected and .accepted==.persisted and .lost_after_accept==0 and .accounted==.offered and .duplicates==0 and .worker_failure==0 and .maintenance_failure==0 and .cas_restart_generation==1' "$out/accounting.json" >/dev/null || {
+# Plain syslog over TCP has no application acknowledgement: "accepted" only
+# means toxiproxy's socket took the bytes, and whatever it still held when the
+# candidate restarted is gone. Hold it to what the transport can promise: every
+# record accounted for, none stored twice, never more stored than sent.
+jq -e '.offered==.accepted+.rejected and .persisted<=.accepted and .accounted==.offered and .duplicates==0 and .worker_failure==0 and .maintenance_failure==0 and .cas_restart_generation==1' "$out/accounting.json" >/dev/null || {
   echo "live-e2e: direct concurrency accounting did not balance: $(jq -c . "$out/accounting.json")" >&2; exit 1; }
+# Receipted records must each be stored exactly once, restart or not.
+jq -n --slurpfile fp "$out/forward-producer.json" --slurpfile search "$out/search.json" --arg prefix "$prefix-f" '
+  ([$search[0].result.structuredContent.logs[]?|select(.message|contains($prefix))|.message]) as $stored |
+  {schema:"cortex-live-direct-concurrency-forward-v1",accepted:$fp[0].accepted,rejected:$fp[0].rejected,
+   persisted_of_accepted:([$fp[0].sent[] as $m | select(any($stored[]; contains($m)))]|length),
+   duplicates:(($stored|length)-($stored|unique|length))}' >"$out/forward.json"
+jq -e '.accepted>0 and .persisted_of_accepted==.accepted and .duplicates==0' "$out/forward.json" >/dev/null || {
+  echo "live-e2e: receipt-backed records were not all stored exactly once: $(jq -c . "$out/forward.json")" >&2; exit 1; }
 jq -e '.accepted==1' "$out/recovery-producer.json" >/dev/null
 # Cancellation is a separate observed attempt; its partial accounting remains
 # evidence and cannot be overwritten by a retry.
