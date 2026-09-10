@@ -44,7 +44,22 @@ marker="cleanup-interrupt-${LIVE_RUN_ID#cortex-e2e-}"; { cat "$fixture"; cat "$f
 # The marker lands behind two copies of the pressure fixture while one-row
 # cleanup trims under the storage budget; give it the same bound as the
 # recovery wait above, not a 30 s window hosted runners cannot meet.
-live_wait_until 120 cleanup-interrupt-marker _live_ingest_ready "$marker"
+# On timeout, say whether the marker was never stored, stored but not
+# searchable, or trimmed away, instead of only naming the wait.
+_cleanup_diagnose() {
+  echo "live-e2e: cleanup-faults diagnostics for $marker:" >&2
+  docker compose -f "$base" -f "$override" -p "$LIVE_COMPOSE_PROJECT" exec -T -e RUST_LOG=error candidate cortex db status --json 2>&1 | jq -c '{logical_size_bytes}' >&2 || true
+  docker run --rm --user 0:0 -v "$state:/data" --entrypoint python "$LIVE_ORACLE_IMAGE" -c '
+import sqlite3,sys
+db=sqlite3.connect("/data/cortex.db",timeout=10); m=sys.argv[1]
+print("logs(count,min_id,max_id,max_received_at):", db.execute("select count(*),min(id),max(id),max(received_at) from logs").fetchone())
+print("marker rows:", db.execute("select count(*) from logs where message like ?", ("%"+m+"%",)).fetchone()[0])
+print("fixture rows:", db.execute("select count(*) from logs where message like ?", ("db-size-%",)).fetchone()[0])
+' "$marker" >&2 || true
+  docker logs "$candidate" 2>&1 | grep -E 'Storage budget|retaining batch|writes resumed|Self-trim halted|ERROR|WARN' | grep -v 'self-trimming oldest' | tail -15 >&2 || true
+  echo "live-e2e: self-trim chunks logged: $(docker logs "$candidate" 2>&1 | grep -c 'self-trimming oldest' || true)" >&2
+}
+live_wait_until 120 cleanup-interrupt-marker _live_ingest_ready "$marker" || { rc=$?; _cleanup_diagnose; exit "$rc"; }
 _cleanup_started() { docker logs "$candidate" 2>&1 | grep -F 'self-trimming oldest telemetry chunk' >/dev/null; }
 live_wait_until 30 cleanup-started _cleanup_started
 docker compose -f "$base" -f "$override" -p "$LIVE_COMPOSE_PROJECT" restart candidate >/dev/null

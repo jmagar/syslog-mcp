@@ -28,7 +28,15 @@ status=0; for pid in "${pids[@]}"; do wait "$pid" || status=1; done
 # file is retained as evidence and it is counted here, not as a worker failure.
 query_failures=0; for pid in "${query_pids[@]}"; do wait "$pid" || query_failures=$((query_failures+1)); done
 jq -cn --argjson failed "$query_failures" '{schema:"cortex-live-concurrency-queries-v1",queries:4,cut_off_by_restart:$failed}' >"$out/queries.json"
-maintenance_status=0; wait "$maintenance_pid" || maintenance_status=$?
+# The checkpoint races the injected restart on purpose. One the restart kills
+# (SIGKILL, or exec refused while the container restarts) is contention
+# evidence like a cut-off query; any other failure is a real one. Either way
+# the replacement process must checkpoint cleanly and pass a quick integrity check.
+maintenance_status=0; maintenance_cut=false
+wait "$maintenance_pid" || { rc=$?; if [[ "$rc" == 137 ]] || grep -qiE 'is not running|is restarting' "$out/checkpoint.stderr"; then maintenance_cut=true; else maintenance_status=$rc; fi; }
+docker exec "$candidate" cortex db checkpoint --json >"$out/checkpoint-after-restart.json" 2>"$out/checkpoint-after-restart.stderr" || maintenance_status=$?
+docker exec "$candidate" cortex db integrity --quick --json >"$out/integrity-after-restart.json" 2>&1 || maintenance_status=$?
+jq -cn --argjson cut "$maintenance_cut" --argjson status "$maintenance_status" '{schema:"cortex-live-concurrency-maintenance-v1",cut_off_by_restart:$cut,failure_status:$status}' >"$out/maintenance.json"
 # A post-restart sentinel proves recovery independently of any in-flight loss.
 python3 "$root/tests/live/phases/concurrency/producer.py" --port "$LIVE_SYSLOG_TCP_PORT" --prefix "$prefix-recovery" --count 1 >"$out/recovery-producer.json"
 sleep 2

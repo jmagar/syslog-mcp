@@ -233,8 +233,10 @@ auth_phase_run() {
   status="$(auth_http_status "$LIVE_API_TOKEN" /api/sessions/llm-invocations GET 'X-Cortex-Admin-Token: wrong-token' "$dir/rest-admin-wrong.json")"; [[ "$status" == 403 ]]
   status="$(auth_http_status "$LIVE_API_TOKEN" /api/sessions/llm-invocations GET "X-Cortex-Admin-Token: $LIVE_ADMIN_TOKEN" "$dir/rest-admin-ok.json")"; [[ "$status" == 200 ]]
 
-  status="$(curl -sS --max-time 15 -o "$dir/otlp-api-token.json" -w '%{http_code}' -H 'Host: localhost' -H "Authorization: Bearer $LIVE_API_TOKEN" -H 'Content-Type: application/json' --data-binary '{"resourceLogs":[]}' "http://127.0.0.1:$LIVE_HTTP_PORT/v1/logs")"; [[ "$status" == 401 ]]
-  status="$(curl -sS --max-time 15 -o "$dir/otlp-mcp-token.json" -w '%{http_code}' -H 'Host: localhost' -H "Authorization: Bearer $LIVE_CORTEX_TOKEN" -H 'Content-Type: application/json' --data-binary '{"resourceLogs":[]}' "http://127.0.0.1:$LIVE_HTTP_PORT/v1/logs")"; [[ "$status" == 200 ]]
+  # /v1/logs speaks OTLP protobuf only; a JSON body is a 400 decode failure
+  # that would hide the auth decision. An empty body is a valid, empty request.
+  status="$(curl -sS --max-time 15 -o "$dir/otlp-api-token.json" -w '%{http_code}' -H 'Host: localhost' -H "Authorization: Bearer $LIVE_API_TOKEN" -H 'Content-Type: application/x-protobuf' --data-binary '' "http://127.0.0.1:$LIVE_HTTP_PORT/v1/logs")"; [[ "$status" == 401 ]]
+  status="$(curl -sS --max-time 15 -o "$dir/otlp-mcp-token.json" -w '%{http_code}' -H 'Host: localhost' -H "Authorization: Bearer $LIVE_CORTEX_TOKEN" -H 'Content-Type: application/x-protobuf' --data-binary '' "http://127.0.0.1:$LIVE_HTTP_PORT/v1/logs")"; [[ "$status" == 200 ]]
 
   auth_recreate "$LIVE_PROJECT_ROOT/tests/live/profiles/auth/compose.admin.yaml"
   status="$(auth_mcp_status "$LIVE_CORTEX_TOKEN" llm_invocations "$dir/mcp-static-admin.json")"; [[ "$status" == 200 ]]; jq -e '.result.isError==false' "$dir/mcp-static-admin.json" >/dev/null
@@ -244,7 +246,7 @@ auth_phase_run() {
   status="$(auth_http_status '' /.well-known/oauth-authorization-server GET '' "$dir/oauth-metadata.json")"; [[ "$status" == 200 ]]; jq -e '.issuer=="http://localhost:3100"' "$dir/oauth-metadata.json" >/dev/null
   status="$(auth_http_status '' /jwks GET '' "$dir/oauth-jwks-before.json")"; [[ "$status" == 200 ]]; jq -e '.keys|length==1 and .[0].kty=="RSA" and .[0].alg=="RS256" and (.[0].kid|length>0)' "$dir/oauth-jwks-before.json" >/dev/null
   status="$(auth_mcp_status "$LIVE_CORTEX_TOKEN" status "$dir/oauth-static-disabled.json")"; [[ "$status" == 401 ]]
-  status="$(curl -sS --max-time 15 -o "$dir/oauth-user-machine-ingest.json" -w '%{http_code}' -H 'Host: localhost' -H "Authorization: Bearer $OAUTH_read" -H 'Content-Type: application/json' --data-binary '{"resourceLogs":[]}' "http://127.0.0.1:$LIVE_HTTP_PORT/v1/logs")"; [[ "$status" == 401 ]]
+  status="$(curl -sS --max-time 15 -o "$dir/oauth-user-machine-ingest.json" -w '%{http_code}' -H 'Host: localhost' -H "Authorization: Bearer $OAUTH_read" -H 'Content-Type: application/x-protobuf' --data-binary '' "http://127.0.0.1:$LIVE_HTTP_PORT/v1/logs")"; [[ "$status" == 401 ]]
   jq -cn '{disposition:"contract-correct-n/a",boundary:"local signing-key verification",reason:"Cortex does not fetch or parse a remote JWK during bearer verification; malformed JWK belongs to provider/JWKS-client integration, which is absent from this architecture"}' >"$dir/oauth-malformed-jwk-na.json"
   docker restart "$(live_ingest_candidate_id)" >/dev/null
   live_wait_until 90 oauth-restart-health _live_http_health_ready
