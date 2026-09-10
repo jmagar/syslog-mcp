@@ -1,11 +1,13 @@
 use std::io::{self, Write as _};
-use std::process::Stdio;
+use std::process::{Child, Stdio};
 
 use crate::setup::{PhaseTimer, SetupPhase, SetupStatus};
 
 #[derive(Debug, Clone)]
 pub(super) struct RemoteOutput {
     pub status_success: bool,
+    /// The remote exit code; `None` when the ssh process was killed by a signal.
+    pub exit_code: Option<i32>,
     pub stdout: String,
     pub stderr: String,
 }
@@ -23,29 +25,79 @@ impl RemoteRunner for SshRemoteRunner {
         )
         .ssh_args(host, "sh -s")
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
-        let mut child = crate::env::command("ssh")
+        let child = crate::env::command("ssh")
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()?;
+        feed_and_reap(host, child, script, stdin)
+    }
+}
 
-        {
-            let child_stdin = child.stdin.as_mut().ok_or_else(|| {
-                io::Error::new(io::ErrorKind::BrokenPipe, "failed to open ssh stdin")
-            })?;
+/// Pipe `script` (then `stdin`) into the remote `sh -s`, then *always* close
+/// stdin and reap the child before deciding.
+///
+/// A remote that exits early (auth failure, missing shell, refused command)
+/// breaks the pipe mid-write. Returning that `BrokenPipe` straight away would
+/// leak the unreaped child and discard its stderr, reporting the symptom
+/// ("Broken pipe (os error 32)") instead of the cause ssh printed. So the exit
+/// status and captured output win; the write error only surfaces when the
+/// remote exited 0 before consuming all of its piped input (the script either
+/// never started or exited early), so the run cannot be trusted as a success.
+/// The write runs on its own thread while stdout/stderr drain, so a
+/// remote that fills its output pipe before reading the rest of the script
+/// cannot deadlock against us.
+fn feed_and_reap(
+    host: &str,
+    mut child: Child,
+    script: &str,
+    stdin: Option<&str>,
+) -> io::Result<RemoteOutput> {
+    let Some(mut child_stdin) = child.stdin.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            "failed to open ssh stdin",
+        ));
+    };
+    let (written, output) = std::thread::scope(|scope| {
+        let writer = scope.spawn(move || -> io::Result<()> {
             child_stdin.write_all(script.as_bytes())?;
             if let Some(input) = stdin {
                 child_stdin.write_all(input.as_bytes())?;
             }
+            Ok(())
+            // `child_stdin` drops here, closing the pipe so the remote sees EOF.
+        });
+        let output = child.wait_with_output();
+        let written = writer
+            .join()
+            .unwrap_or_else(|_| Err(io::Error::other("ssh stdin writer panicked")));
+        (written, output)
+    });
+    let output = output?;
+    let remote = RemoteOutput {
+        status_success: output.status.success(),
+        exit_code: output.status.code(),
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+    };
+    match written {
+        _ if !remote.status_success => Ok(remote),
+        Ok(()) => Ok(remote),
+        Err(error) => {
+            let stderr = last_line(&remote.stderr)
+                .map(|line| format!(" (stderr: {line})"))
+                .unwrap_or_default();
+            Err(io::Error::new(
+                error.kind(),
+                format!(
+                    "ssh {host}: remote exited 0 before consuming all of its piped input: {error}{stderr}"
+                ),
+            ))
         }
-
-        let output = child.wait_with_output()?;
-        Ok(RemoteOutput {
-            status_success: output.status.success(),
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-        })
     }
 }
 
@@ -132,13 +184,28 @@ pub(super) fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
+/// One-line phase detail. A failure leads with the exit status (ssh exits 255
+/// for its own connection/auth failures) followed by the last line the remote
+/// printed, preferring stderr, so the operator sees the cause rather than "ok".
 fn output_detail(output: &RemoteOutput) -> String {
-    let text = if output.status_success {
-        output.stdout.trim()
-    } else if !output.stderr.trim().is_empty() {
-        output.stderr.trim()
-    } else {
-        output.stdout.trim()
+    if output.status_success {
+        return last_line(&output.stdout).unwrap_or("ok").to_string();
+    }
+    let status = match output.exit_code {
+        Some(code) => format!("exit status {code}"),
+        None => "terminated by signal".to_string(),
     };
-    text.lines().last().unwrap_or("ok").to_string()
+    match last_line(&output.stderr).or_else(|| last_line(&output.stdout)) {
+        Some(line) => format!("{status}: {line}"),
+        None => status,
+    }
 }
+
+/// The last non-blank line of `text`, trimmed.
+fn last_line(text: &str) -> Option<&str> {
+    text.lines().map(str::trim).rfind(|line| !line.is_empty())
+}
+
+#[cfg(test)]
+#[path = "remote_support_tests.rs"]
+mod tests;

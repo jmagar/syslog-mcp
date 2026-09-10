@@ -57,6 +57,7 @@ impl RemoteRunner for FakeRemoteRunner {
         {
             return Ok(RemoteOutput {
                 status_success: false,
+                exit_code: Some(1),
                 stdout: String::new(),
                 stderr: "forced failure\n".to_string(),
             });
@@ -72,6 +73,7 @@ impl RemoteRunner for FakeRemoteRunner {
         };
         Ok(RemoteOutput {
             status_success: true,
+            exit_code: Some(0),
             stdout,
             stderr: String::new(),
         })
