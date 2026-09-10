@@ -19,9 +19,10 @@ jq -e '
 ' "$contract" >/dev/null
 jq -e '.linux_dind.host_socket == false and .desktop_proxy.disposition == "platform-qualified" and (.fail_closed|index("identity-change"))' "$decision" >/dev/null
 
-if rg -n '/var/run/docker.sock:/var/run/docker.sock|/run/docker.sock:/var/run/docker.sock' "$compose" >/dev/null; then exit 1; fi
-rg -n 'dind-socket:/var/run:ro' "$compose" >/dev/null
-rg -n 'internal: true' "$compose" >/dev/null
+socket_scan=0; grep -nE '/var/run/docker.sock:/var/run/docker.sock|/run/docker.sock:/var/run/docker.sock' "$compose" >/dev/null || socket_scan=$?
+[[ "$socket_scan" == 1 ]] || { echo "docker-boundary selftest: host docker socket mounted, or the scan failed (grep status $socket_scan)" >&2; exit 1; }
+grep -nF 'dind-socket:/var/run:ro' "$compose" >/dev/null
+grep -nF 'internal: true' "$compose" >/dev/null
 daemon_ports="$(docker compose -f "$compose" config --format json | jq -c '.services.daemon.ports // []')"
 [[ "$daemon_ports" == '[]' ]]
 docker compose -f "$compose" config --format json | jq -e '.services.daemon.expose == ["2375"] and (.services.proxy.ports|length)==1' >/dev/null

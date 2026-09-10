@@ -51,6 +51,30 @@ reject artifact_qualify_native_archive "$tmp/native-extra" "$(artifact_native_pl
 cp -R "$tmp/native-good" "$tmp/native-not-executable"
 chmod 644 "$tmp/native-not-executable/cortex"
 reject artifact_qualify_native_archive "$tmp/native-not-executable" "$(artifact_native_platform)" 3.15.0 "$LIVE_RUN_ROOT/artifacts/releases" native-not-executable
+# The shipped CLI renders a styled help whose usage section is a bare `Usage`
+# heading, not clap's `Usage:` line. Both are real usage output.
+mkdir -p "$tmp/native-styled-help"
+cat >"$tmp/native-styled-help/cortex" <<'SH'
+#!/usr/bin/env sh
+case "${1:-}" in
+  --version) echo 'cortex 3.15.0' ;;
+  --help) printf '%s\n' '  CORTEX CLI' '' '  Usage' '    cortex [COMMAND]' ;;
+  *) exit 2 ;;
+esac
+SH
+chmod 755 "$tmp/native-styled-help/cortex"
+artifact_qualify_native_archive "$tmp/native-styled-help" "$(artifact_native_platform)" 3.15.0 "$LIVE_RUN_ROOT/artifacts/releases" native-styled-help
+mkdir -p "$tmp/native-no-usage"
+cat >"$tmp/native-no-usage/cortex" <<'SH'
+#!/usr/bin/env sh
+case "${1:-}" in
+  --version) echo 'cortex 3.15.0' ;;
+  --help) printf '%s\n' '  CORTEX CLI' '  See the Usage docs online.' ;;
+  *) exit 2 ;;
+esac
+SH
+chmod 755 "$tmp/native-no-usage/cortex"
+reject artifact_qualify_native_archive "$tmp/native-no-usage" "$(artifact_native_platform)" 3.15.0 "$LIVE_RUN_ROOT/artifacts/releases" native-no-usage
 
 trusted_identity='https://github.com/dinglebear-ai/cortex/.github/workflows/release.yml@refs/tags/v3.15.0'
 trusted_issuer='https://token.actions.githubusercontent.com'

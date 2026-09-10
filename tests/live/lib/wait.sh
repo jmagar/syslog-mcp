@@ -18,6 +18,9 @@ live_wait_until() {
     _live_append_line "$history" "$(jq -cn --arg d "$description" --argjson a "$attempt" --argjson elapsed "$((now-started))" '{description:$d,attempt:$a,result:"retry",elapsed_seconds:$elapsed}')"
     if (( now - started >= timeout )); then
       live_event poll "$(jq -cn --arg d "$description" --argjson a "$attempt" '{description:$d,attempts:$a,result:"timeout"}')"
+      # A timeout is a failure reason in its own right; the event file is not
+      # uploaded from hosted runs, so say which wait gave up.
+      printf 'live-e2e: timed out after %ss waiting for %s (%s attempts)\n' "$timeout" "$description" "$attempt" >&2
       return 124
     fi
     # Centralized capped exponential backoff with deterministic run-derived jitter.

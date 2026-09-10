@@ -58,7 +58,9 @@ auth_policy_execution_ledger() {
     jq -cn --arg id "$id" --arg kind "$kind" --arg auth "$auth" --argjson required "$required" --arg disposition "$disposition" --arg evidence "$evidence" --arg rationale "$rationale" \
       '{surface_id:$id,kind:$kind,auth:$auth,required_authorization:$required,disposition:$disposition,result:"pass",evidence:$evidence,rationale:$rationale}' >>"$output"
   done < <(jq -r '.entries[]|[.id,.kind,.auth,.required_authorization,.required_cases[0]]|@tsv' "$inventory")
-  jq -se --slurpfile inventory "$inventory" 'length==345 and ([.[].surface_id]|unique|length)==345 and all(.[];.result=="pass" and (.disposition=="executed" or .disposition=="contract-correct-n/a")) and ([.[].surface_id]|sort)==([$inventory[0].entries[].id]|sort)' "$output" >/dev/null
+  # Reconcile against the compiled SurfaceContract itself; a fixed count goes
+  # stale every time a surface is added.
+  jq -se --slurpfile inventory "$inventory" '($inventory[0].entries|length) as $n | length==$n and ([.[].surface_id]|unique|length)==$n and all(.[];.result=="pass" and (.disposition=="executed" or .disposition=="contract-correct-n/a")) and ([.[].surface_id]|sort)==([$inventory[0].entries[].id]|sort)' "$output" >/dev/null
 }
 
 # Emit the aggregate ledger only from raw, route-specific first attempts.  The
@@ -173,18 +175,19 @@ auth_oauth_live_service() {
     set -- $spec; name="$1"; action="$2"; status="$3"; expected="$4"; eval "token=\$OAUTH_${name}"
     body="$(jq -cn --arg a "$action" '{jsonrpc:"2.0",id:41,method:"tools/call",params:{name:"cortex",arguments:{action:$a}}}')"
     code="$(curl -sS --max-time 15 -o "$dir/oauth-live-$name-$action.json" -w '%{http_code}' -H 'Host: localhost:3100' -H "Authorization: Bearer $token" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' --data-binary "$body" "http://127.0.0.1:$port/mcp")"
-    [[ "$code" == "$status" ]]; [[ "$expected" == null ]] || jq -e --argjson expected "$expected" '.result.isError==$expected or (.error!=null and $expected)' "$dir/oauth-live-$name-$action.json" >/dev/null
+    [[ "$code" == "$status" ]] || { live_die "OAuth $name token calling $action answered HTTP $code, expected $status"; return 1; }; [[ "$expected" == null ]] || jq -e --argjson expected "$expected" '.result.isError==$expected or (.error!=null and $expected)' "$dir/oauth-live-$name-$action.json" >/dev/null
   done
   # Every machine-ingest route rejects a user OAuth token before payload parsing.
   : >"$dir/oauth-machine-ingest-ledger.jsonl"
-  for path in /v1/logs /v1/metrics /v1/traces /v1/heartbeats /v1/agent-commands /v1/ai-transcripts /v1/shell-history; do
+  local machine_routes=(/v1/logs /v1/metrics /v1/traces /v1/heartbeats /v1/agent-commands /v1/ai-transcripts /v1/shell-history /v1/syslog-forward /v1/file-tails)
+  for path in "${machine_routes[@]}"; do
     # Populated by the OAuth token fixture above.
     # shellcheck disable=SC2154
     code="$(curl -sS --max-time 15 -o "$dir/oauth-machine-$(printf '%s' "$path" | tr '/' '-').json" -w '%{http_code}' -H 'Host: localhost:3100' -H "Authorization: Bearer $OAUTH_read" -H 'Content-Type: application/json' --data-binary '{}' "http://127.0.0.1:$port$path")"
-    [[ "$code" == 401 ]]
+    [[ "$code" == 401 ]] || { live_die "user OAuth token on machine-ingest $path answered HTTP $code, expected 401"; return 1; }
     jq -cn --arg path "$path" --arg evidence "artifacts/auth/oauth-machine-$(printf '%s' "$path" | tr '/' '-').json" '{path:$path,result:"denied",status:401,evidence:$evidence}' >>"$dir/oauth-machine-ingest-ledger.jsonl"
   done
-  jq -se 'length==7 and ([.[].path]|unique|length)==7 and all(.[];.status==401)' "$dir/oauth-machine-ingest-ledger.jsonl" >/dev/null
+  jq -se --argjson n "${#machine_routes[@]}" 'length==$n and ([.[].path]|unique|length)==$n and all(.[];.status==401)' "$dir/oauth-machine-ingest-ledger.jsonl" >/dev/null
   kill -TERM "$pid"; wait "$pid" 2>/dev/null || true
   local last; last="$(jq -sr --arg key "$key" '[.[]|select(.key==$key)]|last' "$LIVE_RUN_ROOT/resources.jsonl")"
   live_resource_transition "$key" process CLEANING "$LIVE_RESOURCE_PROVIDER" "$pid" "$(jq -c .cleanup_argv <<<$last)" "$digest" "$labels" "$verify"
@@ -232,8 +235,13 @@ auth_phase_run() {
   status="$(auth_http_status "$LIVE_API_TOKEN" /api/sessions/llm-invocations GET 'X-Cortex-Admin-Token: wrong-token' "$dir/rest-admin-wrong.json")"; [[ "$status" == 403 ]]
   status="$(auth_http_status "$LIVE_API_TOKEN" /api/sessions/llm-invocations GET "X-Cortex-Admin-Token: $LIVE_ADMIN_TOKEN" "$dir/rest-admin-ok.json")"; [[ "$status" == 200 ]]
 
-  status="$(curl -sS --max-time 15 -o "$dir/otlp-api-token.json" -w '%{http_code}' -H 'Host: localhost' -H "Authorization: Bearer $LIVE_API_TOKEN" -H 'Content-Type: application/json' --data-binary '{"resourceLogs":[]}' "http://127.0.0.1:$LIVE_HTTP_PORT/v1/logs")"; [[ "$status" == 401 ]]
-  status="$(curl -sS --max-time 15 -o "$dir/otlp-mcp-token.json" -w '%{http_code}' -H 'Host: localhost' -H "Authorization: Bearer $LIVE_CORTEX_TOKEN" -H 'Content-Type: application/json' --data-binary '{"resourceLogs":[]}' "http://127.0.0.1:$LIVE_HTTP_PORT/v1/logs")"; [[ "$status" == 200 ]]
+  # /v1/logs speaks OTLP protobuf only; a JSON body is a 400 decode failure
+  # that would hide the auth decision. An empty body is a valid, empty request.
+  status="$(curl -sS --max-time 15 -o "$dir/otlp-api-token.json" -w '%{http_code}' -H 'Host: localhost' -H "Authorization: Bearer $LIVE_API_TOKEN" -H 'Content-Type: application/x-protobuf' --data-binary '' "http://127.0.0.1:$LIVE_HTTP_PORT/v1/logs")"; [[ "$status" == 401 ]]
+  status="$(curl -sS --max-time 15 -o "$dir/otlp-mcp-token.body" -w '%{http_code}' -H 'Host: localhost' -H "Authorization: Bearer $LIVE_CORTEX_TOKEN" -H 'Content-Type: application/x-protobuf' --data-binary '' "http://127.0.0.1:$LIVE_HTTP_PORT/v1/logs")"; [[ "$status" == 200 ]]
+  # An accepted OTLP export answers 200 with an empty body; the policy ledger
+  # needs a non-empty record of what was sent and what came back.
+  jq -cn --argjson status "$status" '{route:"POST /v1/logs",credential:"CORTEX_TOKEN",request:"empty ExportLogsServiceRequest (protobuf)",status:$status}' >"$dir/otlp-mcp-token.json"
 
   auth_recreate "$LIVE_PROJECT_ROOT/tests/live/profiles/auth/compose.admin.yaml"
   status="$(auth_mcp_status "$LIVE_CORTEX_TOKEN" llm_invocations "$dir/mcp-static-admin.json")"; [[ "$status" == 200 ]]; jq -e '.result.isError==false' "$dir/mcp-static-admin.json" >/dev/null
@@ -243,7 +251,7 @@ auth_phase_run() {
   status="$(auth_http_status '' /.well-known/oauth-authorization-server GET '' "$dir/oauth-metadata.json")"; [[ "$status" == 200 ]]; jq -e '.issuer=="http://localhost:3100"' "$dir/oauth-metadata.json" >/dev/null
   status="$(auth_http_status '' /jwks GET '' "$dir/oauth-jwks-before.json")"; [[ "$status" == 200 ]]; jq -e '.keys|length==1 and .[0].kty=="RSA" and .[0].alg=="RS256" and (.[0].kid|length>0)' "$dir/oauth-jwks-before.json" >/dev/null
   status="$(auth_mcp_status "$LIVE_CORTEX_TOKEN" status "$dir/oauth-static-disabled.json")"; [[ "$status" == 401 ]]
-  status="$(curl -sS --max-time 15 -o "$dir/oauth-user-machine-ingest.json" -w '%{http_code}' -H 'Host: localhost' -H "Authorization: Bearer $OAUTH_read" -H 'Content-Type: application/json' --data-binary '{"resourceLogs":[]}' "http://127.0.0.1:$LIVE_HTTP_PORT/v1/logs")"; [[ "$status" == 401 ]]
+  status="$(curl -sS --max-time 15 -o "$dir/oauth-user-machine-ingest.json" -w '%{http_code}' -H 'Host: localhost' -H "Authorization: Bearer $OAUTH_read" -H 'Content-Type: application/x-protobuf' --data-binary '' "http://127.0.0.1:$LIVE_HTTP_PORT/v1/logs")"; [[ "$status" == 401 ]]
   jq -cn '{disposition:"contract-correct-n/a",boundary:"local signing-key verification",reason:"Cortex does not fetch or parse a remote JWK during bearer verification; malformed JWK belongs to provider/JWKS-client integration, which is absent from this architecture"}' >"$dir/oauth-malformed-jwk-na.json"
   docker restart "$(live_ingest_candidate_id)" >/dev/null
   live_wait_until 90 oauth-restart-health _live_http_health_ready
@@ -274,7 +282,8 @@ auth_phase_run() {
 
   auth_policy_execution_ledger
 
-  jq -cn '{schema:"cortex-live-auth-result-v1",static_read:true,static_admin:true,token_separation:true,oauth_metadata:true,jwks_persisted:true,oauth_pre_restart_token_survived:true,oauth_negative_classes:7,machine_ingest_denials:7,trusted_gateway:true,untrusted_gateway_refused:true,unsafe_startup_refused:true,release_fake_switch_absent:true,oauth_secrets_destroyed:true,policy_entries_reconciled:345}' >"$dir/result.json"
+  jq -cn --argjson machine "$(jq -s length "$dir/oauth-machine-ingest-ledger.jsonl")" --argjson reconciled "$(jq -s length "$LIVE_RUN_ROOT/artifacts/auth-policy-execution-ledger.jsonl")" \
+    '{schema:"cortex-live-auth-result-v1",static_read:true,static_admin:true,token_separation:true,oauth_metadata:true,jwks_persisted:true,oauth_pre_restart_token_survived:true,oauth_negative_classes:7,machine_ingest_denials:$machine,trusted_gateway:true,untrusted_gateway_refused:true,unsafe_startup_refused:true,release_fake_switch_absent:true,oauth_secrets_destroyed:true,policy_entries_reconciled:$reconciled}' >"$dir/result.json"
   live_terminal_disposition auth.policy-table pass artifacts/auth-policy-ledger.json
   live_terminal_disposition auth.live-matrix pass artifacts/auth/result.json
   live_terminal_disposition auth pass artifacts/auth/result.json

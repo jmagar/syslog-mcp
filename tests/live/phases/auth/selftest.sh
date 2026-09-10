@@ -4,7 +4,8 @@ root="$(cd "$(dirname "$0")/../../../.." && pwd)"
 jq -e '.profiles.auth.mandatory and .profiles.auth.wall_seconds<=1500' "$root/tests/live/contracts/profiles.json" >/dev/null
 grep -q 'auth_policy_ledger' "$root/tests/live/phases/auth/run.sh"
 grep -q 'CORTEX_AUTH_DISABLE_STATIC_TOKEN_WITH_OAUTH' "$root/tests/live/profiles/auth/compose.oauth.yaml"
-! rg -n '(secret|token):[[:space:]]+[A-Za-z0-9]{20,}' "$root/tests/live/profiles/auth" "$root/tests/live/phases/auth"
+secret_scan=0; grep -rnE '(secret|token):[[:space:]]+[A-Za-z0-9]{20,}' "$root/tests/live/profiles/auth" "$root/tests/live/phases/auth" || secret_scan=$?
+[[ "$secret_scan" == 1 ]] || { echo "auth selftest: secret-shaped value committed, or the scan failed (grep status $secret_scan)" >&2; exit 1; }
 exported="$(mktemp)"; trap 'rm -f "$exported"' EXIT
 cargo run --quiet --manifest-path "$root/tests/live/surface-exporter/Cargo.toml" >"$exported"
 jq -e '[.entries[]|select(.profiles|index("auth")) as $e|$e.required_cases[]|[$e.id,.]]|length==22' "$exported" >/dev/null

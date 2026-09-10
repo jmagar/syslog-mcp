@@ -95,7 +95,7 @@ def main() -> int:
     if not csp: failures.append("csp-missing")
     if cross_headers.get("access-control-allow-origin") == "https://outside.invalid": failures.append("cross-origin")
     if forbidden: failures.append("forbidden-client-storage-or-credential")
-    if browser_process.returncode != 0: failures.append("real-browser-launch")
+    if "launch_error" in browser_result: failures.append("real-browser-launch")
     else:
         if not browser_result.get("connected") or not browser_result.get("rendered") or not browser_result.get("successfulQuery"): failures.append("browser-rendered-query")
         if not any(word in (browser_result.get("authFailure") or "").lower() for word in ("unauthorized", "failed", "token")): failures.append("browser-auth-display")

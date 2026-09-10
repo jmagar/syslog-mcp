@@ -194,7 +194,10 @@ live_ingest_http_json_lanes() {
     case "$kind" in heartbeat) limit=262144;; agent-command) limit=1048576;; shell-history) limit=2097152;; ai-transcript) limit=4194304;; esac
     oversized="$LIVE_RUN_ROOT/http-${kind}-oversized.json"; { printf '{"padding":"'; head -c "$limit" /dev/zero | tr '\0' x; printf '"}'; } >"$oversized"
     live_ingest_account_file 1 "$oversized"
-    [[ "$(live_ingest_curl_status "$LIVE_RUN_ROOT/artifacts/ingest-${kind}-oversized.json" -X POST -H "Authorization: Bearer $LIVE_CORTEX_TOKEN" -H 'Content-Type: application/json' --data-binary "@$oversized" "$(live_ingest_http "$path")")" == 413 ]]; rm -f "$oversized"
+    # The body limit answers 413 from Content-Length and closes. Streamed
+    # through toxiproxy without Expect, that close raced the upload and 4 of
+    # 200 probes saw an empty reply instead; Expect makes curl wait for it.
+    [[ "$(live_ingest_curl_status "$LIVE_RUN_ROOT/artifacts/ingest-${kind}-oversized.json" -X POST -H "Authorization: Bearer $LIVE_CORTEX_TOKEN" -H 'Content-Type: application/json' -H 'Expect: 100-continue' --data-binary "@$oversized" "$(live_ingest_http "$path")")" == 413 ]]; rm -f "$oversized"
     if [[ "$kind" != heartbeat ]]; then
       live_ingest_wait_marker "$marker" "$kind" "$seq"
       grep -F "$marker" "$LIVE_RUN_ROOT/artifacts/ingest-${kind}-${seq}-rest.json" >/dev/null
@@ -274,7 +277,7 @@ live_ingest_otlp() {
     if [[ "$signal" == logs ]]; then limit=4194304; else limit=8388608; fi
     oversize="$LIVE_RUN_ROOT/otlp-fixtures/$signal-oversize.pb"; head -c "$((limit+1))" /dev/zero >"$oversize"
     live_ingest_account_file 1 "$oversize"
-    status="$(curl -sS --max-time 15 -D "$LIVE_RUN_ROOT/artifacts/otlp-${signal}-oversize.headers" -o "$LIVE_RUN_ROOT/artifacts/otlp-${signal}-oversize.json" -w '%{http_code}' -H 'Host: localhost' -H "Authorization: Bearer $LIVE_CORTEX_TOKEN" -H 'Content-Type: application/x-protobuf' --data-binary "@$oversize" "$(live_ingest_http "/v1/$signal")")"
+    status="$(curl -sS --max-time 15 -D "$LIVE_RUN_ROOT/artifacts/otlp-${signal}-oversize.headers" -o "$LIVE_RUN_ROOT/artifacts/otlp-${signal}-oversize.json" -w '%{http_code}' -H 'Host: localhost' -H "Authorization: Bearer $LIVE_CORTEX_TOKEN" -H 'Content-Type: application/x-protobuf' -H 'Expect: 100-continue' --data-binary "@$oversize" "$(live_ingest_http "/v1/$signal")")"
     [[ "$status" == 413 ]]; rm -f "$oversize"; live_ingest_case "otlp.$signal.oversize" pass "artifacts/otlp-${signal}-oversize.headers"
   done
   live_ingest_wait_marker "$otlp_id-otlp-log-0040" otlp-log 40
