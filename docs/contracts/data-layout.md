@@ -1,7 +1,7 @@
 ---
 title: "Data Directory Layout Contract (V1)"
 created: 2026-05-16
-updated: 2026-08-24
+updated: 2026-09-10
 ---
 
 # Data Directory Layout Contract (V1)
@@ -24,10 +24,11 @@ The "data directory" is the **parent directory of `[storage].db_path`**. With th
 ├── auth.db                       # OAuth state (only when auth.mode = oauth)  — SECRET
 ├── auth.db-wal                   # WAL sidecar for auth.db — transient
 ├── auth.db-shm                   # shared-memory sidecar for auth.db — transient
-└── auth-jwt.pem                  # JWT signing private key (PEM)  — SECRET
+├── auth-jwt.pem                  # JWT signing private key (PEM)  — SECRET
+└── integration-credential.key    # HMAC key for auth.credential_generation  — SECRET
 ```
 
-**No log files live here.** All ingested log records are stored *inside* `cortex.db`. The data dir contains only the DB and auth state; this is a deliberate property of the design so a single mount is the entire backup surface.
+**No log files live here.** All ingested log records are stored *inside* `cortex.db`. The data dir contains only the DB, auth state, and the integration credential key; this is a deliberate property of the design so a single mount is the entire backup surface.
 
 ### Agent hosts (Epic A — planned)
 
@@ -51,6 +52,7 @@ These are agent-side files; the server data dir does **not** contain them.
 | `<DATA_DIR>/auth.db` | lab-auth via SQLx | **`0600` enforced** (`src/runtime.rs::enforce_restrictive_permissions`) | runtime UID | **SECRET** | Contains issued OAuth tokens / sessions. Created only when `auth.mode = oauth`. |
 | `<DATA_DIR>/auth.db-wal`, `auth.db-shm` | lab-auth | inherited | runtime UID | **SECRET (transient)** | Same as syslog WAL/SHM. |
 | `<DATA_DIR>/auth-jwt.pem` | lab-auth | **`0600` enforced** | runtime UID | **SECRET — most sensitive file** | JWT signing private key. Losing this invalidates all issued tokens. Compromising this lets an attacker forge tokens. |
+| `<DATA_DIR>/integration-credential.key` | server (`src/api/credential_generation.rs`) | **`0600` enforced** (created `0600`; tightened on load) | runtime UID | **SECRET** | 32 random bytes (hex). Keys the HMAC-SHA256 that publishes `auth.credential_generation` in the integration profile, so the API token cannot be brute-forced from the published value without this server-held key. Created on first start with `CORTEX_API_TOKEN` set; symlinks refused; an unreadable, corrupt, or non-regular file fails startup instead of regenerating. Back it up with `cortex.db` (`scripts/backup.sh` does). Upgrade note: the first start of a release with the keyed format publishes a new `auth.credential_generation` even though `CORTEX_API_TOKEN` is unchanged, so every pinned integration must re-trust Cortex once. |
 | `~/.cortex/.env` (on the operator account, not under DATA_DIR) | `cortex setup` | `0600` written by setup | operator user | **SECRET** (contains tokens, OAuth secret) | Read by `src/config.rs::load_setup_env_file`. Refused if it is a symlink. |
 | `~/.cortex/config.toml` | operator-edited | `0600` recommended | operator user | mixed | Layered before env per config-schema §2. |
 | Agent host: `~/.config/cortex/agent-token` | agent binary | **`0600`** | agent UID | **SECRET** | Long-lived bearer-equivalent. Replace immediately after `cortex agent rotate`. |
@@ -97,9 +99,12 @@ sqlite3 /data/auth.db ".backup /backup/auth-$(date +%F).db"
 
 # JWT key — read while running is safe (file is rewritten only on first init, never updated mid-run)
 install -m 0600 /data/auth-jwt.pem /backup/auth-jwt-$(date +%F).pem
+
+# Integration credential key — written once on first start, never rewritten while running
+install -m 0600 /data/integration-credential.key /backup/integration-credential-$(date +%F).key
 ```
 
-The bundled CLI exposes the same operation: `cortex db backup --output /backup/cortex.db` calls SQLite's backup API under the hood.
+The bundled CLI exposes the same operation for the logs DB only: `cortex db backup --output /backup/cortex.db` calls SQLite's backup API under the hood. Copy `auth.db`, `auth-jwt.pem`, and `integration-credential.key` separately (or use `scripts/backup.sh`, which captures all of them).
 
 ### Offline (server stopped)
 
@@ -112,6 +117,7 @@ mkdir -p "$BACKUP"
 cp /data/cortex.db "$BACKUP/cortex.db"
 cp /data/auth-jwt.pem "$BACKUP/auth-jwt.pem" 2>/dev/null || true
 cp /data/auth.db "$BACKUP/auth.db" 2>/dev/null || true
+cp /data/integration-credential.key "$BACKUP/integration-credential.key" 2>/dev/null || true
 (cp /data/cortex.db-wal "$BACKUP/cortex.db-wal" 2>/dev/null || true)
 (cp /data/cortex.db-shm "$BACKUP/cortex.db-shm" 2>/dev/null || true)
 (cp /data/auth.db-wal   "$BACKUP/auth.db-wal"   2>/dev/null || true)
@@ -122,9 +128,11 @@ rm -rf "$BACKUP"
 
 Include the `-wal` and `-shm` sidecars when offline — together they form one consistent snapshot. The fallback `|| true` handles the case where the DB was shut down cleanly and the sidecars do not exist.
 
-### What to back up if OAuth is configured
+### What to back up
 
-`auth.db` + `auth-jwt.pem` **must** be backed up alongside `cortex.db` when `auth.mode = oauth`. Losing the JWT key alone invalidates every issued token; losing the DB alone invalidates every active session. Losing both is recoverable only by re-running OAuth onboarding for every user.
+`integration-credential.key` **must** be backed up alongside `cortex.db` whenever `CORTEX_API_TOKEN` is set. Losing it does not invalidate the token, but the regenerated key publishes a new `auth.credential_generation`, so every pinned integration must re-trust Cortex.
+
+`auth.db` + `auth-jwt.pem` **must** also be backed up when `auth.mode = oauth`. Losing the JWT key alone invalidates every issued token; losing the DB alone invalidates every active session. Losing both is recoverable only by re-running OAuth onboarding for every user.
 
 ## 6. Restore procedure
 
@@ -133,6 +141,7 @@ Include the `-wal` and `-shm` sidecars when offline — together they form one c
 3. **Verify ownership and modes**:
    ```bash
    chown -R ${CORTEX_UID:-1000}:${CORTEX_GID:-1000} /data
+   chmod 0600 /data/integration-credential.key     # if CORTEX_API_TOKEN is set
    chmod 0600 /data/auth.db   /data/auth-jwt.pem  # if OAuth
    ```
 4. **Start the server.** It will replay any WAL present, rebuild SHM, and apply pending schema migrations.
@@ -148,6 +157,7 @@ Include the `-wal` and `-shm` sidecars when offline — together they form one c
 | `auth.db` | **No** (active sessions held) | **Yes** | All OAuth sessions invalidated. Users must re-authenticate via Google; refresh tokens stop working. |
 | `auth.db-wal` / `auth.db-shm` | **No** | **Yes** | Same WAL/SHM rules as syslog. |
 | `auth-jwt.pem` | **No** (signing key in active use) | **Yes (regenerates on start)** | Catastrophic: **all** issued OAuth access tokens AND refresh tokens become unverifiable. Forces every user to re-authenticate. lab-auth regenerates a new key on next start. |
+| `integration-credential.key` | **No** (profile already published from it) | **Yes (regenerates on start)** | `auth.credential_generation` changes once, so every pinned integration must re-trust. The API token itself is unaffected. |
 | `agent-token` (agent host) | **No** | rotates instead | Forces re-enrollment with `cortex agent enroll <token>`. |
 | `agent-buffer.redb` (agent host) | tolerated; agent recreates | safe | Loses any logs buffered locally during a server outage that hadn't yet been replayed. |
 
@@ -156,7 +166,7 @@ Include the `-wal` and `-shm` sidecars when offline — together they form one c
 To migrate the data dir to a new disk / host while preserving every byte:
 
 1. **Stop the server** on the source host.
-2. **Copy preserving mode/ownership**: `rsync -aAX /data/ <new-mount>/data/`. Verify `auth.db` and `auth-jwt.pem` retain mode `0600` and owner `1000:1000` post-copy (`stat -c '%a %U:%G %n' …`).
+2. **Copy preserving mode/ownership**: `rsync -aAX /data/ <new-mount>/data/`. Verify `auth.db`, `auth-jwt.pem`, and `integration-credential.key` retain mode `0600` and owner `1000:1000` post-copy (`stat -c '%a %U:%G %n' …`).
 3. **Update `storage.db_path`** (and any absolute `mcp.auth.*_path` values) if the new mount lives at a different path. For Compose deployments, this is usually unchanged — only `CORTEX_DATA_VOLUME` (the host-side bind) moves.
 4. **Update Compose**: change the `volumes:` source to the new bind path or named volume. Leave the in-container `/data` target alone.
 5. **Start the server.** Confirm `/health` returns 200 and `cortex db integrity` passes.

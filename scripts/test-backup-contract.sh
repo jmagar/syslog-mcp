@@ -17,6 +17,7 @@ docker run --rm --user 0:0 -v "$source_dir:/data" "$image_ref" sqlite3 /data/cor
 docker run --rm --user 0:0 -v "$source_dir:/data" "$image_ref" sqlite3 /data/auth.db \
   "CREATE TABLE proof(value TEXT); INSERT INTO proof VALUES('auth-survives');"
 printf '%s\n' 'test-signing-key' >"$source_dir/auth-jwt.pem"
+printf '%s\n' 'test-integration-key' >"$source_dir/integration-credential.key"
 
 docker run --rm --user 0:0 -e CORTEX_DB_PATH=/data/cortex.db \
   -v "$source_dir:/data" -v "$backup_dir:/backups" "$image_ref" \
@@ -25,9 +26,10 @@ docker run --rm --user 0:0 -e CORTEX_DB_PATH=/data/cortex.db \
 syslog_backup="$(find "$backup_dir" -name 'syslog-*.db' -print -quit)"
 auth_backup="$(find "$backup_dir" -name 'auth-*.db' -print -quit)"
 key_backup="$(find "$backup_dir" -name 'auth-jwt-*.pem' -print -quit)"
-[[ -n "$syslog_backup" && -n "$auth_backup" && -n "$key_backup" ]]
+integration_key_backup="$(find "$backup_dir" -name 'integration-credential-*.key' -print -quit)"
+[[ -n "$syslog_backup" && -n "$auth_backup" && -n "$key_backup" && -n "$integration_key_backup" ]]
 [[ "$(file_mode "$backup_dir")" == "700" ]]
-for artifact in "$syslog_backup" "$auth_backup" "$key_backup"; do
+for artifact in "$syslog_backup" "$auth_backup" "$key_backup" "$integration_key_backup"; do
   [[ "$(file_mode "$artifact")" == "600" ]]
 done
 
@@ -40,6 +42,7 @@ rm -rf "$source_dir"
 [[ "$(docker run --rm --user 0:0 -v "$backup_dir:/backups:ro" "$image_ref" sqlite3 "/backups/$(basename "$syslog_backup")" 'SELECT value FROM proof;')" == "syslog-survives" ]]
 [[ "$(docker run --rm --user 0:0 -v "$backup_dir:/backups:ro" "$image_ref" sqlite3 "/backups/$(basename "$auth_backup")" 'SELECT value FROM proof;')" == "auth-survives" ]]
 [[ "$(docker run --rm --user 0:0 -v "$backup_dir:/backups:ro" "$image_ref" cat "/backups/$(basename "$key_backup")")" == "test-signing-key" ]]
+[[ "$(docker run --rm --user 0:0 -v "$backup_dir:/backups:ro" "$image_ref" cat "/backups/$(basename "$integration_key_backup")")" == "test-integration-key" ]]
 
 # Retention failures happen after valid artifacts are written. They must warn
 # and fail the scheduled run instead of being silently swallowed.
