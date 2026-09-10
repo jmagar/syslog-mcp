@@ -23,6 +23,7 @@ mod sessions_watch_legacy;
 mod shell_agent;
 mod shell_completions;
 mod systemd;
+mod transcript_roots;
 
 pub use debug_wrapper::{run_debug_compose_setup, run_debug_wrapper_setup};
 pub use doctor::run_setup_doctor;

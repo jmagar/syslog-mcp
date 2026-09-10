@@ -427,6 +427,36 @@ pub fn list_observatory_events(
         .context("list observatory events")
 }
 
+/// Resolve a run key to its numeric id and telemetry identity.
+///
+/// `None` means no such run exists. Run-scoped reads (`events`, `telemetry`)
+/// share this lookup so an unknown run key is distinguishable from a known
+/// run that simply has no rows to return.
+pub fn resolve_observatory_run(
+    pool: &DbPool,
+    run_key: &str,
+) -> Result<Option<(i64, RunTelemetryIdentity)>> {
+    use rusqlite::OptionalExtension;
+    pool.get()?
+        .query_row(
+            "SELECT id,hostname,tool,provider_tool,native_session_id FROM agent_runs WHERE run_key=?1",
+            [run_key],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    RunTelemetryIdentity {
+                        hostname: row.get(1)?,
+                        tool: row.get(2)?,
+                        provider_tool: row.get(3)?,
+                        native_session_id: row.get(4)?,
+                    },
+                ))
+            },
+        )
+        .optional()
+        .context("resolve observatory run")
+}
+
 pub fn list_observatory_spans(
     pool: &DbPool,
     run_id: i64,

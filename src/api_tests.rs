@@ -3748,3 +3748,102 @@ async fn llm_invocations_route_accepts_correct_admin_token() {
         "expected a JSON array of invocation rows, got: {value}"
     );
 }
+
+/// Seed three runs: one with its own events, one with none, and a sibling
+/// whose event must never leak into another run's page.
+fn seed_observatory_runs_for_events(pool: &DbPool) {
+    let conn = pool.get().unwrap();
+    for key in ["run-with-events", "run-without-events", "other-run"] {
+        conn.execute(
+            "INSERT INTO agent_runs(run_key,native_session_id,tool,hostname,status,status_observed_at,started_at,last_activity_at) VALUES(?1,?1,'codex','host','active','2026-08-21T10:00:00Z','2026-08-21T10:00:00Z','2026-08-21T10:00:00Z')",
+            [key],
+        )
+        .unwrap();
+    }
+    for (event_key, run_key) in [
+        ("own-1", "run-with-events"),
+        ("own-2", "run-with-events"),
+        ("foreign", "other-run"),
+    ] {
+        conn.execute(
+            "INSERT INTO agent_run_events(event_key,run_id,observed_at,ingested_at,event_kind,source_kind,source_id,severity,title,summary,payload_json) SELECT ?1,id,'2026-08-21T10:00:00Z','2026-08-21T10:00:01Z','transcript','transcript',?1,'info',?1,?1,'{}' FROM agent_runs WHERE run_key=?2",
+            [event_key, run_key],
+        )
+        .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn observatory_events_unknown_run_is_404_like_telemetry_on_both_paths() {
+    let (state, pool, _dir) = test_state(Some("secret".into()));
+    seed_observatory_runs_for_events(&pool);
+    let app = test_router(state);
+    for prefix in ["/api/agent-observatory/runs", "/api/agent-runs"] {
+        let (status, body) = get_json(
+            app.clone(),
+            &format!("{prefix}/no-such-run/events"),
+            Some("secret"),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{prefix} events");
+        assert_eq!(body, serde_json::json!({"error": "run_not_found"}));
+        // The telemetry sibling answers the same status and body shape.
+        let (t_status, t_body) = get_json(
+            app.clone(),
+            &format!("{prefix}/no-such-run/telemetry"),
+            Some("secret"),
+        )
+        .await;
+        assert_eq!(t_status, status, "{prefix} telemetry");
+        assert_eq!(t_body, body, "{prefix} telemetry body");
+    }
+}
+
+#[tokio::test]
+async fn observatory_events_known_run_without_events_is_empty_200() {
+    let (state, pool, _dir) = test_state(Some("secret".into()));
+    seed_observatory_runs_for_events(&pool);
+    let app = test_router(state);
+    for prefix in ["/api/agent-observatory/runs", "/api/agent-runs"] {
+        let (status, body) = get_json(
+            app.clone(),
+            &format!("{prefix}/run-without-events/events"),
+            Some("secret"),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{prefix}");
+        assert_eq!(body["run_key"], "run-without-events");
+        assert_eq!(body["events"], serde_json::json!([]));
+        assert!(body["pagination"].is_object());
+    }
+}
+
+#[tokio::test]
+async fn observatory_events_known_run_returns_only_its_own_events() {
+    let (state, pool, _dir) = test_state(Some("secret".into()));
+    seed_observatory_runs_for_events(&pool);
+    let app = test_router(state);
+    for prefix in ["/api/agent-observatory/runs", "/api/agent-runs"] {
+        let (status, body) = get_json(
+            app.clone(),
+            &format!("{prefix}/run-with-events/events?order=asc"),
+            Some("secret"),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{prefix}");
+        assert_eq!(body["run_key"], "run-with-events");
+        let events = body["events"].as_array().expect("events array");
+        let mut keys: Vec<&str> = events
+            .iter()
+            .map(|event| event["event_key"].as_str().unwrap())
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["own-1", "own-2"], "{prefix}");
+        assert!(
+            events
+                .iter()
+                .all(|event| event["run_key"] == "run-with-events"),
+            "{prefix}: every event must belong to the requested run"
+        );
+    }
+}
