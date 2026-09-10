@@ -26,6 +26,14 @@ pub struct Page<T> {
 fn cursor_error(error: CursorError) -> ServiceError {
     ServiceError::InvalidInput(error.to_string())
 }
+/// Resolve a run key or fail with `NotFound("run_not_found")` (HTTP 404).
+fn resolve_run(
+    pool: &db::DbPool,
+    run_key: &str,
+) -> anyhow::Result<(i64, ao::RunTelemetryIdentity)> {
+    ao::resolve_observatory_run(pool, run_key)?
+        .ok_or_else(|| anyhow::anyhow!(ServiceError::NotFound("run_not_found".into())))
+}
 fn limit(value: usize, maximum: usize) -> usize {
     value.clamp(1, maximum)
 }
@@ -357,6 +365,9 @@ impl CortexService {
         };
         let decoded = decode(cursor.as_deref(), &fingerprint, direction)?;
         self.run_db("observatory.events", move |pool| {
+            // Unknown run -> 404, same resolution as telemetry; a known run
+            // with no events still falls through to an empty 200 page.
+            resolve_run(pool, &run_key)?;
             let snap = snapshot(pool, "agent_run_events")?;
             let high_water = decoded.as_ref().map_or(snap.2, |c| c.high_water);
             let (rows, meta) = (
@@ -428,20 +439,7 @@ impl CortexService {
         let spans_after = decode(span_cursor.as_deref(), &span_fp, CursorDirection::Desc)?;
         let metrics_after = decode(metric_cursor.as_deref(), &metric_fp, CursorDirection::Desc)?;
         self.run_db("observatory.telemetry", move |pool| {
-            let conn = pool.get()?;
-            let (run_id, identity) = conn
-                .query_row(
-                    "SELECT id,hostname,tool,provider_tool,native_session_id FROM agent_runs WHERE run_key=?1",
-                    [&run_key],
-                    |row| Ok((row.get::<_, i64>(0)?, ao::RunTelemetryIdentity { hostname: row.get(1)?, tool: row.get(2)?, provider_tool: row.get(3)?, native_session_id: row.get(4)? })),
-                )
-                .map_err(|error| match error {
-                    rusqlite::Error::QueryReturnedNoRows => {
-                        anyhow::anyhow!(ServiceError::NotFound("run_not_found".into()))
-                    }
-                    other => anyhow::Error::from(other),
-                })?;
-            drop(conn);
+            let (run_id, identity) = resolve_run(pool, &run_key)?;
             let span_after = spans_after
                 .as_ref()
                 .map(|c| c.sort.parse::<i64>().map(|sort| (sort, c.id)))
@@ -455,7 +453,9 @@ impl CortexService {
             let snap_spans = snapshot(pool, "otel_spans")?;
             let snap_metrics = snapshot(pool, "otel_metric_points")?;
             let span_high_water = spans_after.as_ref().map_or(snap_spans.2, |c| c.high_water);
-            let metric_high_water = metrics_after.as_ref().map_or(snap_metrics.2, |c| c.high_water);
+            let metric_high_water = metrics_after
+                .as_ref()
+                .map_or(snap_metrics.2, |c| c.high_water);
             let spans = ao::list_observatory_spans(
                 pool,
                 run_id,
