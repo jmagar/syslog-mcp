@@ -23,7 +23,7 @@ services:
     # Default tag is kept in sync by `cargo xtask bump-version` (version canon);
     # previously this was frozen at 1.0.0 while migrations moved forward —
     # a stale binary against a newer schema (full-review OH1).
-    image: ghcr.io/dinglebear-ai/cortex:${CORTEX_VERSION:-3.15.0}
+    image: ghcr.io/dinglebear-ai/cortex:${CORTEX_VERSION:-3.16.0}
     container_name: cortex
     user: "${CORTEX_UID:-1000}:${CORTEX_GID:-1000}"
     group_add:
