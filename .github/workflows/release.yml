@@ -139,6 +139,11 @@ jobs:
         profile: [full, auth, stateful, notifications, upgrade, security, mutation]
     env:
       LIVE_RUNS_ROOT: ${{ github.workspace }}/.live-runs
+      # These profiles run the isolated linux-full topology, which refuses to
+      # start without an explicit authorization. This job runs on a disposable
+      # GitHub-hosted VM, exactly like CI's Live PR Smoke, so grant the same.
+      LIVE_PLATFORM_POLICY: linux-full
+      CORTEX_LIVE_DIND_AUTHORIZED: "1"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4

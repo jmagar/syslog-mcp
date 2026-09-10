@@ -123,7 +123,10 @@ artifact_qualify_native_archive() {
   live_timeout 10 live_sanitized_env "$executable" --help >"$help_output" || {
     live_die "packaged cortex --help smoke failed or timed out: $name"; return;
   }
-  grep -q 'Usage:' "$help_output" || { live_die "packaged cortex help smoke lacked usage output: $name"; return; }
+  # Accept the usage heading in either rendering: clap's `Usage: cortex ...` or
+  # the styled help's bare `Usage` section heading. Anchoring to a heading
+  # line keeps prose that merely mentions usage from qualifying.
+  grep -Eq '^[[:space:]]*Usage:?([[:space:]]|$)' "$help_output" || { live_die "packaged cortex help smoke lacked usage output: $name"; return; }
 }
 
 artifact_qualify_manifest() {
