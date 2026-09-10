@@ -123,6 +123,11 @@ def main() -> int:
     # raw page content and is deliberately excluded from uploaded artifacts.
     for failure in failures:
         print(f"live-e2e: browser surface case failed: {failure}", file=sys.stderr)
+    # `real-browser-launch` says only that node exited non-zero. The reason is
+    # in the captured stderr, which lives in an artifact the sanitizer does not
+    # upload, so print it here or a hosted failure is undiagnosable.
+    if "real-browser-launch" in failures:
+        print(f"live-e2e: browser launch error: {browser_result.get('launch_error', '')}", file=sys.stderr)
     return 1 if failures else 0
 
 

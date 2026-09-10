@@ -342,6 +342,18 @@ jobs:
           provider="docker-host:$(docker info --format '{{.ID}}')"
           bash tests/live/runner.sh --janitor --runs-root "$LIVE_RUNS_ROOT" --provider "$provider"
 
+      # The browser sweep drives a real Chrome through playwright-core. Its
+      # only non-env candidate path is a developer-local runtime, so without
+      # this the sweep can never launch on a hosted runner — it reported
+      # `real-browser-launch` the moment earlier failures stopped masking it.
+      - name: Install browser sweep runtime
+        run: |
+          npm install --no-save --no-audit --no-fund playwright-core
+          echo "LIVE_PLAYWRIGHT_CORE=$PWD/node_modules/playwright-core" >>"$GITHUB_ENV"
+          browser="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          [ -n "$browser" ] || { echo "::error::no Chrome/Chromium on the runner for the browser sweep"; exit 1; }
+          echo "LIVE_BROWSER_EXECUTABLE=$browser" >>"$GITHUB_ENV"
+
       - name: Run fail-closed live smoke
         env:
           LIVE_RUNS_ROOT: ${{ github.workspace }}/.live-runs
