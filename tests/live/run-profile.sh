@@ -2,6 +2,10 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck disable=SC1091
+source "$root/tests/live/lib/common.sh"
+live_require_modern_bash || exit 64
+live_install_err_trap
 profile="${1:-smoke}"
 shift || true
 runs_root="${LIVE_RUNS_ROOT:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/cortex-live-runs}"

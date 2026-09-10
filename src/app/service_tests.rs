@@ -172,6 +172,35 @@ async fn background_integrity_blocking_worker_holds_permit_and_drain_is_bounded(
 }
 
 #[tokio::test]
+async fn a_terminal_integrity_job_has_already_released_the_maintenance_gate() {
+    let (service, _pool, _dir) = test_service();
+    let gate = Arc::clone(&service.maintenance_permit);
+    let free_at_terminal = Arc::new(std::sync::atomic::AtomicUsize::new(usize::MAX));
+    let observed = Arc::clone(&free_at_terminal);
+    // A poller that sees `done` must be able to start the next maintenance
+    // operation. Observe the gate at the last instant before the terminal row
+    // is written: if it is still held there, some poller can see `done` and
+    // then get `Busy`, which is the race the live REST sweep hit.
+    let service = service.with_integrity_before_terminal_hook(Arc::new(move || {
+        observed.store(
+            gate.available_permits(),
+            std::sync::atomic::Ordering::SeqCst,
+        );
+    }));
+
+    let started = service.db_integrity_start_background(true).await.unwrap();
+    let status = wait_for_integrity_job(&service, started.job_id).await;
+
+    assert_eq!(status.status, "done");
+    assert_eq!(
+        free_at_terminal.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the job recorded its terminal state while still holding the maintenance gate"
+    );
+    assert!(service.drain_integrity_tasks(Duration::from_secs(1)).await);
+}
+
+#[tokio::test]
 async fn completed_integrity_waiter_failure_is_retained_across_later_jobs() {
     let (service, _pool, _dir) = test_service();
     let failed = tokio::spawn(async { panic!("injected completion waiter failure") });
