@@ -348,7 +348,8 @@ jobs:
       # `real-browser-launch` the moment earlier failures stopped masking it.
       - name: Install browser sweep runtime
         run: |
-          npm install --no-save --no-audit --no-fund playwright-core
+          playwright_version="$(node -p "require('./web/package.json').devDependencies['@playwright/test']")"
+          npm install --no-save --no-audit --no-fund "playwright-core@$playwright_version"
           echo "LIVE_PLAYWRIGHT_CORE=$PWD/node_modules/playwright-core" >>"$GITHUB_ENV"
           browser="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
           [ -n "$browser" ] || { echo "::error::no Chrome/Chromium on the runner for the browser sweep"; exit 1; }

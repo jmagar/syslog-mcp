@@ -2,14 +2,9 @@
 # Setup's external Docker dependency double. The setup command still writes and
 # validates every run-owned filesystem asset; the real Compose lifecycle is
 # independently exercised by the compose surfaces in the same phase.
-# The candidate is always built from this checkout, so report this checkout's
-# version: a hard-coded string goes stale on every release bump and turns the
-# runtime-current check into a false STALE. Resolve symlinks first, since the
-# setup lane reaches this script through a link in its run-owned bin dir.
-candidate_version() {
-  awk -F'"' '/^version = / {print $2; exit}' \
-    "$(cd "$(dirname "$(readlink -f "$0")")/../../../../.." && pwd)/Cargo.toml"
-}
+# The harness exports the version of the candidate built from this checkout.
+# Keeping that contract explicit avoids release-stale fixture strings and GNU-
+# specific path resolution when the portable live policy runs on macOS.
 case "$*" in
   *'compose ps -q'*) printf '%s\n' surface-setup-cortex ;;
   *'compose config --images'*) printf '%s\n' cortex:local-debug ;;
@@ -18,7 +13,10 @@ case "$*" in
   *'inspect '*'{{.Image}}'*) printf '%s\n' sha256:surface-setup ;;
   *'image inspect '*'{{.Id}}'*) printf '%s\n' sha256:surface-setup ;;
   *'image inspect '*'RepoDigests'*) printf '%s\n' '' ;;
-  *'exec '*'cortex --version'*) printf 'cortex %s\n' "$(candidate_version)" ;;
+  *'exec '*'cortex --version'*)
+    [ -n "${LIVE_CANDIDATE_VERSION:-}" ] || { printf '%s\n' 'LIVE_CANDIDATE_VERSION is required' >&2; exit 64; }
+    printf 'cortex %s\n' "$LIVE_CANDIDATE_VERSION"
+    ;;
   *version*) printf '%s\n' 'Docker Compose version v5.1.2' ;;
 esac
 exit 0
