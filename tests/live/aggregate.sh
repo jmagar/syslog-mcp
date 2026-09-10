@@ -14,7 +14,7 @@ for run in "$@"; do
   cmp -s "$contract" "$run/surface-contract.json" || {
     echo "aggregate: stale or mismatched SurfaceContract: $run" >&2; exit 1;
   }
-  profile="$(jq -er 'select(.kind=="run_started")|.payload.profile' "$run/events.jsonl" | head -1)"
+  profile="$(jq -er -s 'first(.[]|select(.kind=="run_started")|.payload.profile)' "$run/events.jsonl")"
   jq -e '.failed==0 and .platform.accepted==true' "$run/summary.json" >/dev/null
   jq -e '.state=="CLEAN"' "$run/cleanup-audit.json" >/dev/null
   jq -cn --arg profile "$profile" --arg run "$run" '{profile:$profile,run:$run}' >>"$tmp/runs.jsonl"
