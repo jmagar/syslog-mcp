@@ -47,7 +47,7 @@ live_resource_transition() {
   local line file
   file="$(live_resource_file)"
   if [[ "$state" == PLANNED && -n "$parent_key" ]]; then
-    if [[ ! -f "$file" ]] || ! jq -e --arg parent "$parent_key" 'select(.key==$parent)' "$file" >/dev/null; then
+    if [[ ! -f "$file" ]] || ! jq -e -s --arg parent "$parent_key" 'any(.[]; .key==$parent)' "$file" >/dev/null; then
       live_die "parent resource must be registered first"; return
     fi
   fi

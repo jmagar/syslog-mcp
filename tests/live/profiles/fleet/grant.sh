@@ -45,7 +45,7 @@ fleet_grant_finalize() {
   local ledger="$1" reservation_id="$2" state="$3" detail="$4"
   [[ "$state" == SUCCEEDED || "$state" == FAILED ]] || return 2
   local lock="${ledger}.lock" tmp; while ! mkdir "$lock" 2>/dev/null; do sleep .05; done
-  jq -e --arg id "$reservation_id" 'select(.reservation_id==$id and .state=="RESERVED")' "$ledger" >/dev/null || { rmdir "$lock"; return 3; }
+  jq -e -s --arg id "$reservation_id" 'any(.[]; .reservation_id==$id and .state=="RESERVED")' "$ledger" >/dev/null || { rmdir "$lock"; return 3; }
   tmp="${ledger}.tmp.$$"; { cat "$ledger"; jq -cn --arg id "$reservation_id" --arg state "$state" --arg detail "$detail" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{reservation_id:$id,state:$state,detail:$detail,at:$at}'; } >"$tmp"; chmod 600 "$tmp"; mv "$tmp" "$ledger"; rmdir "$lock"
 }
 
