@@ -162,3 +162,59 @@ fn permission_check_without_ensure_still_reports_missing_roots() {
         assert!(permissions.detail.contains(root), "{root} missing");
     }
 }
+
+#[test]
+fn a_root_that_cannot_be_created_fails_the_phase_without_blocking_the_rest() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(home.path().join(".gemini"), "not a directory").unwrap();
+
+    let ensure = ensure_transcript_roots_phase(home.path());
+
+    assert_eq!(ensure.status, SetupStatus::Error, "{}", ensure.detail);
+    for root in [
+        ".gemini/tmp",
+        ".gemini/antigravity/brain",
+        ".gemini/antigravity-cli/brain",
+    ] {
+        assert!(
+            ensure.detail.contains(root),
+            "{root} missing from {}",
+            ensure.detail
+        );
+    }
+    assert!(home.path().join(".claude/projects").is_dir());
+    assert!(home.path().join(".codex/sessions").is_dir());
+    assert!(
+        home.path().join(".gemini").is_file(),
+        "the blocking file is left alone"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_dangling_symlink_at_a_root_is_left_alone_and_still_flagged() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join(".codex")).unwrap();
+    let link = home.path().join(".codex/sessions");
+    let target = home.path().join("nowhere");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+
+    let ensure = ensure_transcript_roots_phase(home.path());
+    let permissions = transcript_root_permissions_phase(home.path());
+
+    assert_eq!(ensure.status, SetupStatus::Ok, "{}", ensure.detail);
+    assert!(!ensure.detail.contains(".codex/sessions"));
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert!(!target.exists(), "ensure must not create through a symlink");
+    assert_eq!(permissions.status, SetupStatus::Error);
+    assert!(
+        permissions.detail.contains(".codex/sessions"),
+        "{}",
+        permissions.detail
+    );
+}

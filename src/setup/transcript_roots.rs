@@ -14,7 +14,8 @@ use super::{PhaseTimer, SetupPhase, SetupStatus};
 
 /// Transcript roots the sessions watch service is expected to observe.
 ///
-/// Keep in sync with the `BindReadOnlyPaths` list in `ai_watch_service_unit`.
+/// `ai_watch_service_unit` builds the unit's `BindReadOnlyPaths` from this
+/// list, so the service can read exactly the roots setup creates.
 pub(crate) fn sessions_watch_transcript_roots(user_home: &Path) -> [PathBuf; 5] {
     [
         user_home.join(".claude/projects"),

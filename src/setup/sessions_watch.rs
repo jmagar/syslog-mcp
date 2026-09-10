@@ -11,8 +11,8 @@ pub(crate) use super::sessions_watch_legacy::{
     ai_index_timer_disabled_phase, legacy_ai_systemd_units_absent_phase,
 };
 use super::systemd::{systemctl_user_phase, systemctl_user_required_named_phase};
-use super::transcript_roots::ensure_transcript_roots_phase;
 pub(crate) use super::transcript_roots::transcript_root_permissions_phase;
+use super::transcript_roots::{ensure_transcript_roots_phase, sessions_watch_transcript_roots};
 use super::{
     AI_WATCH_SERVICE_ACTIVE_PHASE, AI_WATCH_SERVICE_ENABLED_PHASE, PhaseTimer,
     SessionsWatchServiceAction, SetupIssueKind, SetupPhase, SetupReport, SetupStatus,
@@ -272,16 +272,18 @@ pub(crate) fn ai_watch_service_unit(
     let db_dir = db_path.parent().unwrap_or_else(|| Path::new("/"));
     let env_path = setup_path_value(env_path).expect("validated AI watch env path");
     let cortex_bin = setup_path_value(cortex_bin).expect("validated cortex binary path");
-    let claude_root = setup_path_value(&user_home.join(".claude/projects"))
-        .expect("validated Claude transcript root");
-    let codex_root = setup_path_value(&user_home.join(".codex/sessions"))
-        .expect("validated Codex transcript root");
-    let gemini_root =
-        setup_path_value(&user_home.join(".gemini/tmp")).expect("validated Gemini transcript root");
-    let antigravity_root = setup_path_value(&user_home.join(".gemini/antigravity/brain"))
-        .expect("validated Antigravity transcript root");
-    let antigravity_cli_root = setup_path_value(&user_home.join(".gemini/antigravity-cli/brain"))
-        .expect("validated Antigravity CLI transcript root");
+    // The exact roots setup creates, so the service can read what install
+    // prepared and nothing else. `-` keeps a root removed later non-fatal.
+    let transcript_binds = sessions_watch_transcript_roots(user_home)
+        .iter()
+        .map(|root| {
+            format!(
+                "-{}",
+                setup_path_value(root).expect("validated AI transcript root")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
     let user_local_bin =
         setup_path_value(&user_home.join(".local/bin")).expect("validated user local bin path");
     let user_cargo_bin =
@@ -291,7 +293,7 @@ pub(crate) fn ai_watch_service_unit(
     let db_dir = setup_path_value(db_dir).expect("validated AI watch DB directory");
     let state_dir = setup_path_value(state_dir).expect("validated AI watch state directory");
     format!(
-        "[Unit]\nDescription=cortex real-time local AI transcript watch\nDocumentation=https://github.com/dinglebear-ai/cortex\nAfter=default.target\nStartLimitIntervalSec=600\nStartLimitBurst=20\n\n[Service]\nType=simple\nEnvironmentFile={env_path}\nEnvironment=PATH={user_local_bin}:{user_cargo_bin}:/usr/local/bin:/usr/bin:/bin\nEnvironment=CARGO_TARGET_DIR={cargo_target_dir}\nWorkingDirectory=/\nExecStart={cortex_bin} sessions watch --no-initial-scan --json\nRestart=on-failure\nRestartSec=5\nUMask=0077\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\nProtectHome=read-only\nBindReadOnlyPaths=-{claude_root} -{codex_root} -{gemini_root} -{antigravity_root} -{antigravity_cli_root}\nBindPaths={db_dir} {state_dir}\nReadWritePaths={db_dir} {state_dir}\n\n[Install]\nWantedBy=default.target\n"
+        "[Unit]\nDescription=cortex real-time local AI transcript watch\nDocumentation=https://github.com/dinglebear-ai/cortex\nAfter=default.target\nStartLimitIntervalSec=600\nStartLimitBurst=20\n\n[Service]\nType=simple\nEnvironmentFile={env_path}\nEnvironment=PATH={user_local_bin}:{user_cargo_bin}:/usr/local/bin:/usr/bin:/bin\nEnvironment=CARGO_TARGET_DIR={cargo_target_dir}\nWorkingDirectory=/\nExecStart={cortex_bin} sessions watch --no-initial-scan --json\nRestart=on-failure\nRestartSec=5\nUMask=0077\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\nProtectHome=read-only\nBindReadOnlyPaths={transcript_binds}\nBindPaths={db_dir} {state_dir}\nReadWritePaths={db_dir} {state_dir}\n\n[Install]\nWantedBy=default.target\n"
     )
 }
 
