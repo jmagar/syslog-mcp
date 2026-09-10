@@ -48,6 +48,11 @@ stateful_phase_run() {
   docker restart "$candidate" >/dev/null
   live_wait_until 30 stateful-restart-health _live_http_health_ready
   live_wait_until 30 stateful-restart-mcp _live_mcp_ready
+  # The projection watermark is logs:<max id>;heartbeats:<max id>;signatures:<n>,
+  # so it only moves when a new source row lands. Write one after the restart so
+  # the watermark check below proves the scheduler re-projected, rather than
+  # depending on background traffic arriving within the polling window.
+  printf '<134>1 %s stateful-watermark app 1 ID1 - %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "stateful-watermark-${LIVE_RUN_ID#cortex-e2e-}" | nc -w 3 127.0.0.1 "$LIVE_SYSLOG_TCP_PORT"
   stateful_mcp_call stats '{}' "$dir/stats-after.json"
   after="$(jq -r '.result.structuredContent.total_logs' "$dir/stats-after.json")"
   [[ "$after" -ge "$before" ]]
@@ -74,7 +79,7 @@ stateful_phase_run() {
   jq -e '.projection_status=="never_built" and .source_watermark==""' "$dir/projection-disabled.json" >/dev/null
   jq -e '.result.structuredContent.metadata.projection_status=="ready"' "$dir/graph-watermark.json" >/dev/null
   post_watermark="$(jq -er '.result.structuredContent.metadata.source_watermark' "$dir/graph-watermark.json")"
-  [[ "$post_watermark" != "$pre_watermark" ]] || live_die "projection watermark did not advance across restart"
+  [[ "$post_watermark" != "$pre_watermark" ]] || live_die "projection watermark did not advance across restart (before=$pre_watermark after=$post_watermark polls=$polls status=$(jq -r '.result.structuredContent.metadata.projection_status' "$dir/graph-watermark.json"))"
   stateful_mcp_call graph "$(jq -cn --arg h "$MCP_LIVE_HOST" '{mode:"entity",entity_type:"host",key:$h}')" "$dir/graph-repeat.json"
   jq -e --arg h "$MCP_LIVE_HOST" --arg w "$post_watermark" '.result.structuredContent.resolved_entity.canonical_key==$h and .result.structuredContent.metadata.source_watermark==$w' "$dir/graph-repeat.json" >/dev/null
   docker logs --tail 300 "$candidate" >"$dir/container-logs.txt" 2>&1

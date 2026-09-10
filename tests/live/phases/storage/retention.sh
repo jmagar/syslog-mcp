@@ -37,7 +37,10 @@ if grep -q storage-old-adguard "$adguard"; then live_die "AdGuard special cap di
 # Verify heartbeat cap and capture FTS phantom diagnostics from an independent,
 # read-only SQLite connection after a clean stop.
 docker compose -f "$base" -f "$override" -p "$LIVE_COMPOSE_PROJECT" stop candidate >/dev/null
-docker run --rm --user 0:0 --read-only --tmpfs /tmp -v "$state:/data:ro" --entrypoint python "$LIVE_ORACLE_IMAGE" -c '
+# The connection is read-only (mode=ro); the mount is not, because SQLite must
+# create the -shm file to open a WAL-mode database even for reading, and a clean
+# stop removes it.
+docker run --rm --user 0:0 --read-only --tmpfs /tmp -v "$state:/data" --entrypoint python "$LIVE_ORACLE_IMAGE" -c '
 import json,sqlite3
 db=sqlite3.connect("file:/data/cortex.db?mode=ro",uri=True)
 out={"schema":"cortex-live-retention-v1","old_heartbeats":db.execute("select count(*) from host_heartbeats where host_id=?",("storage-old-heartbeat",)).fetchone()[0],"phantom_fts_rows":db.execute("select count(*) from logs_fts where rowid not in (select id from logs)").fetchone()[0],"error_floor_rows":db.execute("select count(*) from logs where message=?",("storage-old-error",)).fetchone()[0]}

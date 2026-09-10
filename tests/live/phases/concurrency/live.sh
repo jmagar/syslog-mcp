@@ -36,7 +36,8 @@ persisted="$(jq --arg prefix "$prefix-w" '[.result.structuredContent.logs[]?|sel
 loss=$((accepted-persisted)); (( loss >= 0 )) || loss=0
 jq -cn --argjson offered "$offered" --argjson accepted "$accepted" --argjson rejected "$rejected" --argjson persisted "$persisted" --argjson loss "$loss" --argjson duplicates "$duplicates" --argjson worker_status "$status" --argjson maintenance_status "$maintenance_status" \
   '{schema:"cortex-live-direct-concurrency-v1",offered:$offered,accepted:$accepted,rejected:$rejected,persisted:$persisted,lost_after_accept:$loss,duplicates:$duplicates,retries:0,lock_contention_exercised:true,cas_restart_generation:1,worker_failure:$worker_status,maintenance_failure:$maintenance_status,accounted:($persisted+$rejected+$loss),bounds:{workers:8,items_per_worker:200}}' >"$out/accounting.json"
-jq -e '.offered==.accepted+.rejected and .accepted==.persisted and .lost_after_accept==0 and .accounted==.offered and .duplicates==0 and .worker_failure==0 and .maintenance_failure==0 and .cas_restart_generation==1' "$out/accounting.json" >/dev/null
+jq -e '.offered==.accepted+.rejected and .accepted==.persisted and .lost_after_accept==0 and .accounted==.offered and .duplicates==0 and .worker_failure==0 and .maintenance_failure==0 and .cas_restart_generation==1' "$out/accounting.json" >/dev/null || {
+  echo "live-e2e: direct concurrency accounting did not balance: $(jq -c . "$out/accounting.json")" >&2; exit 1; }
 jq -e '.accepted==1' "$out/recovery-producer.json" >/dev/null
 # Cancellation is a separate observed attempt; its partial accounting remains
 # evidence and cannot be overwritten by a retry.

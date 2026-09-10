@@ -20,7 +20,9 @@ upgrade_snapshot_volume() {
   local name="$1" volume="${LIVE_COMPOSE_PROJECT}_state" dir="$LIVE_RUN_ROOT/artifacts/upgrade"
   # Stream the archive to the host: the run's artifact dir is private (0700) to
   # the harness user, so the oracle container's own user cannot write into it.
-  docker run --rm --network none --read-only --tmpfs /tmp --entrypoint sh -v "$volume:/state:ro" "$LIVE_ORACLE_IMAGE" -ceu "tar -C /state -cf - ." >"$dir/$name.tar"
+  # Read as uid 1000, the candidate that owns the volume (and the restore uid):
+  # owner-only files such as integration-credential.key are unreadable otherwise.
+  docker run --rm --network none --read-only --tmpfs /tmp --user 1000:1000 --cap-drop ALL --security-opt no-new-privileges --entrypoint sh -v "$volume:/state:ro" "$LIVE_ORACLE_IMAGE" -ceu "tar -C /state -cf - ." >"$dir/$name.tar"
   shasum -a 256 "$dir/$name.tar" | awk '{print $1}' >"$dir/$name.tar.sha256"
   chmod 400 "$dir/$name.tar" "$dir/$name.tar.sha256"
 }
