@@ -96,7 +96,15 @@ stateful_phase_run() {
   [[ "$post_watermark" != "$pre_watermark" ]] || live_die "projection watermark did not advance across restart (before=$pre_watermark after=$post_watermark polls=$polls status=$(jq -r '.result.structuredContent.metadata.projection_status' "$dir/graph-watermark.json"))"
   live_result stateful.projection-watermark stateful-projection-watermark pass 0 artifacts/stateful/graph-watermark.json semantic-positive
   stateful_mcp_call graph "$(jq -cn --arg h "$MCP_LIVE_HOST" '{mode:"entity",entity_type:"host",key:$h}')" "$dir/graph-repeat.json"
-  jq -e --arg h "$MCP_LIVE_HOST" --arg w "$post_watermark" '.result.structuredContent.resolved_entity.canonical_key==$h and .result.structuredContent.metadata.source_watermark==$w' "$dir/graph-repeat.json" >/dev/null
+  # The projection refreshes every second over a live source, so a repeat
+  # query may see a newer watermark (logs;heartbeats;signatures). It must
+  # resolve the same entity and never go backwards in any component.
+  jq -e --arg h "$MCP_LIVE_HOST" --arg w "$post_watermark" '
+    def parts: split(";") | map(split(":") | {(.[0]): (.[1]|tonumber)}) | add;
+    .result.structuredContent.resolved_entity.canonical_key==$h and
+    (.result.structuredContent.metadata.source_watermark|parts) as $now | ($w|parts) as $was |
+    ($was|keys) == ($now|keys) and all($was|keys[]; $now[.] >= $was[.])
+  ' "$dir/graph-repeat.json" >/dev/null || live_die "repeat graph query regressed or changed entity: $(jq -c '.result.structuredContent|{entity:.resolved_entity.canonical_key,watermark:.metadata.source_watermark}' "$dir/graph-repeat.json") after $post_watermark"
   live_result stateful.graph-correlation stateful-graph-correlation pass 0 artifacts/stateful/graph-repeat.json semantic-positive
   docker logs --tail 300 "$candidate" >"$dir/container-logs.txt" 2>&1
   jq -n --slurpfile before "$dir/stats-before.json" --slurpfile after "$dir/stats-after.json" --rawfile failure "$dir/dependency-failure.json" --arg pre "$pre_watermark" --arg post "$post_watermark" '{schema:"cortex-live-stateful-observability-v1",container_scoped:true,success_counters:{before:$before[0].result.structuredContent.runtime_observability,after:$after[0].result.structuredContent.runtime_observability},failure:{transport:"mcp-jsonrpc",structured_response:($failure|fromjson),error_kind:"fts-query-validation"},projection:{before:$pre,after:$post,monotonic:true},recovered:true}' >"$dir/observability.json"

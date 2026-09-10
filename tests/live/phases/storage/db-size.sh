@@ -18,7 +18,9 @@ _db_size_recovered() {
   docker compose -f "$base" -f "$override" -p "$LIVE_COMPOSE_PROJECT" exec -T -e RUST_LOG=error candidate cortex db status --json >"$status" 2>/dev/null &&
     [[ "$(jq -r .logical_size_bytes "$status")" -le 3145728 ]]
 }
-live_wait_until 120 db-size-recovery _db_size_recovered
+# Recovery trims under deliberate storage pressure; loaded hosted runners can
+# need several minutes, as the cleanup-faults recovery waits already allow.
+live_wait_until 300 db-size-recovery _db_size_recovered
 errors="$LIVE_RUN_ROOT/artifacts/storage/db-size-errors.json"
 docker compose -f "$base" -f "$override" -p "$LIVE_COMPOSE_PROJECT" exec -T -e RUST_LOG=error candidate cortex search --grep db-size-error --limit 100 --json >"$errors"
 count="$(jq -r .count "$errors")"; (( count >= 10 && count < 715 )) || live_die "err-floor pressure semantics not observed: $count"
