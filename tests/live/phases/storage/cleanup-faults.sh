@@ -4,6 +4,7 @@ set -euo pipefail
 root="${LIVE_PROJECT_ROOT:?}"; base="$root/tests/live/profiles/isolated/compose.yaml"; override="$root/tests/live/profiles/storage/compose.override.yaml"; fault_override="$root/tests/live/profiles/storage/cleanup-fault.override.yaml"
 # shellcheck disable=SC1091
 source "$root/tests/live/lib/common.sh"; source "$root/tests/live/lib/lock.sh"; source "$root/tests/live/lib/redact.sh"; source "$root/tests/live/lib/events.sh"; source "$root/tests/live/lib/budgets.sh"; source "$root/tests/live/lib/wait.sh"; source "$root/tests/live/lib/docker.sh"
+live_install_err_trap
 mkdir -p "$LIVE_RUN_ROOT/artifacts/storage"
 state="$(docker volume ls -q --filter "label=com.docker.compose.project=$LIVE_COMPOSE_PROJECT" --filter label=cortex.live.kind=state)"
 fixture="$LIVE_RUN_ROOT/artifacts/storage/db-size-fixture.syslog"

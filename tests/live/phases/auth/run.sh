@@ -181,13 +181,7 @@ auth_oauth_live_service() {
     # Populated by the OAuth token fixture above.
     # shellcheck disable=SC2154
     code="$(curl -sS --max-time 15 -o "$dir/oauth-machine-$(printf '%s' "$path" | tr '/' '-').json" -w '%{http_code}' -H 'Host: localhost:3100' -H "Authorization: Bearer $OAUTH_read" -H 'Content-Type: application/json' --data-binary '{}' "http://127.0.0.1:$port$path")"
-    # OTLP is not mounted at all on a non-loopback OAuth-only deployment (it only
-    # supports CORTEX_TOKEN; see the mount guard in src/runtime.rs), so 404 is the
-    # designed denial there. Every other machine-ingest route must answer 401.
-    case "$path:$code" in
-      /v1/logs:404|/v1/metrics:404|/v1/traces:404|*:401) ;;
-      *) live_die "user OAuth token on machine-ingest $path answered HTTP $code, expected 401"; return 1 ;;
-    esac
+    [[ "$code" == 401 ]] || { live_die "user OAuth token on machine-ingest $path answered HTTP $code, expected 401"; return 1; }
     jq -cn --arg path "$path" --arg evidence "artifacts/auth/oauth-machine-$(printf '%s' "$path" | tr '/' '-').json" '{path:$path,result:"denied",status:401,evidence:$evidence}' >>"$dir/oauth-machine-ingest-ledger.jsonl"
   done
   jq -se 'length==7 and ([.[].path]|unique|length)==7 and all(.[];.status==401)' "$dir/oauth-machine-ingest-ledger.jsonl" >/dev/null
