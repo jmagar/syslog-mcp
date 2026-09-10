@@ -425,6 +425,23 @@ def main() -> int:
     # raw command output and is deliberately excluded from uploaded artifacts.
     for failure in failures:
         print(f"live-e2e: cli surface case failed: {failure}", file=sys.stderr)
+    # The case id alone cannot explain an exit code. Print a bounded excerpt of
+    # what the command actually said, with every token this sweep injects into
+    # the child environment masked first — the observation file is withheld
+    # from artifacts precisely because it is unredacted, so redact here.
+    secrets = [value for value in (os.environ.get("LIVE_API_TOKEN"), os.environ.get("LIVE_ADMIN_TOKEN"),
+                                   os.environ.get("LIVE_CORTEX_TOKEN"), os.environ.get("LIVE_CURSOR_SIGNING_KEY"))
+               if value]
+    failed_ids = {failure.split(":", 1)[0] for failure in failures}
+    for record in results:
+        if record["result"] != "fail" or record["surface_id"] not in failed_ids:
+            continue
+        terminal = (record.get("observation") or {}).get("terminal", "")
+        for secret in secrets:
+            terminal = terminal.replace(secret, "<redacted>")
+        excerpt = " ".join(terminal.split())[:400]
+        print(f"live-e2e: cli {record['surface_id']} {record['case_kind']} "
+              f"exit={(record.get('observation') or {}).get('exit')} :: {excerpt}", file=sys.stderr)
     return 1 if failures else 0
 
 
