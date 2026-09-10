@@ -105,3 +105,18 @@ async fn repository_cursor_keeps_original_high_water_snapshot() {
         vec!["a"]
     );
 }
+
+#[tokio::test]
+async fn events_distinguish_unknown_run_from_known_run_without_events() {
+    let (_dir, service) = service();
+    let events = |run_key: &str| {
+        service.observatory_events(run_key.into(), Default::default(), None, 10, false)
+    };
+    let error = events("missing").await.unwrap_err();
+    assert!(matches!(error, ServiceError::NotFound(ref value) if value == "run_not_found"));
+
+    service.pool_for_test().get().unwrap().execute("INSERT INTO agent_runs(run_key,native_session_id,tool,hostname,status,status_observed_at,started_at,last_activity_at) VALUES('quiet','session','codex','host','active','2026-08-21T10:00:00Z','2026-08-21T10:00:00Z','2026-08-21T10:00:00Z')", []).unwrap();
+    let page = events("quiet").await.unwrap();
+    assert!(page.items.is_empty());
+    assert!(!page.pagination.truncated);
+}

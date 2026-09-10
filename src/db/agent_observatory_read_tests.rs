@@ -297,3 +297,17 @@ fn persisted_trace_relation_run_lookup_uses_its_bounded_index() {
         "query plan must retain the persisted trace/run index: {details:?}"
     );
 }
+
+#[test]
+fn run_resolution_reports_unknown_runs_as_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = init_pool(&StorageConfig::for_test(dir.path().join("resolve.db"))).unwrap();
+    assert!(resolve_observatory_run(&pool, "missing").unwrap().is_none());
+    pool.get().unwrap().execute("INSERT INTO agent_runs(run_key,native_session_id,tool,provider_tool,hostname,status,status_observed_at,started_at,last_activity_at) VALUES('run','session','codex','openai','host','active','2026-08-21T10:00:00Z','2026-08-21T10:00:00Z','2026-08-21T10:00:00Z')", []).unwrap();
+    let (run_id, identity) = resolve_observatory_run(&pool, "run").unwrap().unwrap();
+    assert!(run_id > 0);
+    assert_eq!(identity.hostname, "host");
+    assert_eq!(identity.tool, "codex");
+    assert_eq!(identity.provider_tool.as_deref(), Some("openai"));
+    assert_eq!(identity.native_session_id, "session");
+}
