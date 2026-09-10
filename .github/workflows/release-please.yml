@@ -9,13 +9,15 @@ name: release-please
 # Release, which in turn triggers release.yml (push: tags: v*) to build and
 # publish the Linux/Windows archives.
 #
-# release-please's `extra-files` handles the two clean JSON version fields
-# (server.json's $.version, mcpb/manifest.json's $.version) directly. It
-# cannot reach the `regex_version` carriers declared in
-# release/components.toml — server.json's `cortex:vX.Y.Z` image tag and
-# docker-compose.prod.yml's `CORTEX_VERSION:-X.Y.Z` default — because those
-# aren't plain JSON/TOML fields. The release-pr-fixup job below runs
-# `cargo xtask sync-version` on the release PR branch to patch those, then
+# release-please's `extra-files` handles the clean JSON version fields listed
+# in release-please-config.json (server.json's $.version, mcpb/manifest.json's
+# $.version, packages/cortex-rmcp/package.json's $.version/$.binaryVersion)
+# directly. It cannot reach every carrier declared in release/components.toml:
+# the `regex_version` patterns (server.json's `cortex:vX.Y.Z` image tag,
+# docker-compose.prod.yml's `CORTEX_VERSION:-X.Y.Z` default, ...), the other
+# server.json JSON pointers, and the nested harness lockfiles under
+# tests/live/. The release-pr-fixup job below runs `cargo xtask sync-version`
+# on the release PR branch to sync every such carrier, then
 # `cargo xtask check-release-versions` to verify every version-bearing file
 # (including the untouched `.claude-plugin/plugin.json`, which must carry no
 # version key at all) agrees before pushing a follow-up fixup commit.
@@ -95,7 +97,7 @@ jobs:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
       - name: Install Rust and kache
         uses: ./.github/actions/setup-rust-kache
-      - name: Sync regex-based version files and verify
+      - name: Sync version carriers release-please cannot reach and verify
         run: |
           set -euo pipefail
           cargo xtask sync-version
@@ -110,5 +112,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "chore: sync regex-based version files"
+          git commit -m "chore: sync version carriers release-please cannot reach"
           git push
