@@ -3,7 +3,7 @@ set -euo pipefail
 : "${LIVE_RUN_ROOT:?}" "${LIVE_COMPOSE_PROJECT:?}" "${LIVE_SYSLOG_TCP_PORT:?}"
 root="${LIVE_PROJECT_ROOT:?}"; base="$root/tests/live/profiles/isolated/compose.yaml"; override="$root/tests/live/profiles/storage/compose.override.yaml"; budget="$root/tests/live/profiles/storage/pressure-budget.override.yaml"
 # shellcheck disable=SC1091
-source "$root/tests/live/lib/common.sh"; source "$root/tests/live/lib/lock.sh"; source "$root/tests/live/lib/redact.sh"; source "$root/tests/live/lib/events.sh"; source "$root/tests/live/lib/budgets.sh"; source "$root/tests/live/lib/wait.sh"; source "$root/tests/live/lib/docker.sh"
+source "$root/tests/live/lib/common.sh"; source "$root/tests/live/lib/lock.sh"; source "$root/tests/live/lib/redact.sh"; source "$root/tests/live/lib/events.sh"; source "$root/tests/live/lib/budgets.sh"; source "$root/tests/live/lib/wait.sh"; source "$root/tests/live/lib/docker.sh"; source "$root/tests/live/lib/storage_diag.sh"
 mkdir -p "$LIVE_RUN_ROOT/artifacts/storage"
 # Trim under a budget whose recovery target sits above the shared volume's
 # non-log floor; see pressure-budget.override.yaml.
@@ -22,7 +22,7 @@ _db_size_recovered() {
   docker compose -f "$base" -f "$override" -p "$LIVE_COMPOSE_PROJECT" exec -T -e RUST_LOG=error candidate cortex db status --json >"$status" 2>/dev/null &&
     [[ "$(jq -r .logical_size_bytes "$status")" -le 8388608 ]]
 }
-live_wait_until 120 db-size-recovery _db_size_recovered
+live_wait_until 120 db-size-recovery _db_size_recovered || { rc=$?; live_storage_diagnose db-size-recovery "$(docker volume ls -q --filter "label=com.docker.compose.project=$LIVE_COMPOSE_PROJECT" --filter label=cortex.live.kind=state)" "$(docker compose -f "$base" -f "$override" -f "$budget" -p "$LIVE_COMPOSE_PROJECT" ps -q candidate)"; exit "$rc"; }
 errors="$LIVE_RUN_ROOT/artifacts/storage/db-size-errors.json"
 docker compose -f "$base" -f "$override" -p "$LIVE_COMPOSE_PROJECT" exec -T -e RUST_LOG=error candidate cortex search --grep db-size-error --limit 100 --json >"$errors"
 count="$(jq -r .count "$errors")"; (( count >= 10 && count < 715 )) || live_die "err-floor pressure semantics not observed: $count"
