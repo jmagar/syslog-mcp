@@ -332,15 +332,10 @@ def main() -> int:
     claude_root = Path(os.environ["LIVE_RUN_HOME"]) / ".claude" / "projects" / "cortex-live"
     claude_root.mkdir(parents=True, exist_ok=True)
     (claude_root / "live.jsonl").write_text('{"sessionId":"smoke-live","content":"cortex-live smoke"}\n')
-    # Every root `transcript_root_permissions_phase` checks must exist, or the
-    # `setup sessionswatch install` prerequisite below fails before the command
-    # under test runs. `cortex setup` checks these roots without creating them,
-    # so the run-owned HOME has to carry the full set.
-    for root in (Path(os.environ["LIVE_RUN_HOME"]) / ".codex" / "sessions",
-                 Path(os.environ["LIVE_RUN_HOME"]) / ".gemini" / "tmp",
-                 Path(os.environ["LIVE_RUN_HOME"]) / ".gemini" / "antigravity" / "brain",
-                 Path(os.environ["LIVE_RUN_HOME"]) / ".gemini" / "antigravity-cli" / "brain"):
-        root.mkdir(parents=True, exist_ok=True)
+    # Only the Claude root is seeded, because it carries a fixture transcript.
+    # The other transcript roots are deliberately absent: the
+    # `setup sessionswatch install` prerequisite must create them itself, which
+    # is the behaviour this run qualifies.
     with sqlite3.connect(run_tmp / "atuin.db") as connection:
         connection.execute("CREATE TABLE IF NOT EXISTS history (id TEXT PRIMARY KEY, timestamp INTEGER, duration INTEGER, exit INTEGER, command TEXT, cwd TEXT, session TEXT, hostname TEXT, author TEXT, intent TEXT, deleted_at INTEGER)")
         connection.execute("INSERT OR REPLACE INTO history VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
