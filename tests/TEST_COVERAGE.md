@@ -35,13 +35,13 @@ This table is generated from the compiled `SurfaceContract` and `profiles.json`;
 
 | Inventory | Count |
 |---|---:|
-| mcp surfaces | 59 |
+| mcp surfaces | 60 |
 | rest surfaces | 93 |
 | cli surfaces | 180 |
 | ingest surfaces | 32 |
 | artifact surfaces | 0 |
 | browser surfaces | 0 |
-| all surfaces | 364 |
+| all surfaces | 365 |
 | runnable profiles | 21 |
 
 Profiles: `agent`, `artifacts`, `auth`, `compose-isolated`, `docker-boundary-full`, `docker-boundary-reduced`, `fleet-mutating`, `fleet-read-only`, `full`, `isolated`, `legacy-central-pull`, `mcp`, `mutation`, `noop`, `notifications`, `security`, `smoke`, `soak`, `stateful`, `storage`, `upgrade`
