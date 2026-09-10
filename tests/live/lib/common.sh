@@ -2,6 +2,32 @@
 
 live_die() { printf 'live-e2e: %s\n' "$*" >&2; return 1; }
 
+# The harness needs bash >= 4.1. On older bash (macOS /bin/bash is 3.2) a
+# failing `[[ ... ]]` does not trigger errexit, so every bare assertion in a
+# phase is silently a no-op and a run can report green over checks that failed.
+# Refuse to run rather than produce an untrustworthy result.
+live_require_modern_bash() {
+  if (( BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 1) )); then
+    printf 'live-e2e: bash >= 4.1 required, found %s at %s. On older bash a failing [[ ]] does not stop the run, so assertions are not enforced. Install a newer bash (for example `brew install bash`) and put it first on PATH.\n' "$BASH_VERSION" "${BASH:-bash}" >&2
+    return 1
+  fi
+}
+
+# Name the abort. Under errexit a failing command or bare `[[ ... ]]` ends the
+# run with no message of its own. Report where it happened: file and line
+# only, never the command text, which may contain an expanded credential.
+# Deliberate `set +e` regions stay quiet because errexit is off there.
+live_err_trap() {
+  local status=$? frame=1
+  [[ $- == *e* ]] || return 0
+  # live_die has already said why; point at its call site, not its `return 1`.
+  [[ "${FUNCNAME[1]:-}" == live_die ]] && frame=2
+  printf 'live-e2e: aborted at %s:%s (status %s) in %s\n' \
+    "${BASH_SOURCE[$frame]:-$0}" "${BASH_LINENO[$((frame - 1))]}" "$status" "${FUNCNAME[$frame]:-main}" >&2
+}
+
+live_install_err_trap() { set -E; trap live_err_trap ERR; }
+
 live_require_tools() {
   local tool missing=0
   for tool in "$@"; do

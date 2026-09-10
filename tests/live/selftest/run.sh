@@ -3,6 +3,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"; export LIVE_PROJECT_ROOT="$ROOT"
 # shellcheck disable=SC1090
 for lib in common lock redact events command lease resources report artifacts contracts budgets; do source "$ROOT/tests/live/lib/$lib.sh"; done
+live_require_modern_bash || exit 64
+live_install_err_trap
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 passes=0
 ok() { "$@"; passes=$((passes+1)); }
