@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sqlite3
 import sys
@@ -72,6 +73,9 @@ def run(binary: str, spelling: str, tail: list[str], authenticated: bool = True,
                                       "CORTEX_PORT": str(isolated_port),
                                       "CORTEX_RECEIVER_PORT": str(isolated_port + 1000),
                                       "LIVE_DOCKER_BIN": os.environ["LIVE_DOCKER_BIN"],
+                                      # The Docker fixtures report the candidate's version from this
+                                      # contract; the explicit env would otherwise drop it.
+                                      "LIVE_CANDIDATE_VERSION": os.environ["LIVE_CANDIDATE_VERSION"],
                                       "LIVE_DOCKER_COMPOSE_BIN": os.environ["LIVE_DOCKER_COMPOSE_BIN"],
                                       "LIVE_DOCKER_TRACE": os.path.join(os.environ["LIVE_RUN_TMP"], "docker-child-trace.log"),
                                       "CORTEX_COMPOSE_PROGRAM": os.environ["CORTEX_COMPOSE_PROGRAM"],
@@ -89,6 +93,7 @@ def run_long_lived(binary: str, spelling: str) -> dict:
     command_key = hashlib.sha256(spelling.encode()).hexdigest()[:12]
     port = 41000 + int(command_key[:3], 16) % 1000
     env = {"PATH": os.environ.get("PATH", ""), "HOME": os.environ["LIVE_RUN_HOME"],
+           "LIVE_CANDIDATE_VERSION": os.environ["LIVE_CANDIDATE_VERSION"],
            "TMPDIR": os.environ["LIVE_RUN_TMP"], "CORTEX_URL": os.environ["LIVE_CORTEX_URL"],
            "CORTEX_API_TOKEN": os.environ["LIVE_API_TOKEN"], "CORTEX_API_ADMIN_TOKEN": os.environ["LIVE_ADMIN_TOKEN"],
            "CORTEX_TOKEN": os.environ["LIVE_CORTEX_TOKEN"],
@@ -298,6 +303,22 @@ def semantic_args(entry: dict, is_parent: bool) -> tuple[list[str], str, bool]:
     return ["--json"], "executed-semantic" if entry["mutation"] == "none" else "executed-refusal-semantic", True
 
 
+def error_fragments(terminal: str) -> str:
+    """Return the error-bearing parts of a command's output.
+
+    A leading excerpt shows whatever happened to print first; for a doctor that
+    is the section that passed. Pull out the JSON phases whose status is error,
+    or failing that the text lines that mention an error, so the diagnostic
+    names the section that actually decided the exit code.
+    """
+    fragments = [terminal[max(0, match.start() - 160):match.end() + 1600]
+                 for match in re.finditer(r'"status":\s*"error"', terminal)]
+    if not fragments:
+        fragments = [line.strip() for line in terminal.splitlines()
+                     if re.search(r"\berror", line, re.IGNORECASE)]
+    return " | ".join(" ".join(fragment.split()) for fragment in fragments)[:3200]
+
+
 def main() -> int:
     contract_path, binary_path, output_path = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3])
     contract = json.loads(contract_path.read_text())
@@ -354,6 +375,14 @@ def main() -> int:
         tail = [replacements.get(item, item) for item in tail]
         if entry["spelling"] in {"setup sessionswatch check", "setup doctor", "doctor"}:
             (Path(os.environ["LIVE_RUN_TMP"]) / "systemctl-state" / "sessions-index-enabled").unlink(missing_ok=True)
+            # Doctor inspects managed appdata this run's synthetic HOME has
+            # never had: .cortex/.env, the compose assets and the debug
+            # wrapper. `setup repair` is the idempotent command doctor's own
+            # guidance names, so establish that state first and assert doctor
+            # against a set-up home rather than a half-built one.
+            repair = run(binary_path, "setup repair", ["--json"], local_only=True)
+            if repair["exit"] != 0:
+                raise RuntimeError(f"setup repair prerequisite failed: {repair.get('terminal', '')}")
             prerequisite = run(binary_path, "setup sessionswatch install", ["--json"], local_only=True)
             if prerequisite["exit"] != 0:
                 raise RuntimeError(f"sessionswatch prerequisite failed: {prerequisite.get('terminal', '')}")
@@ -425,6 +454,23 @@ def main() -> int:
     # raw command output and is deliberately excluded from uploaded artifacts.
     for failure in failures:
         print(f"live-e2e: cli surface case failed: {failure}", file=sys.stderr)
+    # The case id alone cannot explain an exit code. Print a bounded excerpt of
+    # what the command actually said, with every token this sweep injects into
+    # the child environment masked first — the observation file is withheld
+    # from artifacts precisely because it is unredacted, so redact here.
+    secrets = [value for value in (os.environ.get("LIVE_API_TOKEN"), os.environ.get("LIVE_ADMIN_TOKEN"),
+                                   os.environ.get("LIVE_CORTEX_TOKEN"), os.environ.get("LIVE_CURSOR_SIGNING_KEY"))
+               if value]
+    failed_ids = {failure.split(":", 1)[0] for failure in failures}
+    for record in results:
+        if record["result"] != "fail" or record["surface_id"] not in failed_ids:
+            continue
+        terminal = (record.get("observation") or {}).get("terminal", "")
+        for secret in secrets:
+            terminal = terminal.replace(secret, "<redacted>")
+        excerpt = error_fragments(terminal) or " ".join(terminal.split())[:400]
+        print(f"live-e2e: cli {record['surface_id']} {record['case_kind']} "
+              f"exit={(record.get('observation') or {}).get('exit')} :: {excerpt}", file=sys.stderr)
     return 1 if failures else 0
 
 
