@@ -62,11 +62,17 @@ def main() -> int:
     browser_env = {**os.environ, "LIVE_CORTEX_URL": base,
                    "LIVE_PLAYWRIGHT_CORE": playwright_core,
                    "LIVE_BROWSER_EXECUTABLE": browser_executable}
-    browser_process = subprocess.run(
-        ["node", str(Path(__file__).with_name("browser_playwright.mjs"))], capture_output=True, timeout=60,
-        env=browser_env)
-    browser_result = json.loads(browser_process.stdout) if browser_process.returncode == 0 else {
-        "launch_error": browser_process.stderr.decode("utf-8", "replace")[-4096:]}
+    if not playwright_core:
+        # Name the missing runtime instead of handing Node an empty module id,
+        # which only surfaces as `require('')` deep inside the launcher.
+        browser_result = {"launch_error": "playwright-core not found; LIVE_PLAYWRIGHT_CORE="
+                          f"{os.environ.get('LIVE_PLAYWRIGHT_CORE', '')!r} does not exist"}
+    else:
+        browser_process = subprocess.run(
+            ["node", str(Path(__file__).with_name("browser_playwright.mjs"))], capture_output=True, timeout=60,
+            env=browser_env)
+        browser_result = json.loads(browser_process.stdout) if browser_process.returncode == 0 else {
+            "launch_error": browser_process.stderr.decode("utf-8", "replace")[-4096:]}
     result = {
         "schema": "cortex-live-browser-sweep-v1",
         "app": {"status": status, "bytes": len(html), "sha256": hashlib.sha256(html).hexdigest(),
@@ -123,6 +129,11 @@ def main() -> int:
     # raw page content and is deliberately excluded from uploaded artifacts.
     for failure in failures:
         print(f"live-e2e: browser surface case failed: {failure}", file=sys.stderr)
+    # `real-browser-launch` says only that node exited non-zero. The reason is
+    # in the captured stderr, which lives in an artifact the sanitizer does not
+    # upload, so print it here or a hosted failure is undiagnosable.
+    if "real-browser-launch" in failures:
+        print(f"live-e2e: browser launch error: {browser_result.get('launch_error', '')}", file=sys.stderr)
     return 1 if failures else 0
 
 

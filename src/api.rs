@@ -2487,8 +2487,10 @@ fn cors_layer(port: u16, loopback_bind: bool, allowed_origins: &[String]) -> Cor
 // Maintenance routes use the dual-permit pattern described on
 // `MAINTENANCE_PERMIT` above: vacuum/checkpoint hold MAINTENANCE_PERMIT for the
 // duration of the awaited service call, while reads continue to acquire from
-// `CortexService::db_permits` independently. `db_status` and `db_integrity` are
-// read-side and bypass MAINTENANCE_PERMIT entirely.
+// `CortexService::db_permits` independently. `db_status` is read-side and
+// bypasses MAINTENANCE_PERMIT entirely. The integrity routes single-flight on
+// it inside the service and answer contention with 503 `{"error": "db
+// maintenance already in progress"}` (see docs/api.md).
 
 /// `GET /api/db/status` — cached PRAGMA snapshot (read).
 async fn db_status(State(state): State<ApiState>) -> impl IntoResponse {

@@ -36,6 +36,9 @@ if [[ ! -x "$binary" ]]; then cargo build --quiet --bin cortex; fi
 live_event phase_progress '{"phase":"surfaces","stage":"binary-ready"}'
 export LIVE_RUN_HOME="$LIVE_RUN_ROOT/home" LIVE_RUN_TMP="$LIVE_RUN_ROOT/tmp" LIVE_CORTEX_URL="http://127.0.0.1:$LIVE_HTTP_PORT"
 export LIVE_CLI_FIXTURE_BIN="$LIVE_PROJECT_ROOT/tests/live/fixtures/surfaces/bin"
+LIVE_CANDIDATE_VERSION="$(awk -F'"' '/^version = / {print $2; exit}' "$LIVE_PROJECT_ROOT/Cargo.toml")"
+[[ -n "$LIVE_CANDIDATE_VERSION" ]] || { live_die "candidate version missing from Cargo.toml"; exit 1; }
+export LIVE_CANDIDATE_VERSION
 LIVE_CLI_PATH="$LIVE_CLI_FIXTURE_BIN:$(dirname "$binary"):/usr/bin:/bin:/usr/sbin:/sbin"
 LIVE_DOCKER_BIN="$(command -v docker)"
 LIVE_DOCKER_COMPOSE_BIN="$(command -v docker-compose || true)"
