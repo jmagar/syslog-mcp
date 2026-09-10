@@ -356,38 +356,67 @@ pub(super) fn jsonl_prefix_guard(path: &Path, byte_offset: u64) -> Result<String
 
 #[cfg(test)]
 thread_local! {
-    /// Bytes read by full-prefix digest computation on this thread.
+    /// Bytes of transcript this thread has fed to acknowledged-prefix hashing.
     ///
-    /// This is the cost the forwarder used to pay twice per poll for every
-    /// growing transcript, and it is the thing the hot path must stop
-    /// paying. Counting it is what lets a test assert the append-only cycle
-    /// by cost rather than by inspection. Per-thread so parallel tests cannot
-    /// see each other's reads; a scan runs its digests inline on one thread.
-    static PREFIX_DIGEST_BYTES_READ: Cell<u64> = const { Cell::new(0) };
+    /// Counting it lets a test assert the append-only steady state by cost: a
+    /// cycle must hash what it appended, never the history before it.
+    /// Per-thread so parallel tests cannot see each other's reads. That relies
+    /// on `#[tokio::test]`'s default current-thread runtime running a scan's
+    /// hashing inline on the test thread; a multi-thread flavor would make
+    /// these counts unreliable.
+    static PREFIX_HASH_BYTES_READ: Cell<u64> = const { Cell::new(0) };
 }
 
-/// Bytes this thread has spent re-reading acknowledged transcript history.
+/// Bytes this thread has fed to acknowledged-prefix hashing.
 #[cfg(test)]
-pub(super) fn prefix_digest_bytes_read() -> u64 {
-    PREFIX_DIGEST_BYTES_READ.with(Cell::get)
+pub(super) fn prefix_hash_bytes_read() -> u64 {
+    PREFIX_HASH_BYTES_READ.with(Cell::get)
 }
 
-/// Hash every acknowledged byte. This is O(prefix) and unbounded by design:
-/// it is the only construct that can prove the already-forwarded history was
-/// not rewritten, so it belongs off the hot path, not on it. See
-/// [`verify_jsonl_position`] for when it is allowed to run.
-pub(super) fn jsonl_prefix_digest(path: &Path, byte_offset: u64) -> Result<String> {
-    let file = fs::File::open(path)?;
-    let mut reader = file.take(byte_offset);
-    let mut hasher = Sha256::new();
-    let copied = std::io::copy(&mut reader, &mut hasher)?;
-    #[cfg(test)]
-    PREFIX_DIGEST_BYTES_READ.with(|read| read.set(read.get().saturating_add(copied)));
+/// Feed bytes `[from, to)` of `path` into `hasher`, which must already hold
+/// SHA-256 state over `[0, from)`.
+pub(super) fn extend_prefix_hash(
+    path: &Path,
+    hasher: &mut Sha256,
+    from: u64,
+    to: u64,
+) -> Result<()> {
     anyhow::ensure!(
-        copied == byte_offset,
+        from <= to,
+        "acknowledged prefix moved backwards while hashing"
+    );
+    let mut file = fs::File::open(path)?;
+    file.seek(SeekFrom::Start(from))?;
+    let expected = to - from;
+    let copied = std::io::copy(&mut file.take(expected), hasher)?;
+    #[cfg(test)]
+    PREFIX_HASH_BYTES_READ.with(|read| read.set(read.get().saturating_add(copied)));
+    anyhow::ensure!(
+        copied == expected,
         "transcript became shorter while hashing acknowledged prefix"
     );
-    Ok(format!("sha256:{:x}", hasher.finalize()))
+    Ok(())
+}
+
+/// SHA-256 state over exactly `[0, byte_offset)` of `path`. This reads all of
+/// acknowledged history; [`verify_jsonl_position`] decides when that is
+/// warranted.
+pub(super) fn jsonl_prefix_hasher(path: &Path, byte_offset: u64) -> Result<Sha256> {
+    let mut hasher = Sha256::new();
+    extend_prefix_hash(path, &mut hasher, 0, byte_offset)?;
+    Ok(hasher)
+}
+
+/// The persisted form of a prefix digest: the format the forwarder has always
+/// written, so existing checkpoints verify unchanged.
+pub(super) fn finish_digest(hasher: &Sha256) -> String {
+    format!("sha256:{:x}", hasher.clone().finalize())
+}
+
+/// Digest of `[0, byte_offset)` in its persisted form.
+#[cfg(test)]
+pub(super) fn jsonl_prefix_digest(path: &Path, byte_offset: u64) -> Result<String> {
+    Ok(finish_digest(&jsonl_prefix_hasher(path, byte_offset)?))
 }
 
 pub(super) fn file_modified_ns(metadata: &fs::Metadata) -> Option<u64> {
