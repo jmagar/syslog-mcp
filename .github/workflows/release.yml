@@ -144,6 +144,10 @@ jobs:
       # GitHub-hosted VM, exactly like CI's Live PR Smoke, so grant the same.
       LIVE_PLATFORM_POLICY: linux-full
       CORTEX_LIVE_DIND_AUTHORIZED: "1"
+      # linux-full approves no qualification for storage.pressure: the hard
+      # tmpfs-quota scenario must actually run and pass. Same disposable-VM
+      # grant as the DinD authorization above.
+      CORTEX_LIVE_STORAGE_PRESSURE_AUTHORIZED: "1"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -180,6 +184,16 @@ jobs:
           npm install --prefix "$prefix" --no-audit --no-fund mcporter@0.13.0
           echo "$prefix/node_modules/.bin" >>"$GITHUB_PATH"
           "$prefix/node_modules/.bin/mcporter" --version
+      # The storage-pressure watchdog measures the quota volume from the host
+      # (du on /var/lib/docker/volumes/<volume>/_data), independent of the
+      # candidate. Docker keeps its root 0710 root:root; volumes/ (0701) and
+      # each _data (0755, a world-readable tmpfs here) already allow the rest.
+      # Grant traverse only (no listing) on this disposable runner.
+      - name: Let the storage-pressure watchdog reach quota volumes
+        if: matrix.profile == 'full'
+        run: |
+          sudo chmod o+x "$(docker info --format '{{.DockerRootDir}}')"
+          stat -c '%A %U:%G %n' "$(docker info --format '{{.DockerRootDir}}')" "$(docker info --format '{{.DockerRootDir}}')/volumes"
       - name: Run release-blocking profile
         run: bash tests/live/run-profile.sh "${{ matrix.profile }}"
       - name: Reconcile leases
