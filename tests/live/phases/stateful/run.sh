@@ -31,6 +31,7 @@ stateful_phase_run() {
   jq -e '.result.structuredContent.points|length==0' "$dir/timeline-empty.json" >/dev/null
   stateful_mcp_call compare '{"a_from":"2026-08-27T10:00:00Z","a_to":"2026-08-27T11:00:00Z","b_from":"2026-08-27T11:00:00Z","b_to":"2026-08-27T12:00:00Z"}' "$dir/compare-boundary.json"
   jq -e '.result.structuredContent.a.from=="2026-08-27T10:00:00.000Z" and .result.structuredContent.b.to=="2026-08-27T12:00:00.000Z"' "$dir/compare-boundary.json" >/dev/null
+  live_result stateful.analytics-boundaries stateful-analytics-boundaries pass 0 artifacts/stateful/compare-boundary.json semantic-positive
   stateful_mcp_call llm_invocations '{}' "$dir/llm-audit-before.json"
   jq -e 'any(.result.structuredContent[]?;.status=="disabled")' "$dir/llm-audit-before.json" >/dev/null
   pre_llm_id="$(jq -er 'first(.result.structuredContent[]|select(.status=="disabled"))|.id' "$dir/llm-audit-before.json")"
@@ -41,8 +42,10 @@ stateful_phase_run() {
   # immediately following valid query proves recovery rather than a dead path.
   mcp_http "$LIVE_CORTEX_TOKEN" '{"jsonrpc":"2.0","id":901,"method":"tools/call","params":{"name":"cortex","arguments":{"action":"search","query":"-","limit":1}}}' "$dir/dependency-failure.json"
   jq -e '.result.isError==true and (.result.content[0].text|length>0)' "$dir/dependency-failure.json" >/dev/null
+  live_result stateful.failure-stage-diagnostics stateful-failure-stage-diagnostics pass 0 artifacts/stateful/dependency-failure.json semantic-positive
   stateful_mcp_call search "$(jq -cn --arg q "\"$marker\"" '{query:$q,limit:10}')" "$dir/dependency-recovery.json"
   jq -e --argjson id "$pre_log_id" 'any(.result.structuredContent.logs[]?;.id==$id)' "$dir/dependency-recovery.json" >/dev/null
+  live_result stateful.dependency-recovery stateful-dependency-recovery pass 0 artifacts/stateful/dependency-recovery.json semantic-positive
 
   candidate="$(live_ingest_candidate_id)"
   docker restart "$candidate" >/dev/null
@@ -61,12 +64,14 @@ stateful_phase_run() {
   jq -S --arg id "$pre_llm_id" 'first(.result.structuredContent[]|select(.id==$id))' "$dir/llm-audit-before.json" >"$dir/llm-row-before.json"
   jq -S --arg id "$pre_llm_id" 'first(.result.structuredContent[]|select(.id==$id))' "$dir/llm-audit-after.json" >"$dir/llm-row-after.json"
   cmp "$dir/llm-row-before.json" "$dir/llm-row-after.json"
+  live_result stateful.llm-audit-exactness stateful-llm-audit-exactness pass 0 artifacts/stateful/llm-audit-after.json semantic-positive
   stateful_mcp_call search "$(jq -cn --arg q "\"$marker\"" '{query:$q,limit:10}')" "$dir/exact-log-after.json"
   jq -e --argjson id "$pre_log_id" --arg marker "$marker" 'any(.result.structuredContent.logs[]?;.id==$id and .message==$marker)' "$dir/exact-log-after.json" >/dev/null
   stateful_mcp_call host_state "$(jq -cn --arg h "$MCP_LIVE_HOST" '{host:$h}')" "$dir/exact-heartbeat-after.json"
   jq -S '.result.structuredContent|{host_id,hostname}' "$dir/exact-heartbeat-before.json" >"$dir/heartbeat-identity-before.json"
   jq -S '.result.structuredContent|{host_id,hostname}' "$dir/exact-heartbeat-after.json" >"$dir/heartbeat-identity-after.json"
   cmp "$dir/heartbeat-identity-before.json" "$dir/heartbeat-identity-after.json"
+  live_result stateful.restart-exactness stateful-restart-exactness pass 0 artifacts/stateful/exact-log-after.json semantic-positive
 
   started="$(date +%s)"
   while (( polls < 20 )); do
@@ -78,20 +83,24 @@ stateful_phase_run() {
   jq -e --arg h "$MCP_LIVE_HOST" '.result.structuredContent.resolved_entity.canonical_key==$h' "$dir/graph-watermark.json" >/dev/null
   jq -e '.projection_status=="never_built" and .source_watermark==""' "$dir/projection-disabled.json" >/dev/null
   jq -e '.result.structuredContent.metadata.projection_status=="ready"' "$dir/graph-watermark.json" >/dev/null
+  live_result stateful.projection-lifecycle stateful-projection-lifecycle pass 0 artifacts/stateful/projection-disabled.json semantic-positive
   post_watermark="$(jq -er '.result.structuredContent.metadata.source_watermark' "$dir/graph-watermark.json")"
   [[ "$post_watermark" != "$pre_watermark" ]] || live_die "projection watermark did not advance across restart (before=$pre_watermark after=$post_watermark polls=$polls status=$(jq -r '.result.structuredContent.metadata.projection_status' "$dir/graph-watermark.json"))"
+  live_result stateful.projection-watermark stateful-projection-watermark pass 0 artifacts/stateful/graph-watermark.json semantic-positive
   stateful_mcp_call graph "$(jq -cn --arg h "$MCP_LIVE_HOST" '{mode:"entity",entity_type:"host",key:$h}')" "$dir/graph-repeat.json"
   jq -e --arg h "$MCP_LIVE_HOST" --arg w "$post_watermark" '.result.structuredContent.resolved_entity.canonical_key==$h and .result.structuredContent.metadata.source_watermark==$w' "$dir/graph-repeat.json" >/dev/null
+  live_result stateful.graph-correlation stateful-graph-correlation pass 0 artifacts/stateful/graph-repeat.json semantic-positive
   docker logs --tail 300 "$candidate" >"$dir/container-logs.txt" 2>&1
   jq -n --slurpfile before "$dir/stats-before.json" --slurpfile after "$dir/stats-after.json" --rawfile failure "$dir/dependency-failure.json" --arg pre "$pre_watermark" --arg post "$post_watermark" '{schema:"cortex-live-stateful-observability-v1",container_scoped:true,success_counters:{before:$before[0].result.structuredContent.runtime_observability,after:$after[0].result.structuredContent.runtime_observability},failure:{transport:"mcp-jsonrpc",structured_response:($failure|fromjson),error_kind:"fts-query-validation"},projection:{before:$pre,after:$post,monotonic:true},recovered:true}' >"$dir/observability.json"
   jq -e '.container_scoped and .recovered and (.failure.structured_response.result.isError==true) and (.success_counters.before|type=="object") and (.success_counters.after|type=="object")' "$dir/observability.json" >/dev/null
+  live_result stateful.structured-observability stateful-structured-observability pass 0 artifacts/stateful/observability.json semantic-positive
   now="$(date +%s)"
   jq -cn --arg host "$MCP_LIVE_HOST" --arg marker "$marker" --argjson log_id "$pre_log_id" --arg llm_id "$pre_llm_id" --arg pre "$pre_watermark" --arg post "$post_watermark" --argjson polls "$polls" --argjson wait "$((now-started))" --argjson before "$before" --argjson after "$after" \
     '{schema:"cortex-live-stateful-result-v2",marker:$host,exact_log:{message:$marker,id:$log_id},exact_llm_id:$llm_id,stages:{producer:"exact fixture queried",durable_store:"same ids after restart",scheduler:"projection watermark advanced",query:"exact semantic responses"},poll_count:$polls,cumulative_wait_seconds:$wait,projection_watermarks:{before:$pre,after:$post},logs_before_restart:$before,logs_after_restart:$after,secrets_present:false}' >"$dir/result.json"
   live_event stateful_verified "$(jq -c . "$dir/result.json")"
-  # Stateful lifecycle capabilities are not SurfaceContract entries. Preserve
-  # their detailed evidence as one terminal profile disposition instead of
-  # manufacturing canonical surface results that aggregate qualification can
-  # neither own nor reconcile.
+  # Stateful lifecycle capabilities are not SurfaceContract entries, so the
+  # profile ledger (live_capability_ledger in lib/contracts.sh) names them
+  # itself; each was recorded above as the check proving it passed. The
+  # terminal disposition keeps the combined evidence for the profile.
   live_terminal_disposition stateful pass artifacts/stateful/result.json
 }

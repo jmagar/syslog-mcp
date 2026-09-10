@@ -127,6 +127,88 @@ pub mod testing {
         (state, auth_state)
     }
 
+    /// Like [`oauth_state_with_auth_state`] but also returns every machine-ingest
+    /// route the server mounts (OTLP, heartbeats, agent commands, AI
+    /// transcripts, syslog forward, shell history, agent file tails), built on
+    /// the same database and auth policy as the returned [`AppState`]. Live
+    /// OAuth qualification serves it next to the MCP router to prove a user
+    /// OAuth token is refused on machine telemetry routes.
+    pub async fn oauth_state_with_machine_ingest(
+        data_dir: &Path,
+    ) -> (AppState, lab_auth::state::AuthState, axum::Router) {
+        let auth_state = build_auth_state(data_dir).await;
+        let storage = minimal_storage(data_dir);
+        let pool = Arc::new(db::init_pool(&storage).expect("test db pool should init"));
+        let state = oauth_app_state(
+            storage.clone(),
+            Arc::clone(&pool),
+            Arc::new(auth_state.clone()),
+            None,
+        );
+        let token = state.config.api_token.0.clone();
+        let policy = state.auth_policy.clone();
+        let ingest = crate::ingest::start_writer_from_receiver_config(
+            &crate::config::ReceiverConfig::default(),
+            storage,
+            Arc::clone(&pool),
+            Arc::new(parking_lot::Mutex::new(None)),
+            crate::receiver::enrichment::EnrichmentConfig::default(),
+            Arc::clone(&state.observability),
+        );
+        let router = axum::Router::new()
+            .merge(crate::otlp::router(crate::otlp::OtlpState::new(
+                ingest,
+                token.clone(),
+                Arc::clone(&state.otlp_counters),
+                policy.clone(),
+            )))
+            .merge(crate::heartbeat::router(
+                crate::heartbeat::HeartbeatState::new(
+                    Arc::clone(&pool),
+                    token.clone(),
+                    policy.clone(),
+                ),
+            ))
+            .merge(crate::agent_command_ingest::router(
+                crate::agent_command_ingest::AgentCommandIngestState::new(
+                    Arc::clone(&pool),
+                    token.clone(),
+                    policy.clone(),
+                ),
+            ))
+            .merge(crate::ai_transcript_ingest::router(
+                crate::ai_transcript_ingest::AiTranscriptIngestState::new(
+                    Arc::clone(&pool),
+                    token.clone(),
+                    Default::default(),
+                    policy.clone(),
+                ),
+            ))
+            .merge(crate::syslog_forward_ingest::router(
+                crate::syslog_forward_ingest::SyslogForwardIngestState::new(
+                    Arc::clone(&pool),
+                    token.clone(),
+                    Default::default(),
+                    policy.clone(),
+                ),
+            ))
+            .merge(crate::shell_history_ingest::router(
+                crate::shell_history_ingest::ShellHistoryIngestState::new(
+                    Arc::clone(&pool),
+                    token.clone(),
+                    policy.clone(),
+                ),
+            ))
+            .merge(crate::agent_file_tail_ingest::router(
+                crate::agent_file_tail_ingest::AgentFileTailIngestState::new(
+                    Arc::clone(&pool),
+                    token,
+                    policy,
+                ),
+            ));
+        (state, auth_state, router)
+    }
+
     // ── private helpers ──────────────────────────────────────────────────────
 
     fn minimal_storage(data_dir: &Path) -> StorageConfig {
@@ -170,6 +252,15 @@ pub mod testing {
     ) -> AppState {
         let storage = minimal_storage(data_dir);
         let pool = Arc::new(db::init_pool(&storage).expect("test db pool should init"));
+        oauth_app_state(storage, pool, auth_state, token)
+    }
+
+    fn oauth_app_state(
+        storage: StorageConfig,
+        pool: Arc<db::DbPool>,
+        auth_state: Arc<lab_auth::state::AuthState>,
+        token: Option<String>,
+    ) -> AppState {
         AppState {
             service: CortexService::new(pool, storage),
             config: base_config(Some("https://syslog.example.com"), token),

@@ -177,7 +177,7 @@ auth_oauth_live_service() {
   done
   # Every machine-ingest route rejects a user OAuth token before payload parsing.
   : >"$dir/oauth-machine-ingest-ledger.jsonl"
-  for path in /v1/logs /v1/metrics /v1/traces /v1/heartbeats /v1/agent-commands /v1/ai-transcripts /v1/shell-history; do
+  for path in /v1/logs /v1/metrics /v1/traces /v1/heartbeats /v1/agent-commands /v1/ai-transcripts /v1/shell-history /v1/syslog-forward /v1/file-tails; do
     # Populated by the OAuth token fixture above.
     # shellcheck disable=SC2154
     code="$(curl -sS --max-time 15 -o "$dir/oauth-machine-$(printf '%s' "$path" | tr '/' '-').json" -w '%{http_code}' -H 'Host: localhost:3100' -H "Authorization: Bearer $OAUTH_read" -H 'Content-Type: application/json' --data-binary '{}' "http://127.0.0.1:$port$path")"
