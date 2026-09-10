@@ -33,15 +33,16 @@ pub(in crate::agent::ai_transcript) struct Checkpoint {
     /// content changes *or* when [`GEMINI_REWARN_INTERVAL`] has elapsed.
     #[serde(skip)]
     pub(in crate::agent::ai_transcript) gemini_parse_failures: HashMap<String, GeminiParseFailure>,
-    /// When each transcript's acknowledged prefix was last read back and
-    /// hashed byte for byte, keyed by canonical path.
+    /// This process's hash state for each transcript's acknowledged prefix,
+    /// keyed by canonical path. See [`VerifiedPrefix`].
     ///
     /// Deliberately not persisted. A prefix this process never read is a
     /// prefix this process cannot vouch for: the agent may have been down
-    /// while the file was rewritten, so every tracked file is deep verified
-    /// once after start and then only at [`DEEP_VERIFY_INTERVAL`].
+    /// while the file was rewritten, so every tracked file is read back from
+    /// byte 0 once after start and then at least every
+    /// [`DEEP_VERIFY_INTERVAL`].
     #[serde(skip)]
-    pub(in crate::agent::ai_transcript) prefix_verifications: HashMap<String, Instant>,
+    pub(in crate::agent::ai_transcript) verified_prefixes: HashMap<String, VerifiedPrefix>,
     /// When absent transcripts were last swept out of the persisted maps.
     /// Also not persisted: a fresh process sweeps on its first save.
     #[serde(skip)]
@@ -54,190 +55,263 @@ pub(in crate::agent::ai_transcript) struct JsonlPosition {
     pub(in crate::agent::ai_transcript) byte_offset: u64,
     pub(in crate::agent::ai_transcript) source_epoch: String,
     pub(in crate::agent::ai_transcript) prefix_guard: String,
-    /// Exact SHA-256 digest of every acknowledged byte. Growth verifies this
-    /// prior prefix before seeking into the append, catching rewrite+append.
+    /// Exact SHA-256 digest of every acknowledged byte, `[0, byte_offset)`.
+    /// Compared by reading the prefix back — see [`verify_jsonl_position`]
+    /// for when that happens.
     #[serde(default)]
     pub(in crate::agent::ai_transcript) prefix_digest: Option<String>,
     /// File size when this cursor was persisted. A later larger size is the
-    /// normal append case; a same-size metadata change is a rewrite.
+    /// normal append case; a same-size file whose modification time moved
+    /// may have been rewritten in place, so it forces a read of the prefix.
     #[serde(default)]
     pub(in crate::agent::ai_transcript) observed_len: u64,
     /// Nanoseconds since the Unix epoch for the persisted file modification.
-    /// Missing legacy values invalidate once and are rewritten in this form.
+    /// A missing legacy value makes a same-size file ambiguous, which forces
+    /// a read of the prefix; the field is rewritten on the next save.
     #[serde(default)]
     pub(in crate::agent::ai_transcript) modified_ns: Option<u64>,
-    /// Byte offset that [`JsonlPosition::prefix_digest`] actually covers.
-    ///
-    /// The digest is only recomputed on a cycle that deep verified, so on an
-    /// append-only cycle `byte_offset` advances while this does not. Every
-    /// checkpoint written before this field existed recorded the digest at
-    /// `byte_offset` itself, which is exactly what `None` means here — the
-    /// migration needs no rewrite and no reset.
-    #[serde(default)]
-    pub(in crate::agent::ai_transcript) digest_offset: Option<u64>,
 }
 
-/// How long an acknowledged prefix may go without being read back and hashed
-/// byte for byte.
+/// How long this process may go without reading a transcript's acknowledged
+/// prefix back from byte 0 and comparing it with the digest on record.
 ///
-/// This is the frequency bound on exact rewrite detection. Hashing every
-/// tracked transcript once an hour is a rounding error (a 2 GiB tree is
-/// seconds of SHA-256 per hour); hashing it every 15 s poll, twice, is the
-/// 70-80%-of-a-core bug this replaces.
+/// This bounds how late a rewrite of the unsampled middle of history is
+/// detected. The digest itself always covers every acknowledged byte (see
+/// [`VerifiedPrefix`]), so the interval is a delay, not a region that goes
+/// unchecked. Re-reading each tracked transcript once an hour costs seconds
+/// per hour even for a multi-GiB tree.
 const DEEP_VERIFY_INTERVAL: Duration = Duration::from_secs(3600);
 
 /// How often the persisted checkpoint is swept for transcripts that no
-/// longer exist. Each sweep is one `stat` per tracked path, so it is cheap
-/// but not free enough to repeat on every poll.
+/// longer exist. Each sweep is roughly one `try_exists` per checkpoint key,
+/// so it is cheap but not free enough to repeat on every poll.
 const PRUNE_INTERVAL: Duration = Duration::from_secs(600);
 
-/// What a cursor consultation was actually able to prove.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::agent::ai_transcript) enum PrefixVerification {
-    /// Accepted on bounded evidence only: same source epoch, matching
-    /// sampled guard windows, and a monotonically grown length. The
-    /// acknowledged history was NOT read, so a rewrite confined to the
-    /// unsampled middle of the prefix is not detected on this cycle.
-    Bounded,
-    /// The acknowledged prefix was read back and matched the recorded digest
-    /// byte for byte, over the range that digest covers.
-    Deep,
+/// This process's proof of one transcript's acknowledged prefix.
+///
+/// `hasher` is SHA-256 state over exactly `[0, through)` and `digest` is its
+/// finalized value — the `prefix_digest` persisted for the position at
+/// `through`. Holding the state rather than only the digest is what lets an
+/// append extend the proof by hashing just the appended bytes, so the
+/// persisted digest always covers every acknowledged byte while the steady
+/// state never re-reads history.
+#[derive(Debug, Clone)]
+pub(in crate::agent::ai_transcript) struct VerifiedPrefix {
+    /// When this process last hashed the prefix from byte 0, either
+    /// confirming the digest on record or establishing it after a replay.
+    pub(in crate::agent::ai_transcript) deep_verified_at: Instant,
+    pub(in crate::agent::ai_transcript) through: u64,
+    pub(in crate::agent::ai_transcript) digest: String,
+    pub(in crate::agent::ai_transcript) hasher: Sha256,
 }
 
-/// Where to resume a JSONL transcript, and what the caller may reuse.
+/// A cursor to persist, and the hash state that vouches for it.
+///
+/// The state is adopted only once the cursor is durably saved. Until then
+/// the checkpoint still names the previous position, and the state for
+/// *that* position is what the next cycle must check against.
+pub(in crate::agent::ai_transcript) struct JsonlUpdate {
+    pub(in crate::agent::ai_transcript) position: JsonlPosition,
+    pub(in crate::agent::ai_transcript) verified: VerifiedPrefix,
+}
+
+/// The outcome of checking a persisted cursor against its transcript.
+#[derive(Debug)]
+pub(in crate::agent::ai_transcript) enum PrefixCheck {
+    /// The cursor stands. `hasher` covers exactly `[0, position.byte_offset)`;
+    /// `deep` records whether this check read the prefix back to prove it.
+    Accepted { hasher: Sha256, deep: bool },
+    /// The cursor no longer describes the file, for the stated reason. The
+    /// caller replays the file from the start.
+    Rejected(&'static str),
+}
+
+/// Where to resume a JSONL transcript.
 pub(in crate::agent::ai_transcript) struct JsonlResume {
     pub(in crate::agent::ai_transcript) line: usize,
     pub(in crate::agent::ai_transcript) byte_offset: u64,
-    /// The digest to persist again unchanged, with the offset it covers.
-    /// `None` means the caller must compute a fresh one — either because
-    /// this cycle deep verified (so the digest can be extended to cover
-    /// everything acknowledged) or because the cursor was rejected.
-    pub(in crate::agent::ai_transcript) carried_digest: Option<(String, u64)>,
-}
-
-/// The offset a position's digest covers, honouring the pre-`digest_offset`
-/// checkpoint format.
-fn digest_offset(position: &JsonlPosition) -> u64 {
-    position.digest_offset.unwrap_or(position.byte_offset)
+    /// SHA-256 state over exactly `[0, byte_offset)`, for the caller to extend
+    /// across whatever this cycle acknowledges.
+    pub(in crate::agent::ai_transcript) hasher: Sha256,
 }
 
 /// Resolve the seekable cursor for `key`, if there is one.
 ///
-/// `None` means this checkpoint has no seekable position for the file and
-/// the caller must take the legacy line/fingerprint migration path. A
-/// returned resume at line 0 / offset 0 means the cursor existed and was
-/// rejected: replay the file from the start.
+/// `Ok(None)` means this checkpoint has no seekable position for the file
+/// and the caller must take the legacy line/fingerprint migration path. A
+/// resume at line 0 / offset 0 means the cursor existed and was rejected:
+/// replay the file from the start. `Err` means the file could not be checked
+/// at all — an I/O failure, which is not evidence of a rewrite — so the
+/// caller should keep the cursor and try again next cycle rather than replay.
 pub(in crate::agent::ai_transcript) fn resume_jsonl_position(
     path: &Path,
     checkpoint: &mut Checkpoint,
     key: &str,
     now: Instant,
-) -> Option<JsonlResume> {
-    let position = checkpoint.jsonl_positions.get(key)?.clone();
-    let Some(verification) = verify_jsonl_position(path, &position, checkpoint, key, now) else {
-        return Some(JsonlResume {
-            line: 0,
-            byte_offset: 0,
-            carried_digest: None,
-        });
+) -> Result<Option<JsonlResume>> {
+    let Some(position) = checkpoint.jsonl_positions.get(key).cloned() else {
+        return Ok(None);
     };
-    Some(JsonlResume {
-        line: position.line,
-        byte_offset: position.byte_offset,
-        carried_digest: match verification {
-            // Nothing read the history this cycle, so recomputing the digest
-            // could only reproduce the value already on record — at a cost
-            // proportional to everything ever forwarded. Carry it forward.
-            PrefixVerification::Bounded => position
-                .prefix_digest
-                .clone()
-                .map(|digest| (digest, digest_offset(&position))),
-            PrefixVerification::Deep => None,
+    Ok(Some(
+        match verify_jsonl_position(path, &position, checkpoint, key, now)? {
+            PrefixCheck::Accepted { hasher, deep } => {
+                if deep {
+                    tracing::debug!(
+                        path = %path.display(),
+                        acknowledged_bytes = position.byte_offset,
+                        reason_code = "transcript_prefix_read_back",
+                        "ai transcript forwarder re-verified acknowledged history"
+                    );
+                }
+                JsonlResume {
+                    line: position.line,
+                    byte_offset: position.byte_offset,
+                    hasher,
+                }
+            }
+            PrefixCheck::Rejected(cause) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    cause,
+                    acknowledged_bytes = position.byte_offset,
+                    reason_code = "transcript_cursor_rejected",
+                    "ai transcript forwarder can no longer trust its cursor; replaying the file from the start"
+                );
+                JsonlResume {
+                    line: 0,
+                    byte_offset: 0,
+                    hasher: Sha256::new(),
+                }
+            }
         },
-    })
+    ))
 }
 
-/// Decide whether `position` still describes `path`, escalating from bounded
-/// signals to an exact prefix hash only when that escalation can tell the
-/// caller something the cheap signals cannot.
+/// Decide whether `position` still describes `path`, reading the prefix back
+/// only when this process cannot already vouch for it.
 ///
-/// The bounded signals are the source epoch (replacement), the sampled guard
-/// windows over the first and last 4 KiB of the prefix plus its length
-/// (truncation and edge rewrites), and monotonic growth. A deep read happens
-/// when:
+/// The bounded signals, checked every cycle at a cost independent of the
+/// prefix, are the length (truncation), the source epoch (replacement), and
+/// the sampled guard windows over the first and last 4 KiB of the prefix
+/// (edge rewrites). Any of those rejects the cursor on the cycle it happens.
 ///
-/// * this process has never verified this file — a checkpoint inherited
-///   across a restart describes bytes this process has not seen; or
-/// * [`DEEP_VERIFY_INTERVAL`] has elapsed since it last did; or
-/// * the cheap signals are ambiguous: the file is the same size but its
-///   modification time moved, which is precisely the in-place rewrite the
-///   sampled windows may straddle.
+/// Past them, the cursor is accepted without reading history only when this
+/// process holds [`VerifiedPrefix`] state for exactly this position — same
+/// offset, same digest — that it read from byte 0 within the last
+/// [`DEEP_VERIFY_INTERVAL`], and the file is not the same size with a moved
+/// modification time (an in-place rewrite the sampled windows may straddle).
+/// Otherwise the whole prefix is hashed and compared: after a restart, when a
+/// re-read falls due, in that ambiguous same-size case, and whenever the
+/// persisted position is not the one this process last recorded.
 ///
-/// The honest consequence, stated plainly: between deep reads, a rewrite of
-/// the unsampled middle of the acknowledged prefix combined with an append
-/// is NOT detected. You cannot show that history was not rewritten without
-/// reading history, so this trades exactness for a bounded detection delay
-/// rather than pretending the cheap signals are sufficient.
+/// Because the digest covers every acknowledged byte, a rewrite confined to
+/// the unsampled middle of history and combined with an append is caught by
+/// the next such read: within [`DEEP_VERIFY_INTERVAL`], or at the next
+/// restart. `Err` is an I/O failure while checking, not evidence either way.
 pub(in crate::agent::ai_transcript) fn verify_jsonl_position(
     path: &Path,
     position: &JsonlPosition,
     checkpoint: &mut Checkpoint,
     key: &str,
     now: Instant,
-) -> Option<PrefixVerification> {
-    let metadata = path.metadata().ok()?;
+) -> Result<PrefixCheck> {
+    let metadata = path
+        .metadata()
+        .with_context(|| format!("failed to stat transcript {}", path.display()))?;
     let len = metadata.len();
-    if len < position.byte_offset
-        || len < position.observed_len
-        || position.observed_len == 0
-        || position.prefix_digest.is_none()
-    {
-        return None;
+    if len < position.byte_offset || len < position.observed_len {
+        return Ok(PrefixCheck::Rejected("truncated"));
+    }
+    let Some(expected) = position.prefix_digest.as_ref() else {
+        return Ok(PrefixCheck::Rejected("no_prefix_digest"));
+    };
+    if position.observed_len == 0 {
+        return Ok(PrefixCheck::Rejected("no_observed_len"));
     }
     if source_epoch(path) != position.source_epoch {
-        return None;
+        return Ok(PrefixCheck::Rejected("replaced"));
     }
-    if !jsonl_prefix_guard(path, position.byte_offset)
-        .is_ok_and(|guard| guard == position.prefix_guard)
-    {
-        return None;
+    if jsonl_prefix_guard(path, position.byte_offset)? != position.prefix_guard {
+        return Ok(PrefixCheck::Rejected("edge_rewritten"));
     }
     let appended = len > position.observed_len;
     let untouched = !appended
         && position.modified_ns.is_some()
         && file_modified_ns(&metadata) == position.modified_ns;
-    let ambiguous = !appended && !untouched;
-    let due = ambiguous
-        || checkpoint
-            .prefix_verifications
-            .get(key)
-            .is_none_or(|last| now.duration_since(*last) >= DEEP_VERIFY_INTERVAL);
-    if !due {
-        return Some(PrefixVerification::Bounded);
+    if (appended || untouched)
+        && let Some(verified) = checkpoint.verified_prefixes.get(key)
+        && verified.through == position.byte_offset
+        && &verified.digest == expected
+        && now.duration_since(verified.deep_verified_at) < DEEP_VERIFY_INTERVAL
+    {
+        return Ok(PrefixCheck::Accepted {
+            hasher: verified.hasher.clone(),
+            deep: false,
+        });
     }
-    let expected = position.prefix_digest.as_ref()?;
-    if !jsonl_prefix_digest(path, digest_offset(position)).is_ok_and(|actual| &actual == expected) {
-        checkpoint.prefix_verifications.remove(key);
-        return None;
+    let hasher = jsonl_prefix_hasher(path, position.byte_offset)?;
+    if &finish_digest(&hasher) != expected {
+        checkpoint.verified_prefixes.remove(key);
+        return Ok(PrefixCheck::Rejected("prefix_rewritten"));
     }
-    checkpoint.prefix_verifications.insert(key.to_string(), now);
-    Some(PrefixVerification::Deep)
+    checkpoint.verified_prefixes.insert(
+        key.to_string(),
+        VerifiedPrefix {
+            deep_verified_at: now,
+            through: position.byte_offset,
+            digest: expected.clone(),
+            hasher: hasher.clone(),
+        },
+    );
+    Ok(PrefixCheck::Accepted { hasher, deep: true })
 }
 
-/// Hash the acknowledged prefix through `offset` and record that this
-/// process has now seen those bytes. Used when the caller has no digest to
-/// carry forward — a new file, a rejected cursor, or a cycle that just deep
-/// verified and can therefore extend its coverage to the new offset.
-pub(in crate::agent::ai_transcript) fn refresh_prefix_digest(
+/// Build the cursor to persist once this cycle has read `path` through
+/// `acknowledged`, at line `line`.
+///
+/// `hasher` is SHA-256 state over `[0, from)`: the resumed cursor's state, or
+/// fresh state with `from == 0` after a rejection or on first sight. Only
+/// `[from, acknowledged)` is read, so an append-only cycle hashes what it
+/// appended and nothing else, while the resulting digest still covers every
+/// acknowledged byte. A read from byte 0 counts as a deep verification.
+pub(in crate::agent::ai_transcript) fn acknowledge_jsonl_prefix(
     path: &Path,
-    checkpoint: &mut Checkpoint,
+    checkpoint: &Checkpoint,
     key: &str,
-    offset: u64,
+    (mut hasher, from): (Sha256, u64),
+    acknowledged: u64,
+    line: usize,
     now: Instant,
-) -> Result<(String, u64)> {
-    let digest = jsonl_prefix_digest(path, offset)?;
-    checkpoint.prefix_verifications.insert(key.to_string(), now);
-    Ok((digest, offset))
+) -> Result<JsonlUpdate> {
+    let prefix_guard =
+        jsonl_prefix_guard(path, acknowledged).context("failed to guard acknowledged prefix")?;
+    extend_prefix_hash(path, &mut hasher, from, acknowledged)
+        .context("failed to hash acknowledged prefix")?;
+    let metadata = path
+        .metadata()
+        .with_context(|| format!("failed to stat transcript {}", path.display()))?;
+    let digest = finish_digest(&hasher);
+    let deep_verified_at = match checkpoint.verified_prefixes.get(key) {
+        Some(verified) if from > 0 && verified.through == from => verified.deep_verified_at,
+        _ => now,
+    };
+    Ok(JsonlUpdate {
+        position: JsonlPosition {
+            line,
+            byte_offset: acknowledged,
+            source_epoch: source_epoch(path),
+            prefix_guard,
+            prefix_digest: Some(digest.clone()),
+            observed_len: metadata.len(),
+            modified_ns: file_modified_ns(&metadata),
+        },
+        verified: VerifiedPrefix {
+            deep_verified_at,
+            through: acknowledged,
+            digest,
+            hasher,
+        },
+    })
 }
 
 /// How long a persistently malformed Gemini transcript stays quiet between
@@ -336,17 +410,28 @@ pub(in crate::agent::ai_transcript) fn save_checkpoint(
 
 /// Apply cursor updates, persist them atomically, and roll them back in memory
 /// when persistence fails. This preserves retry semantics without cloning the
-/// potentially large historical checkpoint on every poll.
+/// potentially large historical checkpoint on every poll. The hash state that
+/// vouches for each new JSONL cursor is adopted only after the save succeeds.
+/// The absent-transcript sweep ([`prune_absent_entries`]) runs first and is
+/// not rolled back.
 pub(in crate::agent::ai_transcript) fn save_checkpoint_updates(
     path: &Path,
     checkpoint: &mut Checkpoint,
     roots: &[PathBuf],
     files: HashMap<String, usize>,
     fingerprints: HashMap<String, String>,
-    jsonl_positions: HashMap<String, JsonlPosition>,
+    jsonl_updates: HashMap<String, JsonlUpdate>,
     discovery_cursors: HashMap<String, String>,
 ) -> Result<()> {
     prune_absent_entries(checkpoint, roots, Instant::now());
+    let mut verified = Vec::with_capacity(jsonl_updates.len());
+    let jsonl_positions = jsonl_updates
+        .into_iter()
+        .map(|(key, update)| {
+            verified.push((key.clone(), update.verified));
+            (key, update.position)
+        })
+        .collect();
     let old_files = apply_updates(&mut checkpoint.files, files);
     let old_fingerprints = apply_updates(&mut checkpoint.fingerprints, fingerprints);
     let old_jsonl_positions = apply_updates(&mut checkpoint.jsonl_positions, jsonl_positions);
@@ -358,6 +443,7 @@ pub(in crate::agent::ai_transcript) fn save_checkpoint_updates(
         restore_updates(&mut checkpoint.discovery_cursors, old_discovery);
         return Err(error);
     }
+    checkpoint.verified_prefixes.extend(verified);
     Ok(())
 }
 
@@ -418,7 +504,7 @@ fn prune_absent_entries(checkpoint: &mut Checkpoint, roots: &[PathBuf], now: Ins
         .jsonl_positions
         .retain(|key, _| !absent.contains(key));
     checkpoint
-        .prefix_verifications
+        .verified_prefixes
         .retain(|key, _| !absent.contains(key));
     tracing::info!(
         pruned = absent.len(),

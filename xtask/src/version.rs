@@ -203,9 +203,11 @@ pub(crate) fn bump(root: &Path, level: BumpLevel) -> ReleaseResult<()> {
 /// Re-apply the canonical version (`version_source`, e.g. Cargo.toml) to every
 /// other version-bearing file. Used as a fixup step after release-please's
 /// native `rust` strategy bumps Cargo.toml/Cargo.lock/CHANGELOG.md directly:
-/// it can't reach the `regex_version` carriers (server.json's image tag,
-/// docker-compose.prod.yml's default tag), so this syncs those — and
-/// re-verifies everything else, idempotently — to match.
+/// it can't reach every carrier in `release/components.toml` (the
+/// `regex_version` patterns such as server.json's image tag and
+/// docker-compose.prod.yml's default tag, and the nested harness lockfiles
+/// under `tests/live/`), so this rewrites every version file — a no-op for
+/// the ones already current — to match.
 pub(crate) fn sync_version(root: &Path) -> ReleaseResult<()> {
     let manifest = load_manifest(root)?;
     let component = sole_component(&manifest)?;
