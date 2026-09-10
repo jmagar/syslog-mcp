@@ -12,6 +12,8 @@ mod debug_wrapper;
 mod doctor;
 mod firstrun;
 mod heartbeat_agent;
+pub mod heartbeat_agent_env;
+mod launchd;
 mod managed_units;
 mod resolve;
 mod sessions_index;

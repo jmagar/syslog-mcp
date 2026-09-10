@@ -3,7 +3,7 @@
   "manifest_version": "0.4",
   "name": "cortex",
   "display_name": "Cortex",
-  "version": "3.15.0",
+  "version": "3.16.0",
   "description": "Self-hosted log aggregation and investigation for homelabs: syslog, Docker, OTLP, and AI transcripts in SQLite/FTS, exposed over MCP, CLI, and REST.",
   "long_description": "cortex packages the existing cortex stdio entrypoint as a local MCP Bundle. It is query-only: it reads the configured SQLite database and does not start syslog listeners, HTTP servers, Docker Compose, REST, or deploy flows.",
   "author": {

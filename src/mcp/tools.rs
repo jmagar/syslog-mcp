@@ -96,6 +96,7 @@ async fn dispatch_cortex_action(
         H::ListApps => tool_list_apps(state, args).await,
         H::ListSessions => tool_list_sessions(state, args).await,
         H::SearchSessions => tool_search_sessions(state, args).await,
+        H::EvidenceScope => tool_evidence_scope(state, args).await,
         H::SearchAbuse => tool_search_abuse(state, args).await,
         H::AbuseIncidents => tool_abuse_incidents(state, args).await,
         H::AbuseInvestigate => tool_abuse_investigate(state, args).await,
@@ -147,6 +148,42 @@ async fn tool_search_logs(state: &AppState, args: Value) -> anyhow::Result<Value
     let req: SearchLogsRequest = action_payload(args, "search")?;
     let response = state.service.search_logs(req).await?;
     tracing::debug!(result_count = response.count, "search_logs completed");
+    Ok(serde_json::to_value(response)?)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EvidenceScopeInput {
+    branch: Option<String>,
+    worktree: Option<String>,
+    #[serde(default)]
+    kinds: Vec<String>,
+    since: Option<String>,
+    until: Option<String>,
+    #[serde(default)]
+    include_payload: bool,
+    #[serde(default)]
+    after_id: i64,
+    limit: Option<usize>,
+}
+
+async fn tool_evidence_scope(state: &AppState, args: Value) -> anyhow::Result<Value> {
+    let req: EvidenceScopeInput = action_payload(args, "evidence_scope")?;
+    let response = state
+        .service
+        .scoped_evidence(
+            crate::db::agent_observatory::EvidenceScopeQuery {
+                branch: req.branch,
+                worktree: req.worktree,
+                kinds: req.kinds,
+                since: req.since,
+                until: req.until,
+                include_payload: req.include_payload,
+            },
+            req.after_id,
+            req.limit.unwrap_or(200),
+        )
+        .await?;
     Ok(serde_json::to_value(response)?)
 }
 

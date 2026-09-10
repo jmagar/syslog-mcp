@@ -19,6 +19,10 @@ pub(crate) struct CodexAssessConfig {
 }
 
 impl CodexAssessConfig {
+    /// Only the test harness builds a config straight from the process
+    /// environment; production selection goes through `LlmBackend`, which
+    /// resolves the provider and model from `CORTEX_LLM`.
+    #[cfg(test)]
     pub fn from_env(model: Option<String>) -> Self {
         Self {
             program: std::env::var("CORTEX_CODEX_CMD").unwrap_or_else(|_| "codex".into()),

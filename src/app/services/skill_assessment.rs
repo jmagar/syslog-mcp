@@ -2,7 +2,7 @@
 //! `CortexService::investigate_ai_skill_incidents` to resolve a skill (or
 //! plugin) name to its highest-priority (or all, with `--all`) matching
 //! `SkillIncidentEvidence` bundle(s), and optionally runs the guarded
-//! Codex app-server assessment through `LlmRunner` using the
+//! LLM assessment through `LlmRunner` using the
 //! `skill-improvement-assessment` skill prompt
 //! (`crate::skill_assessment::build_skill_assessment_prompt`).
 //!
@@ -17,7 +17,7 @@ use crate::app::models::{
     AiSkillInvestigateRequest, SkillAssessRequest, SkillAssessResponse, SkillAssessResult,
     SkillIncidentEvidence,
 };
-use crate::codex_assessment::CodexAssessConfig;
+use crate::llm_backend::LlmBackend;
 use crate::skill_assessment::build_skill_assessment_prompt;
 
 impl CortexService {
@@ -85,7 +85,10 @@ impl CortexService {
             )));
         }
 
-        let codex_config = CodexAssessConfig::from_env(req.model.clone());
+        let backend = run_llm
+            .then(|| self.llm().backend(req.model.clone()))
+            .transpose()
+            .map_err(|error| ServiceError::InvalidInput(error.to_string()))?;
         let mut results = Vec::with_capacity(invest_resp.evidence.len());
         for evidence in &invest_resp.evidence {
             let mut result = SkillAssessResult {
@@ -94,9 +97,9 @@ impl CortexService {
                 assessment: None,
                 prompt_preview: None,
             };
-            if run_llm {
+            if let Some(backend) = backend.as_ref() {
                 result = self
-                    .run_one_skill_assessment(evidence, &codex_config, &mut on_delta)
+                    .run_one_skill_assessment(evidence, backend, &mut on_delta)
                     .await?;
             }
             results.push(result);
@@ -112,13 +115,13 @@ impl CortexService {
         })
     }
 
-    /// Runs one guarded Codex app-server assessment for a `SkillIncidentEvidence`
+    /// Runs one guarded LLM assessment for a `SkillIncidentEvidence`
     /// bundle via `LlmRunner::run`, forwarding deltas directly through the
     /// borrowed callback without an intermediate allocation or channel.
     async fn run_one_skill_assessment<F>(
         &self,
         evidence: &SkillIncidentEvidence,
-        codex_config: &CodexAssessConfig,
+        backend: &LlmBackend,
         on_delta: &mut F,
     ) -> ServiceResult<SkillAssessResult>
     where
@@ -145,22 +148,12 @@ impl CortexService {
                     || evidence.transcript_after_truncated,
             },
             prompt,
-            provider: "codex-app-server".to_string(),
-            model: codex_config
-                .model
-                .clone()
-                .unwrap_or_else(|| "server-default".into()),
-            program: codex_config.program.clone(),
+            provider: backend.provider().to_string(),
+            model: backend.model(),
+            program: backend.program(),
             extra_metadata: serde_json::json!({ "skill_name": evidence.incident.skill_name }),
         };
-        let output = self
-            .llm()
-            .run(spec, |prompt| async move {
-                crate::codex_assessment::run(&prompt, codex_config, on_delta).await
-            })
-            .await
-            .map_err(|error| ServiceError::Internal(anyhow::anyhow!(error)))?
-            .output;
+        let output = super::run_llm_with_delta(self.llm(), spec, backend, on_delta).await?;
 
         Ok(SkillAssessResult {
             incident_id: evidence.incident.incident_id.clone(),

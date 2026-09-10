@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.16.0](https://github.com/dinglebear-ai/cortex/compare/v3.15.0...v3.16.0) (2026-09-10)
+
+
+### Added
+
+* **agent:** ingest file tails through the agent with stable identity ([#223](https://github.com/dinglebear-ai/cortex/issues/223)) ([a81b15d](https://github.com/dinglebear-ai/cortex/commit/a81b15d8ba24cf8911395f437f73188cf18e8d71))
+* **observatory:** complete evidence-led agent delivery ([#218](https://github.com/dinglebear-ai/cortex/issues/218)) ([23b9144](https://github.com/dinglebear-ai/cortex/commit/23b9144707cd5a6eefc23c7c29d1327c5acf54a1))
+
+
+### Fixed
+
+* address post-merge concurrency review ([#211](https://github.com/dinglebear-ai/cortex/issues/211)) ([143461e](https://github.com/dinglebear-ai/cortex/commit/143461ec13d86f9503495275357f7c82af6b8ce3))
+* **agent:** preserve embedded Docker log severity ([#220](https://github.com/dinglebear-ai/cortex/issues/220)) ([d9d199f](https://github.com/dinglebear-ai/cortex/commit/d9d199f1a6e81702232046d28688022f0a0d2544))
+* **agent:** report the failing ssh command when a remote closes stdin early ([#226](https://github.com/dinglebear-ai/cortex/issues/226)) ([b1c1815](https://github.com/dinglebear-ai/cortex/commit/b1c1815a12da07b1778fa562ee419f912e328283))
+* consolidate outstanding Cortex reliability work ([#210](https://github.com/dinglebear-ai/cortex/issues/210)) ([e8a9764](https://github.com/dinglebear-ai/cortex/commit/e8a9764910274b86a8012848054a514437260cdb))
+* **deps:** bump js-yaml to 4.3.2 in the web workspace ([#228](https://github.com/dinglebear-ai/cortex/issues/228)) ([5940f6d](https://github.com/dinglebear-ai/cortex/commit/5940f6db85acd57c494dcd428f242b6d4c9b73da))
+* harden Cortex contracts, recovery, and release validation ([#213](https://github.com/dinglebear-ai/cortex/issues/213)) ([d1e60c4](https://github.com/dinglebear-ai/cortex/commit/d1e60c4e805ae4be2f337105bfeec25329282eb6))
+* harden graph staging coordination ([#212](https://github.com/dinglebear-ai/cortex/issues/212)) ([63df9d6](https://github.com/dinglebear-ai/cortex/commit/63df9d6223d51db93a17ce05f6d1d32ef73b3066))
+* **reflection:** restore Codex skill evidence and app-server assessments ([#219](https://github.com/dinglebear-ai/cortex/issues/219)) ([5fd4c82](https://github.com/dinglebear-ai/cortex/commit/5fd4c82dd500ee6809564128cea3c330d0169e29))
+* **runtime:** release syslog listeners on shutdown ([#217](https://github.com/dinglebear-ai/cortex/issues/217)) ([3e4929d](https://github.com/dinglebear-ai/cortex/commit/3e4929d008b82a7834f92950a6a07e13b4ace7da))
+
 ## [3.15.0](https://github.com/dinglebear-ai/cortex/compare/v3.14.0...v3.15.0) (2026-08-25)
 
 

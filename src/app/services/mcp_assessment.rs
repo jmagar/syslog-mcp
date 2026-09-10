@@ -1,7 +1,7 @@
 //! Service-layer MCP assessment: calls `CortexService::investigate_ai_mcp_incidents`
 //! to resolve an MCP server/tool (or bare tool name) to its highest-priority
 //! (or all, with `--all`) matching `McpIncidentEvidence` bundle(s), and
-//! optionally runs the guarded Gemini assessment through `LlmRunner` using
+//! optionally runs the guarded LLM assessment through `LlmRunner` using
 //! the MCP assessment prompt. Mirrors
 //! `src/app/services/skill_assessment.rs` exactly.
 //!
@@ -13,7 +13,7 @@ use crate::app::llm_runner::{LlmCallerSurface, LlmEvidenceCounts, LlmInvocationS
 use crate::app::models::{
     AiMcpInvestigateRequest, McpAssessRequest, McpAssessResponse, McpAssessResult,
 };
-use crate::assessment::GeminiAssessConfig;
+use crate::llm_backend::LlmBackend;
 use crate::mcp_assessment::build_mcp_assessment_prompt;
 
 impl CortexService {
@@ -70,8 +70,10 @@ impl CortexService {
             )));
         }
 
-        let gemini_config =
-            GeminiAssessConfig::from_env(req.model.clone(), self.llm().timeout_secs());
+        let backend = run_llm
+            .then(|| self.llm().backend(req.model.clone()))
+            .transpose()
+            .map_err(|error| ServiceError::InvalidInput(error.to_string()))?;
         let mut results = Vec::with_capacity(invest_resp.evidence.len());
         for evidence in &invest_resp.evidence {
             let mut result = McpAssessResult {
@@ -80,9 +82,9 @@ impl CortexService {
                 assessment: None,
                 prompt_preview: None,
             };
-            if run_llm {
+            if let Some(backend) = backend.as_ref() {
                 result = self
-                    .run_one_mcp_assessment(evidence, &gemini_config, &mut on_delta)
+                    .run_one_mcp_assessment(evidence, backend, &mut on_delta)
                     .await?;
             }
             results.push(result);
@@ -99,13 +101,13 @@ impl CortexService {
         })
     }
 
-    /// Runs one guarded Gemini assessment for a single `McpIncidentEvidence`
+    /// Runs one guarded LLM assessment for a single `McpIncidentEvidence`
     /// bundle via `LlmRunner::run`, forwarding deltas directly through the
     /// borrowed callback without an intermediate allocation or channel.
     async fn run_one_mcp_assessment<F>(
         &self,
         evidence: &McpIncidentEvidence,
-        gemini_config: &GeminiAssessConfig,
+        backend: &LlmBackend,
         on_delta: &mut F,
     ) -> ServiceResult<McpAssessResult>
     where
@@ -132,16 +134,15 @@ impl CortexService {
                     || evidence.transcript_after_truncated,
             },
             prompt,
-            provider: "gemini-cli".to_string(),
-            model: gemini_config.model.clone(),
-            program: gemini_config.program.clone(),
+            provider: backend.provider().to_string(),
+            model: backend.model(),
+            program: backend.program(),
             extra_metadata: serde_json::json!({
                 "mcp_server": evidence.incident.mcp_server,
                 "mcp_tool": evidence.incident.mcp_tool,
             }),
         };
-        let output =
-            super::run_gemini_with_delta(self.llm(), spec, gemini_config, on_delta).await?;
+        let output = super::run_llm_with_delta(self.llm(), spec, backend, on_delta).await?;
 
         Ok(McpAssessResult {
             incident_id: evidence.incident.incident_id.clone(),

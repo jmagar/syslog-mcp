@@ -174,7 +174,7 @@ pub struct AiAssessResponse {
 }
 
 /// Request for `cortex assess abuse` — a UX wrapper around the existing
-/// `list_ai_incidents` + `run_gemini_assess_with_delta` pipeline (the
+/// `list_ai_incidents` + `run_assess_with_delta` pipeline (the
 /// latter already routes through PR 1's `LlmRunner` internally — this
 /// wrapper adds zero new LLM call sites). When `incident_id` is `None`,
 /// the top-priority matching incident (by `AbuseIncident::priority_score`)

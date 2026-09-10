@@ -1,3 +1,4 @@
+src/agent/self_update.rs
 src/agent_deploy.rs
 src/api.rs
 src/app/llm_runner.rs
@@ -9,6 +10,7 @@ src/cli/parse_logs.rs
 src/command_log.rs
 src/compose/mutation.rs
 src/config.rs
+src/db/agent_observatory_read.rs
 src/db/analytics.rs
 src/db/graph.rs
 src/db/graph_inventory.rs
@@ -27,5 +29,6 @@ src/receiver/writer.rs
 src/runtime.rs
 src/scanner.rs
 src/scanner/checkpoint.rs
+src/setup/heartbeat_agent.rs
 src/surfaces/contract.rs
 xtask/src/version.rs

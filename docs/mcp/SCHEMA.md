@@ -45,6 +45,7 @@ selects one of the actions below. The mechanically generated current count is in
 | `apps` | `cortex:read` | cheap | Distinct application names with counts |
 | `sessions` | `cortex:read` | cheap | AI transcript session inventory |
 | `search_sessions` | `cortex:read` | cheap | FTS5 search over AI transcript sessions |
+| `evidence_scope` | `cortex:read` | moderate | Historical Agent Observatory evidence for a Git branch or worktree |
 | `abuse` | `cortex:read` | moderate | Abuse-term hits with same-session context |
 | `abuse_incidents` | `cortex:read` | moderate | Grouped abuse incident candidates |
 | `abuse_investigate` | `cortex:read` | expensive | Evidence bundles for abuse incidents |
@@ -180,6 +181,8 @@ boundary.
 | `source_kind` | `filter` only; aliases Docker, file-tail, command-history, shell-history, transcript, and AI-tool rows |
 | `project` | `filter`, `sessions`, `search_sessions`, `abuse`, `ai_correlate`, `usage_blocks`, `project_context`, `list_ai_tools` |
 | `tool` | `filter`, `sessions`, `search_sessions`, `abuse`, `ai_correlate`, `usage_blocks`, `project_context`, `list_ai_projects` |
+| `branch`, `worktree` | `evidence_scope`; at least one is required by service validation |
+| `kinds`, `include_payload`, `after_id` | `evidence_scope` filtering and durable pagination |
 | `session_id` | `filter`, `ai_correlate` |
 | `ai_query` | AI transcript anchor FTS5 query for `ai_correlate` |
 | `log_query` | Related non-AI log FTS5 query for `ai_correlate` |
