@@ -307,12 +307,12 @@ def error_fragments(terminal: str) -> str:
     or failing that the text lines that mention an error, so the diagnostic
     names the section that actually decided the exit code.
     """
-    fragments = [terminal[max(0, match.start() - 160):match.end() + 220]
+    fragments = [terminal[max(0, match.start() - 160):match.end() + 1600]
                  for match in re.finditer(r'"status":\s*"error"', terminal)]
     if not fragments:
         fragments = [line.strip() for line in terminal.splitlines()
                      if re.search(r"\berror", line, re.IGNORECASE)]
-    return " | ".join(" ".join(fragment.split()) for fragment in fragments)[:1200]
+    return " | ".join(" ".join(fragment.split()) for fragment in fragments)[:3200]
 
 
 def main() -> int:
