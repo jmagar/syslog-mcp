@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sqlite3
 import sys
@@ -298,6 +299,22 @@ def semantic_args(entry: dict, is_parent: bool) -> tuple[list[str], str, bool]:
     return ["--json"], "executed-semantic" if entry["mutation"] == "none" else "executed-refusal-semantic", True
 
 
+def error_fragments(terminal: str) -> str:
+    """Return the error-bearing parts of a command's output.
+
+    A leading excerpt shows whatever happened to print first; for a doctor that
+    is the section that passed. Pull out the JSON phases whose status is error,
+    or failing that the text lines that mention an error, so the diagnostic
+    names the section that actually decided the exit code.
+    """
+    fragments = [terminal[max(0, match.start() - 160):match.end() + 220]
+                 for match in re.finditer(r'"status":\s*"error"', terminal)]
+    if not fragments:
+        fragments = [line.strip() for line in terminal.splitlines()
+                     if re.search(r"\berror", line, re.IGNORECASE)]
+    return " | ".join(" ".join(fragment.split()) for fragment in fragments)[:1200]
+
+
 def main() -> int:
     contract_path, binary_path, output_path = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3])
     contract = json.loads(contract_path.read_text())
@@ -448,7 +465,7 @@ def main() -> int:
         terminal = (record.get("observation") or {}).get("terminal", "")
         for secret in secrets:
             terminal = terminal.replace(secret, "<redacted>")
-        excerpt = " ".join(terminal.split())[:400]
+        excerpt = error_fragments(terminal) or " ".join(terminal.split())[:400]
         print(f"live-e2e: cli {record['surface_id']} {record['case_kind']} "
               f"exit={(record.get('observation') or {}).get('exit')} :: {excerpt}", file=sys.stderr)
     return 1 if failures else 0
