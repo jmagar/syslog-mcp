@@ -43,8 +43,9 @@ impl RemoteRunner for SshRemoteRunner {
 /// leak the unreaped child and discard its stderr, reporting the symptom
 /// ("Broken pipe (os error 32)") instead of the cause ssh printed. So the exit
 /// status and captured output win; the write error only surfaces when the
-/// remote exited successfully without taking its input, which means the script
-/// never ran. The write runs on its own thread while stdout/stderr drain, so a
+/// remote exited 0 before consuming all of its piped input (the script either
+/// never started or exited early), so the run cannot be trusted as a success.
+/// The write runs on its own thread while stdout/stderr drain, so a
 /// remote that fills its output pipe before reading the rest of the script
 /// cannot deadlock against us.
 fn feed_and_reap(
@@ -93,7 +94,7 @@ fn feed_and_reap(
             Err(io::Error::new(
                 error.kind(),
                 format!(
-                    "ssh {host}: remote shell exited successfully before accepting its piped script: {error}{stderr}"
+                    "ssh {host}: remote exited 0 before consuming all of its piped input: {error}{stderr}"
                 ),
             ))
         }

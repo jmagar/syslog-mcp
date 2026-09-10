@@ -112,18 +112,18 @@ fn early_remote_exit_phase_detail_names_the_status_and_cause() {
 
 #[test]
 #[serial]
-fn successful_remote_that_never_took_the_script_is_an_error() {
+fn successful_remote_that_left_input_unread_is_an_error() {
     let (_dir, _path) = fake_ssh("#!/bin/sh\nprintf 'motd banner\\n' >&2\nexit 0\n");
 
     let error = SshRemoteRunner
         .run("linux-host", &oversized_script(), None)
-        .expect_err("a remote that exits 0 without reading never ran the script");
+        .expect_err("a remote that exits 0 with unread input cannot count as success");
 
     assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
     let detail = error.to_string();
     assert!(detail.contains("ssh linux-host"), "got: {detail:?}");
     assert!(
-        detail.contains("exited successfully before accepting its piped script"),
+        detail.contains("exited 0 before consuming all of its piped input"),
         "got: {detail:?}"
     );
     assert!(detail.contains("motd banner"), "got: {detail:?}");
@@ -154,15 +154,45 @@ fn remote_that_drains_stdin_returns_its_output() {
 #[serial]
 fn remote_that_fills_stderr_before_reading_does_not_deadlock() {
     // The remote writes more than a pipe buffer of stderr before it reads
-    // stdin. Writing stdin before draining stderr would deadlock both sides.
+    // stdin. Writing stdin before draining stderr would deadlock both sides,
+    // so the call runs on a helper thread and a regression fails on a bounded
+    // timeout instead of hanging the suite.
     let (_dir, _path) =
         fake_ssh("#!/bin/sh\nhead -c 262144 /dev/zero >&2\ncat > /dev/null\nprintf 'done\\n'\n");
 
-    let output = SshRemoteRunner
-        .run("linux-host", &oversized_script(), None)
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(SshRemoteRunner.run("linux-host", &oversized_script(), None));
+    });
+    let output = rx
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("runner deadlocked: stdin write and stderr drain blocked each other for 30s")
         .unwrap();
 
     assert!(output.status_success, "exit={:?}", output.exit_code);
     assert_eq!(output.stderr.len(), 262_144);
     assert_eq!(output.stdout, "done\n");
+}
+
+#[test]
+#[serial]
+fn remote_killed_by_signal_reports_signal_and_no_exit_code() {
+    let (_dir, _path) = fake_ssh("#!/bin/sh\nprintf 'going down\\n' >&2\nkill -KILL $$\n");
+
+    let output = SshRemoteRunner
+        .run("linux-host", "true\n", None)
+        .expect("a signal exit is a remote failure, not an io error");
+    assert!(!output.status_success);
+    assert_eq!(output.exit_code, None);
+
+    let phase = remote_phase(
+        &mut SshRemoteRunner,
+        "linux-host",
+        "remote-env",
+        "true\n",
+        None,
+    )
+    .unwrap();
+    assert!(matches!(phase.status, SetupStatus::Error));
+    assert_eq!(phase.detail, "terminated by signal: going down");
 }
