@@ -9,9 +9,10 @@
 # release-please (.github/workflows/release-please.yml) owns both Cargo.toml
 # package versions, Cargo.lock, and CHANGELOG.md natively, plus server.json's and
 # mcpb/manifest.json's plain "version" fields via its `extra-files` config.
-# `cargo xtask sync-version` fixes up the two `regex_version` carriers below,
-# which aren't expressible as a release-please `extra-files` entry, as a
-# follow-up commit on the release PR.
+# `cargo xtask sync-version` then re-applies the canonical version to every
+# row below as a follow-up commit on the release PR, which covers the carriers
+# release-please can't reach: the `regex_version` patterns, the server.json
+# JSON pointers not listed in `extra-files`, and the nested harness lockfiles.
 
 schema_version = 1
 
@@ -25,6 +26,10 @@ version_files = [
   { kind = "cargo_package", path = "xtask/Cargo.toml", package = "xtask" },
   { kind = "cargo_lock_package", path = "Cargo.lock", package = "cortex" },
   { kind = "cargo_lock_package", path = "Cargo.lock", package = "xtask" },
+  # Nested harness crates depend on cortex by path, so their lockfiles pin the
+  # cortex version too; untracked, they fell behind on every release.
+  { kind = "cargo_lock_package", path = "tests/live/surface-exporter/Cargo.lock", package = "cortex" },
+  { kind = "cargo_lock_package", path = "tests/live/services/oauth/Cargo.lock", package = "cortex" },
   { kind = "json_version", path = "server.json", json_pointer = "/version" },
   { kind = "json_version", path = "server.json", json_pointer = "/packages/0/version" },
   { kind = "json_version", path = "server.json", json_pointer = "/_meta/io.modelcontextprotocol.registry~1publisher-provided/buildInfo/version" },
