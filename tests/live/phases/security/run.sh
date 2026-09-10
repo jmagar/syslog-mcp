@@ -38,8 +38,12 @@ security_phase_run() {
   # Encoded-token containment is checked across every durable evidence surface.
   # Browser storage is owned by the real browser sweep and is not inferred here.
   token_b64="$(printf '%s' "$LIVE_CORTEX_TOKEN" | base64 | tr -d '\n')"; token_hex="$(printf '%s' "$LIVE_CORTEX_TOKEN" | xxd -p | tr -d '\n')"
-  ! rg -a -F "$LIVE_CORTEX_TOKEN" "$LIVE_RUN_ROOT" --glob '!secrets.json' --glob '!run.env' >/dev/null 2>&1
-  ! rg -a -F "$token_b64" "$LIVE_RUN_ROOT" >/dev/null 2>&1; ! rg -a -F "$token_hex" "$LIVE_RUN_ROOT" >/dev/null 2>&1
+  # grep, not rg: the gate runners do not ship ripgrep, and `! rg` passed there
+  # without scanning. Hidden entries stay out of scope, as ripgrep's defaults
+  # had them; the raw token keeps its two deliberate secret stores excluded.
+  live_grep_absent "raw token in run evidence" -r -a -F --exclude=secrets.json --exclude=run.env --exclude='.*' --exclude-dir='.*' -- "$LIVE_CORTEX_TOKEN" "$LIVE_RUN_ROOT"
+  live_grep_absent "base64 token in run evidence" -r -a -F --exclude='.*' --exclude-dir='.*' -- "$token_b64" "$LIVE_RUN_ROOT"
+  live_grep_absent "hex token in run evidence" -r -a -F --exclude='.*' --exclude-dir='.*' -- "$token_hex" "$LIVE_RUN_ROOT"
   security_record_static secret-encoded secret absent "$dir"
 
   # Docker authority is read-only and restricted to the already-qualified proxy;

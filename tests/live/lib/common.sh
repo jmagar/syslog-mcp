@@ -71,6 +71,19 @@ live_install_err_trap() {
   trap live_err_trap ERR
 }
 
+# Assert grep finds nothing. Only "no match" (status 1) passes: a match fails,
+# and so does a scan that could not run (status 2), instead of a missing tool or
+# unreadable path silently reading as "absent". Never echoes what was searched.
+live_grep_absent() {
+  local label="$1" status=0; shift
+  grep -q "$@" >/dev/null 2>&1 || status=$?
+  case "$status" in
+    1) return 0 ;;
+    0) live_die "$label: forbidden content found"; return 1 ;;
+    *) live_die "$label: scan failed (grep status $status)"; return 1 ;;
+  esac
+}
+
 live_require_tools() {
   local tool missing=0
   for tool in "$@"; do
