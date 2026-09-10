@@ -134,6 +134,72 @@ fn lax_key_file_permissions_are_tightened() {
     assert_eq!(mode, 0o600);
 }
 
+fn dir_entries(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn creation_publishes_atomically_and_leaves_no_temp_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(KEY_FILE_NAME);
+    let key = load_or_create_key(&path).unwrap();
+    assert_eq!(dir_entries(dir.path()), vec![KEY_FILE_NAME.to_string()]);
+    assert_eq!(load_or_create_key(&path).unwrap(), key);
+}
+
+#[test]
+fn losing_the_creation_race_adopts_the_winners_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(KEY_FILE_NAME);
+    let winner = format!("{}\n", hex::encode(KEY_A));
+    std::fs::write(&path, &winner).unwrap();
+
+    // The no-clobber publish refuses to replace the winner...
+    let error = publish_private_new(&path, b"loser\n").unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::AlreadyExists);
+    // ...and the create path falls through to loading the winner's key.
+    assert_eq!(create_key(&path).unwrap(), KEY_A);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), winner);
+    assert_eq!(dir_entries(dir.path()), vec![KEY_FILE_NAME.to_string()]);
+}
+
+#[cfg(unix)]
+#[test]
+fn unreadable_key_file_fails_closed_without_regenerating() {
+    use std::os::unix::fs::PermissionsExt;
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    if unsafe { libc::geteuid() } == 0 {
+        eprintln!("skipping: root bypasses file permission checks");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(KEY_FILE_NAME);
+    let original = format!("{}\n", hex::encode(KEY_A));
+    std::fs::write(&path, &original).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let error = format!("{:#}", load_or_create_key(&path).unwrap_err());
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(error.contains("open credential-generation key"), "{error}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    assert_eq!(dir_entries(dir.path()), vec![KEY_FILE_NAME.to_string()]);
+}
+
+#[test]
+fn directory_at_key_path_fails_closed() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(KEY_FILE_NAME);
+    std::fs::create_dir(&path).unwrap();
+    assert!(load_or_create_key(&path).is_err());
+    assert!(path.is_dir(), "the directory must be left untouched");
+    assert_eq!(dir_entries(dir.path()), vec![KEY_FILE_NAME.to_string()]);
+}
+
 #[test]
 fn resolve_without_token_reports_none_and_writes_no_key() {
     let dir = tempfile::tempdir().unwrap();

@@ -62,13 +62,19 @@ pub(crate) fn credential_generation(key: &[u8], token: &str) -> String {
 }
 
 pub(crate) fn load_or_create_key(path: &Path) -> Result<[u8; KEY_LEN]> {
-    if let Some(key) = read_key(path)? {
-        return Ok(key);
+    match read_key(path)? {
+        Some(key) => Ok(key),
+        None => create_key(path),
     }
+}
+
+/// Generate and publish a fresh key without ever clobbering an existing one.
+/// If another process published first, its key is authoritative.
+fn create_key(path: &Path) -> Result<[u8; KEY_LEN]> {
     let mut key = [0_u8; KEY_LEN];
     getrandom::fill(&mut key)
         .map_err(|error| anyhow!("generate credential-generation key: {error}"))?;
-    match write_private_new(path, format!("{}\n", hex::encode(key)).as_bytes()) {
+    match publish_private_new(path, format!("{}\n", hex::encode(key)).as_bytes()) {
         Ok(()) => {
             tracing::info!(path = %path.display(), "generated integration credential-generation key");
             Ok(key)
@@ -128,13 +134,53 @@ fn open_nofollow(path: &Path) -> std::io::Result<std::fs::File> {
     options.open(path)
 }
 
+/// Atomically publish `contents` at `path`, failing with `AlreadyExists`
+/// instead of overwriting.
+///
+/// The contents are written and synced to a private temp file in the same
+/// directory, then hard-linked into place: `link(2)` never replaces an
+/// existing entry, so a concurrent winner is never clobbered, and a racing
+/// reader sees either no file or the complete key, never a partial one. The
+/// temp name is removed on every path.
+fn publish_private_new(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let tmp = temp_path_for(path)?;
+    write_private_new(&tmp, contents)?;
+    let linked = std::fs::hard_link(&tmp, path);
+    let _ = std::fs::remove_file(&tmp);
+    match linked {
+        Ok(()) => sync_dir(dir),
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => Err(error),
+        // Filesystems without hard links (EPERM/ENOTSUP): fall back to a direct
+        // exclusive create. Still no-clobber, just not atomic for readers; a
+        // reader that races a partial write fails closed as "corrupt".
+        Err(error) => {
+            tracing::debug!(%error, "hard link unavailable; creating credential key in place");
+            write_private_new(path, contents)?;
+            sync_dir(dir)
+        }
+    }
+}
+
+fn temp_path_for(path: &Path) -> std::io::Result<PathBuf> {
+    let mut nonce = [0_u8; 8];
+    getrandom::fill(&mut nonce).map_err(std::io::Error::other)?;
+    let name = format!(
+        ".{KEY_FILE_NAME}.{}.{}.tmp",
+        std::process::id(),
+        hex::encode(nonce)
+    );
+    Ok(path.with_file_name(name))
+}
+
+/// Exclusive `0600` create (never following a symlink) plus write and fsync.
 fn write_private_new(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
     }
     let mut file = options.open(path)?;
     let written = file.write_all(contents).and_then(|()| file.sync_all());
@@ -143,6 +189,17 @@ fn write_private_new(path: &Path, contents: &[u8]) -> std::io::Result<()> {
         let _ = std::fs::remove_file(path);
     }
     written
+}
+
+/// Persist the new directory entry so a crash cannot lose a published key.
+#[cfg(unix)]
+fn sync_dir(dir: &Path) -> std::io::Result<()> {
+    std::fs::File::open(dir)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_dir(_: &Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 #[cfg(unix)]

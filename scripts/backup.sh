@@ -9,6 +9,8 @@
 #   syslog-YYYY-MM-DD-HHMMSS.db        — live syslog log database
 #   auth-YYYY-MM-DD-HHMMSS.db          — lab-auth OAuth/JWT store (if present)
 #   auth-jwt-YYYY-MM-DD-HHMMSS.pem     — RSA signing key (if present)
+#   integration-credential-YYYY-MM-DD-HHMMSS.key
+#                                      — credential_generation HMAC key (if present)
 #
 # Schedule via cron:
 #   0 */6 * * * cd /path/to/cortex && bash scripts/backup.sh
@@ -37,6 +39,8 @@ BACKUP_FILE="${BACKUP_DIR}/syslog-${TIMESTAMP}.db"
 DB_DIR="$(dirname "$DB_PATH")"
 AUTH_DB_PATH="${AUTH_DB_PATH:-${DB_DIR}/auth.db}"
 AUTH_KEY_PATH="${AUTH_KEY_PATH:-${DB_DIR}/auth-jwt.pem}"
+# Always beside the syslog DB (src/api/credential_generation.rs); not configurable.
+INTEGRATION_KEY_PATH="${DB_DIR}/integration-credential.key"
 
 # Ensure backup directory permissions are private
 chmod 700 "$BACKUP_DIR"
@@ -86,11 +90,22 @@ else
     echo "Auth JWT key not found at ${AUTH_KEY_PATH}; skipping"
 fi
 
+# Integration credential key — keys the published auth.credential_generation.
+# Losing it forces every pinned integration to re-trust, so copy it the same
+# way as the JWT key. Absent when CORTEX_API_TOKEN has never been set.
+if [[ -f "$INTEGRATION_KEY_PATH" ]]; then
+    INTEGRATION_KEY_BACKUP="${BACKUP_DIR}/integration-credential-${TIMESTAMP}.key"
+    install -m 600 "$INTEGRATION_KEY_PATH" "$INTEGRATION_KEY_BACKUP"
+    echo "Integration credential key backup complete: ${INTEGRATION_KEY_BACKUP}"
+else
+    echo "Integration credential key not found at ${INTEGRATION_KEY_PATH}; skipping"
+fi
+
 # Prune backups older than 30 days. Backup creation has already succeeded at
 # this point, but retention failure is still operationally significant: warn
 # for each failed class and return nonzero so schedulers can alert on it.
 prune_failed=0
-for pattern in "syslog-*.db" "auth-*.db" "auth-jwt-*.pem"; do
+for pattern in "syslog-*.db" "auth-*.db" "auth-jwt-*.pem" "integration-credential-*.key"; do
     if ! find "$BACKUP_DIR" -name "$pattern" -mtime +30 -delete; then
         echo "WARNING: Failed to prune old ${pattern} backups in ${BACKUP_DIR}" >&2
         prune_failed=1
